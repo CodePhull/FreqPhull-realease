@@ -1,0 +1,122 @@
+{
+  "name": "freqphull",
+  "version": "0.0.1",
+  "description": "Freq.Phull",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "prebuild": "node prebuild.js",
+    "build": "electron-builder --win --x64",
+    "prebuild-portable": "node prebuild.js",
+    "build-portable": "electron-builder --win portable --x64",
+    "check": "node prebuild.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "sql.js": "^1.12.0",
+    "multer": "^1.4.5-lts.1",
+    "electron-updater": "^6.1.7"
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.freqphull.app",
+    "productName": "Freq.Phull",
+    "copyright": "Copyright 2025 Cynphull",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Freq.Phull",
+      "deleteAppDataOnUninstall": false,
+      "installerHeaderIcon": "assets/icon.ico",
+      "include": "assets/installer.nsh"
+    },
+    "files": [
+      "**/*",
+      "!node_modules/electron-builder/**",
+      "!**/*.md",
+      "!**/*.map",
+      "!dist/**"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "bin/**",
+      "stems.py",
+      "analyze.py",
+      "_phull_internal.py",
+      "key_model.pkl",
+      "installer/**",
+      "manifest.sha256.json"
+    ],
+    "extraResources": [
+      {
+        "from": "bin/",
+        "to": "bin/",
+        "filter": [
+          "yt-dlp.exe",
+          "ffmpeg.exe",
+          "ffprobe.exe"
+        ]
+      },
+      {
+        "from": "key_model.pkl",
+        "to": "key_model.pkl"
+      },
+      {
+        "from": "_phull_internal.py",
+        "to": "_phull_internal.py"
+      },
+      {
+        "from": "manifest.sha256.json",
+        "to": "manifest.sha256.json"
+      },
+      {
+        "from": "installer/",
+        "to": "installer/",
+        "filter": ["setup-engines.ps1"]
+      },
+      {
+        "from": "stems.py",
+        "to": "stems.py"
+      },
+      {
+        "from": "analyze.py",
+        "to": "analyze.py"
+      }
+    ],
+    "compression": "maximum",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "CodePhull",
+        "repo": "FreqPhull-realease",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "author": "Cynphull"
+}

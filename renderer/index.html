@@ -1,0 +1,2766 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Freq.Phull</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#080808;--bg2:#101010;--bg3:#181818;--bg4:#202020;--bg5:#2c2c2c;
+  --white:#ffffff;--off:#e8e8e8;--muted:#aaaaaa;--hint:#666666;
+  --border:#1e1e1e;--border2:#2a2a2a;--border3:#3a3a3a;
+  --wbg:#161616;--wbg2:#1e1e1e;
+  --red:#e84040;--green:#4caf50;--r:6px;--rl:10px;
+
+  /* ── Motion design tokens ──────────────────────────────────────────────
+   * Single source of truth for animation timing + easing across the app.
+   * Anywhere a transition currently uses raw "ease" or arbitrary durations,
+   * swap to these so the whole UI feels uniform and intentional.
+   *
+   * Durations:
+   *   --t-fast  : tiny acknowledgements (button hover color, press scale)
+   *   --t-base  : standard UI transitions (most hovers, toggles, panels)
+   *   --t-slow  : entrances, overlays, larger reveals
+   *
+   * Easings:
+   *   --e-out   : default — fast start, gentle settle. Apple/Material standard.
+   *   --e-in-out: balanced curve for two-way changes (open/close, fade in/out)
+   *   --e-spring: gentle overshoot for entrances — feels alive, not robotic
+   *   --e-linear: width fills and progress bars where uniform speed matters
+   */
+  --t-fast: 120ms;
+  --t-base: 200ms;
+  --t-slow: 340ms;
+  --e-out: cubic-bezier(.32, .72, 0, 1);
+  --e-in-out: cubic-bezier(.65, 0, .35, 1);
+  --e-spring: cubic-bezier(.22, 1.2, .36, 1);
+  --e-linear: linear;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+/* Kill the user-agent blue focus ring on buttons globally — Electron/Chrome
+ * paints a thick blue dashed outline (and sometimes a box-shadow) by default
+ * that fights with our dark theme. We suppress both outline AND box-shadow,
+ * and on the mini-player buttons we ALSO call preventDefault() in mousedown
+ * (see app.js setupMiniPlayerFocusKill) so the browser never assigns focus
+ * to them at all — belt and suspenders. */
+button:focus,button:focus-visible{outline:none!important;box-shadow:none!important}
+button::-moz-focus-inner{border:0;padding:0}
+/* Also kill it on SVGs inside buttons (sometimes the ring jumps inward) */
+button svg:focus,button svg:focus-visible{outline:none!important;box-shadow:none!important}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--off);font-family:'Inter',sans-serif;font-size:15px;-webkit-font-smoothing:antialiased}
+
+/* Anti-flicker on startup: body starts faded out until JS marks itself
+ * ready. Prevents the "jiggle" where unstyled / partially-laid-out content
+ * paints once before settings/lang/sidebar finish hydrating, then re-flows
+ * visibly. The fade is fast (140ms) so users see it as instant — they
+ * just don't see the layout-shift dance underneath. */
+body{opacity:0;transition:opacity .14s ease-out;will-change:opacity}
+body.app-ready{opacity:1}
+/* Subtle geometric background — fixed, non-interactive */
+body::before{
+  content:'';
+  position:fixed;inset:0;z-index:0;pointer-events:none;
+  background-image:
+    linear-gradient(135deg, rgba(255,255,255,0.018) 1px, transparent 1px),
+    linear-gradient(45deg,  rgba(255,255,255,0.012) 1px, transparent 1px);
+  background-size: 72px 72px, 72px 72px;
+  background-position: 0 0, 36px 36px;
+}
+/* Vignette — darkens edges so content stands out */
+body::after{
+  content:'';
+  position:fixed;inset:0;z-index:0;pointer-events:none;
+  background:radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.55) 100%);
+}
+/* All direct children of body above the background */
+body > *{position:relative;z-index:1;}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--hint);border-radius:2px}
+
+/* ── Loading ── */
+#loading{
+  position:fixed;inset:0;background:var(--bg);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
+  z-index:9999;transition:opacity .4s ease;
+}
+#loading.hide{opacity:0;pointer-events:none}
+.load-logo{width:140px;height:140px;object-fit:contain;border-radius:10px;animation:loadpulse 2s ease-in-out infinite}
+.load-name{font-family:'Bebas Neue',sans-serif;font-size:34px;letter-spacing:0.2em;color:var(--white)}
+.load-sub{font-size:13px;color:var(--hint);letter-spacing:0.14em;text-transform:uppercase;margin-top:-8px}
+.load-bar-wrap{width:160px;height:1px;background:var(--bg4);overflow:hidden;border-radius:1px}
+.load-bar{height:100%;background:var(--white);width:0%;animation:loadbar 4s ease forwards}
+.load-status{font-size:14px;color:var(--muted);min-height:18px;letter-spacing:0.04em}
+
+/* Diagnostic log — shown during loading */
+#diag{
+  width:500px;max-height:160px;overflow-y:auto;
+  background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);
+  padding:10px 12px;font-family:monospace;font-size:13px;color:var(--hint);
+  line-height:1.7;
+}
+#diag .ok{color:#4caf50}
+#diag .err{color:#e84040}
+#diag .info{color:var(--muted)}
+.diag-title{font-size:13px;color:var(--hint);letter-spacing:0.1em;text-transform:uppercase;align-self:flex-start;margin-left:calc(50% - 250px)}
+#log-path-row{font-size:13px;color:var(--hint);text-align:center}
+#log-path-row span{color:var(--muted)}
+
+/* ── Titlebar ── */
+#tb{display:flex;align-items:center;height:46px;padding:0 18px;gap:10px;background:var(--bg2);border-bottom:1px solid var(--border);-webkit-app-region:drag;user-select:none;flex-shrink:0}
+.tb-logo{width:30px;height:30px;object-fit:contain;border-radius:4px;flex-shrink:0}
+.tb-div{width:1px;height:16px;background:var(--border2);margin:0 2px}
+/* Tab back/forward navigation in titlebar */
+.tb-nav{display:flex;align-items:center;gap:2px;-webkit-app-region:no-drag}
+.tb-nav-btn{width:26px;height:22px;border:none;background:transparent;cursor:pointer;border-radius:4px;color:var(--muted);display:flex;align-items:center;justify-content:center;transition:background .1s,color .1s;padding:0}
+.tb-nav-btn:hover:not(:disabled){background:var(--bg3);color:var(--white)}
+.tb-nav-btn:active:not(:disabled){background:var(--bg4)}
+.tb-nav-btn:disabled{opacity:.3;cursor:default}
+.tb-nav-btn:focus{outline:none}
+.tb-name{font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:0.14em;color:var(--white)}
+.tb-sub{font-size:13px;color:var(--hint);letter-spacing:0.1em}
+.tb-sp{flex:1}
+.tb-dot-row{display:flex;align-items:center;gap:7px}
+.tb-dot{width:7px;height:7px;border-radius:50%;background:var(--hint)}
+.tb-dot.ready{background:var(--green)}.tb-dot.loading{background:#f59e0b;animation:pulse 1.6s var(--e-in-out) infinite}
+.tb-dot-txt{font-size:13px;color:var(--hint)}
+.tb-ctrls{display:flex;gap:5px;margin-left:14px;-webkit-app-region:no-drag}
+.tb-btn{width:30px;height:22px;border:none;background:transparent;cursor:pointer;border-radius:4px;color:var(--hint);display:flex;align-items:center;justify-content:center;transition:background .1s,color .1s}
+.tb-btn:hover{background:var(--bg4);color:var(--white)}.tb-btn.x:hover{background:var(--red);color:white}
+
+/* ── Layout ── */
+#layout{display:flex;height:calc(100vh - 46px)}
+
+/* ── Sidebar ── */
+#sidebar{width:210px;flex-shrink:0;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:10px 0}
+.nav-sec{padding:14px 18px 6px;font-size:13px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:var(--hint)}
+.nav-btn{display:flex;align-items:center;gap:11px;padding:11px 18px;cursor:pointer;color:var(--muted);font-size:14px;transition:background var(--t-base) var(--e-out),color var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out);border:none;background:transparent;width:100%;text-align:left;position:relative}
+.nav-btn:hover{color:var(--off);background:var(--wbg)}.nav-btn.on{color:var(--white);background:var(--wbg);font-weight:500}
+.nav-btn.on::before{content:'';position:absolute;left:0;top:6px;bottom:6px;width:2px;background:var(--white);border-radius:0 2px 2px 0}
+.nav-ico{width:17px;height:17px;flex-shrink:0;opacity:.5}.nav-btn.on .nav-ico,.nav-btn:hover .nav-ico{opacity:1}
+.nav-fill{flex:1}
+.sidebar-credit{padding:10px 0;text-align:center;font-size:9px;color:rgba(255,255,255,.12);letter-spacing:.15em;font-weight:400}
+
+/* ── Main ── */
+#main{flex:1;overflow-y:auto;padding:36px 44px}
+.tab-pane{display:none;max-width:1080px}.tab-pane.on{display:block;animation:fadeUp 320ms var(--e-spring)}
+.ph{margin-bottom:30px}
+.ph-title{font-family:'Bebas Neue',sans-serif;font-size:46px;letter-spacing:0.06em;color:var(--white);line-height:1;margin-bottom:6px}
+.ph-sub{font-size:15px;color:var(--muted);font-weight:300}
+
+/* ── Cards ── */
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--rl);padding:26px 30px;margin-bottom:18px}
+/* When a card is revealed (the JS removes .hidden), play a brief fade+lift
+ * so it doesn't snap in. Tab-pane uses the same fadeUp keyframe. Scoped
+ * to .card and a few high-traffic reveal-heavy ids to avoid animating
+ * every random unhide across the app. CSS animations re-fire whenever
+ * the selector starts matching, so this plays each time a hidden card
+ * becomes visible — exactly the behavior we want. */
+.card:not(.hidden),
+#stems-results:not(.hidden),
+#trans-card:not(.hidden){
+  animation:fadeUp 280ms var(--e-spring);
+}
+.card-lbl{font-size:13px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:var(--muted);margin-bottom:16px}
+
+/* ── Inputs ── */
+input,textarea,select{background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--white);font-family:'Inter',sans-serif;outline:none;transition:border-color var(--t-base) var(--e-out),box-shadow var(--t-base) var(--e-out)}
+input:focus,textarea:focus,select:focus{border-color:var(--border3);box-shadow:0 0 0 3px rgba(255,255,255,0.04)}
+input::placeholder,textarea::placeholder{color:var(--muted)}
+.url-inp{flex:1;height:50px;padding:0 16px;font-size:15px}
+
+/* ── Buttons ── */
+.btn{height:46px;padding:0 22px;border:1px solid var(--border2);border-radius:var(--r);background:transparent;color:var(--off);font-family:'Inter',sans-serif;font-size:14px;font-weight:500;cursor:pointer;transition:background var(--t-base) var(--e-out),color var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out),transform 80ms var(--e-out),opacity var(--t-base) var(--e-out);white-space:nowrap;display:inline-flex;align-items:center;gap:7px}
+.btn:hover{border-color:var(--border3);color:var(--white);background:var(--wbg)}
+.btn:active{transform:scale(.96)}
+.btn:disabled{opacity:.3;cursor:not-allowed;transform:none}
+.btn.pri{background:var(--white);border-color:var(--white);color:#080808;font-weight:600}.btn.pri:hover{background:var(--off);color:#080808}
+.btn.sm{height:36px;padding:0 14px;font-size:13px}.btn.xs{height:28px;padding:0 10px;font-size:14px}
+.btn.danger:hover{border-color:var(--red);color:var(--red)}
+
+/* ── Format pills ── */
+.fmt-row{display:flex;gap:7px;flex-wrap:wrap}
+.fmt{padding:7px 18px;border:1px solid var(--border2);border-radius:30px;background:transparent;color:var(--muted);font-size:13px;font-weight:500;cursor:pointer;transition:background var(--t-base) var(--e-out),color var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out),transform 80ms var(--e-out)}
+.fmt:hover{border-color:var(--border3);color:var(--white)}
+.fmt:active{transform:scale(.96)}
+.fmt.on{border-color:var(--white);color:var(--white);background:var(--wbg2);font-weight:600}
+
+/* ── Status ── */
+.status{display:flex;align-items:center;gap:10px;padding:13px 18px;margin-bottom:18px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);font-size:14px;color:var(--muted)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--hint);flex-shrink:0}
+.dot.spin{background:#f59e0b;animation:pulse 1.6s var(--e-in-out) infinite}.dot.ok{background:var(--green)}.dot.err{background:var(--red)}
+
+/* ── Progress ── */
+.prog-track{height:2px;background:var(--bg4);border-radius:1px;overflow:hidden;margin-top:14px}
+.prog-fill{height:100%;background:var(--white);width:0%;transition:width 380ms var(--e-out)}
+.prog-lbl{font-size:14px;color:var(--muted);margin-top:6px}
+
+/* ── Video ── */
+.vid-row{display:flex;gap:18px;align-items:center}
+.thumb{width:112px;height:70px;border-radius:var(--r);object-fit:cover;background:var(--bg4);border:1px solid var(--border);flex-shrink:0}
+.vid-title{font-size:16px;font-weight:600;line-height:1.35;margin-bottom:5px}
+.vid-sub{font-size:13px;color:var(--muted)}
+.folder-row{display:flex;gap:8px;align-items:center;margin-top:18px}
+.folder-disp{flex:1;height:36px;padding:0 12px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);color:var(--muted);font-size:13px;font-family:monospace;display:flex;align-items:center;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+
+/* ── Waveform ── */
+.wave-wrap{position:relative;height:72px;background:var(--bg3);border-radius:var(--r);overflow:hidden;cursor:pointer;border:1px solid var(--border);transition:border-color var(--t-base) var(--e-out),box-shadow var(--t-base) var(--e-out)}
+.wave-wrap.dragging{border-color:var(--white);box-shadow:0 0 12px rgba(255,255,255,0.08)}
+.wave-wrap canvas{width:100%;height:100%;display:block}
+#drag-hint{position:absolute;top:0;right:0;padding:4px 10px;background:rgba(8,8,8,0.85);border-bottom-left-radius:var(--r);font-size:11px;color:var(--hint);display:flex;align-items:center;gap:5px;opacity:0;transition:opacity .2s;pointer-events:none;letter-spacing:0.03em;backdrop-filter:blur(6px);z-index:5}
+#drag-hint.visible{opacity:1}
+.playbar{position:absolute;top:0;width:2px;height:100%;background:var(--white);pointer-events:none}
+.transport{display:flex;align-items:center;gap:12px;margin-top:14px}
+.play-btn{width:44px;height:44px;border-radius:50%;border:1px solid var(--border2);background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--white);transition:background var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out),color var(--t-base) var(--e-out),transform 90ms var(--e-out);flex-shrink:0}
+.play-btn:active{transform:scale(.94)}
+.play-btn:hover{background:var(--wbg2);border-color:var(--border3)}
+.ttime{font-size:14px;color:var(--muted);min-width:96px;font-variant-numeric:tabular-nums}
+.seek{flex:1;height:2px;background:var(--bg4);border-radius:1px;cursor:pointer}
+.seek-fill{height:100%;background:var(--white);border-radius:1px;width:0%;pointer-events:none}
+.vol-wrap{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.vol-icon{color:var(--muted);flex-shrink:0;cursor:pointer;transition:color .15s}
+.vol-icon:hover{color:var(--white)}
+.vol-slider{width:88px;accent-color:var(--white);cursor:pointer}
+.vol-db{font-size:12px;color:var(--muted);min-width:38px;text-align:right;font-variant-numeric:tabular-nums}
+/* Professional meter */
+.meter-section{margin-top:14px;display:flex;flex-direction:column;gap:6px}
+.meter-row{display:flex;align-items:center;gap:10px}
+.meter-lbl{font-size:11px;color:var(--muted);width:28px;flex-shrink:0;font-family:monospace;text-align:right}
+
+/* Segmented gradient: green → amber → red */
+.meter-fill{
+  height:100%;width:0%;border-radius:3px;
+  background:#4caf50;
+  transition:width .05s linear, background .1s linear;
+  position:relative;
+}
+/* Track shows the zone colours as background guide */
+.meter-track{
+  flex:1;height:6px;border-radius:3px;overflow:visible;position:relative;
+  background:linear-gradient(to right,
+    #1a2e1a 0%,#1a2e1a 75%,
+    #2e2410 75%,#2e2410 90%,
+    #2e1010 90%,#2e1010 100%);
+}
+/* Peak hold tick */
+.meter-peak{position:absolute;top:-1px;width:2px;height:8px;background:var(--white);border-radius:1px;transition:left .04s linear}
+.meter-val{font-size:11px;color:var(--muted);min-width:52px;text-align:right;font-family:monospace;font-variant-numeric:tabular-nums}
+/* Scale ticks */
+.meter-scale{display:flex;justify-content:space-between;padding:0 0 0 38px;margin-top:2px;margin-bottom:2px}
+.meter-scale span{font-size:9px;color:var(--hint);font-family:monospace;width:0;text-align:center}
+/* Stats row */
+.meter-stats{display:flex;gap:18px;margin-top:4px;flex-wrap:wrap}
+.meter-stat{display:flex;flex-direction:column;gap:2px}
+.meter-stat-lbl{font-size:10px;color:var(--hint);letter-spacing:0.1em;text-transform:uppercase}
+.meter-stat-val{font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--white);letter-spacing:0.04em;line-height:1}
+.meter-stat-unit{font-size:10px;color:var(--muted);margin-top:1px}
+
+/* ── Metrics ── */
+.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px}
+.metric{background:var(--bg3);border:1px solid var(--border);border-radius:var(--rl);padding:26px 20px;text-align:center}
+.m-lbl{font-size:13px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:var(--hint);margin-bottom:10px}
+.m-val{font-family:'Bebas Neue',sans-serif;font-size:60px;line-height:1;color:var(--white);letter-spacing:0.04em}
+.m-val.dim{font-size:26px;color:var(--hint)}
+.m-sub{font-size:13px;color:var(--muted);margin-top:5px;letter-spacing:0.06em}
+.m-conf{height:2px;background:var(--bg4);border-radius:1px;margin-top:12px}
+.m-conf-fill{height:100%;background:rgba(255,255,255,.3);border-radius:1px;width:0%;transition:width 1s ease}
+
+/* ── Artist grid ── */
+.ag{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+.ag-card{background:var(--bg3);border:1px solid var(--border);border-radius:var(--rl);padding:22px}
+.ag-title{font-size:13px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:var(--muted);margin-bottom:14px}
+.chord-list{display:flex;flex-direction:column;gap:8px}
+.chord-row{display:flex;gap:5px;align-items:center;flex-wrap:wrap}
+.chord-pill{padding:4px 11px;border-radius:4px;background:var(--bg4);border:1px solid var(--border2);font-size:14px;font-weight:600;color:var(--white)}
+.chord-role{font-size:13px;color:var(--hint);margin-left:3px}
+.cam-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}
+.cam-key{padding:8px 4px;border-radius:4px;text-align:center;font-size:14px;background:var(--bg4);color:var(--muted);font-weight:700;line-height:1.4;cursor:default;transition:background .15s}
+.cam-key span{display:block;font-size:10px;font-weight:400;margin-top:2px;font-family:'Inter',sans-serif;letter-spacing:0}
+.cam-key.match{background:var(--wbg2);color:var(--white);border:1px solid var(--border3);box-shadow:0 0 8px rgba(255,255,255,0.04)}
+.cam-key.self{background:var(--white);color:#080808;font-weight:800;font-size:15px;box-shadow:0 0 12px rgba(255,255,255,0.12)}
+.pitch-row{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+input[type=range]{flex:1;accent-color:var(--white)}
+.pitch-val{font-family:'Bebas Neue',sans-serif;font-size:28px;min-width:36px;text-align:center;color:var(--white)}
+
+/* ── Drop ── */
+.drop{border:1.5px dashed var(--border2);border-radius:var(--rl);padding:44px 28px;text-align:center;cursor:pointer;background:var(--bg3);transition:border-color var(--t-base) var(--e-out),background var(--t-base) var(--e-out),transform var(--t-base) var(--e-spring)}
+.drop:hover,.drop.over{border-color:var(--border3);background:var(--wbg)}
+.drop.over{transform:scale(1.01);border-color:var(--white)}
+.drop svg{color:var(--hint);margin:0 auto 14px;display:block}
+.drop h3{font-size:18px;font-weight:500;color:var(--white);margin-bottom:5px}
+.drop p{font-size:14px;color:var(--muted)}
+
+/* ── Textarea ── */
+.notes-box,.transcript-box{width:100%;padding:14px;line-height:1.7;resize:vertical;font-size:13px;border-radius:var(--r)}
+.notes-box{min-height:110px}.transcript-box{min-height:160px}
+
+/* ── History ── */
+.hist-empty{text-align:center;padding:70px 40px;color:var(--hint);font-size:14px}
+
+/* History list — reserve vertical space so the first render and any
+ * subsequent re-render don't cause the page below to collapse/expand and
+ * trigger the visible "jiggle". A min-height absorbs the brief moment
+ * between fetch-start and rows-rendered. */
+#hist-list,#sep-hist-list{min-height:200px}
+.hist-row{display:flex;align-items:center;gap:14px;padding:14px 18px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);margin-bottom:7px;cursor:pointer;transition:background var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out),transform 80ms var(--e-out)}
+.hist-row:hover{border-color:var(--border2);background:var(--bg3)}
+.hist-row.selected{border-color:rgba(76,175,80,.4);background:rgba(76,175,80,.06)}
+/* Pulse a row when it arrives from elsewhere (extension download, another
+   window, etc). Green glow that fades — draws the eye without yanking it. */
+.hist-row.row-pulse{animation:histRowPulse 1.7s var(--e-in-out) 2}
+@keyframes histRowPulse{
+  0%,100%{background:var(--bg2);box-shadow:0 0 0 0 rgba(76,175,80,0)}
+  50%{background:rgba(76,175,80,.07);box-shadow:0 0 0 2px rgba(76,175,80,.28)}
+}
+.hist-row .hist-check{width:18px;height:18px;accent-color:var(--green);flex-shrink:0;cursor:pointer}
+.hist-row .hist-play{width:32px;height:32px;border-radius:50%;border:1px solid var(--border);background:transparent;color:var(--white);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0;font-size:11px;line-height:1;outline:none;transition:transform .1s,background .1s,color .1s,border-color .1s}
+.hist-row .hist-play:hover{background:var(--white);color:#000;border-color:var(--white);transform:scale(1.06)}
+.hist-row .hist-play.playing{background:var(--white);color:#000;border-color:var(--white)}
+.hist-row .hist-play:focus{outline:none;box-shadow:none}
+
+/* Favorite heart on history rows */
+/* Favorite heart icon in history rows.
+ * BEHAVIOR: hidden by default, fades in on row hover. Applies to ALL rows
+ * including favorited ones — keeps the list visually clean and uniform.
+ * The .on state (favorited) controls the heart COLOR when revealed (red
+ * fill vs muted outline) but not its visibility. */
+.hist-row .hist-fav{width:28px;height:28px;border-radius:50%;border:none;background:transparent;color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0;outline:none;opacity:0;transition:opacity .15s,transform .1s,color .1s}
+.hist-row:hover .hist-fav{opacity:1}
+.hist-row .hist-fav.on{color:#ff5555}
+.hist-row .hist-fav:hover{color:#ff5555;transform:scale(1.15)}
+.hist-row .hist-fav:focus{outline:none;box-shadow:none}
+.hist-thumb{width:68px;height:44px;border-radius:4px;object-fit:cover;background:var(--bg4);flex-shrink:0}
+
+/* Batch action bar */
+.hist-batch{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;margin-bottom:8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r)}
+.hb-left{display:flex;align-items:center;gap:12px}
+.hb-check{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);cursor:pointer}
+.hb-check input{accent-color:var(--green)}
+.hb-count{font-size:11px;color:var(--hint);font-weight:500}
+.hb-right{display:flex;gap:6px}
+
+/* Move progress bar */
+.move-progress{padding:10px 14px;margin-bottom:8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r)}
+.move-info{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.move-info span{font-size:12px;color:var(--text)}
+.move-count{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.move-track{height:4px;background:var(--bg4);border-radius:2px;overflow:hidden}
+.move-fill{height:100%;background:var(--green);width:0%;border-radius:2px;transition:width .3s ease}
+.move-current{font-size:10px;color:var(--hint);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* Stockpile folder row */
+.stockpile-row{display:flex;align-items:center;gap:6px;padding:6px 12px;margin-bottom:8px;font-size:11px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r)}
+.stockpile-lbl{color:var(--muted);flex-shrink:0}
+.stockpile-path{color:var(--hint);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
+.stockpile-path:hover{color:var(--text);text-decoration:underline}
+.hist-info{flex:1;min-width:0}
+.hist-title{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px}
+.hist-meta{font-size:13px;color:var(--muted)}
+.hist-badges{display:flex;gap:5px;flex-shrink:0;align-items:center}
+.badge{padding:3px 9px;border-radius:4px;font-size:13px;font-weight:600;background:var(--bg4);color:var(--muted);border:1px solid var(--border)}
+.badge.bpm,.badge.key{background:var(--wbg);color:var(--off);border-color:var(--border2)}
+
+/* ── Metronome ── */
+.metro-num{font-family:'Bebas Neue',sans-serif;font-size:76px;text-align:center;color:var(--white);line-height:1;margin:6px 0}
+.metro-beat{display:flex;gap:10px;justify-content:center;margin:12px 0}
+.beat-dot{width:13px;height:13px;border-radius:50%;background:var(--bg4);border:1px solid var(--border2);transition:background .04s}
+.beat-dot.lit{background:var(--white);box-shadow:0 0 8px rgba(255,255,255,.4)}
+.tap-btn{width:100%;padding:28px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--white);font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:.2em;cursor:pointer;transition:background .08s}
+.tap-btn:active{background:var(--wbg2)}
+.tap-num{font-family:'Bebas Neue',sans-serif;font-size:68px;text-align:center;color:var(--white);margin-top:10px;line-height:1}
+
+/* ── Scale ── */
+.scale-note{display:inline-flex;flex-direction:column;align-items:center;width:64px;margin:0 4px 8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:9px 4px}
+.scale-note .rom{font-size:13px;font-weight:700;color:var(--muted);margin-bottom:3px}
+.scale-note .note{font-size:15px;font-weight:600;color:var(--white)}
+.scale-note .qual{font-size:12px;color:var(--hint);margin-top:2px}
+.tgrid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.info-note{background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:16px 18px;font-size:13px;color:var(--muted);line-height:1.8}
+.info-note code{background:var(--bg4);padding:1px 7px;border-radius:3px;font-size:14px;color:var(--off)}
+/* Professional metrics panel */
+.pro-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.pro-section{}
+.pro-title{font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--muted);margin-bottom:14px}
+.pro-stats{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:10px}
+.pro-stat{display:flex;flex-direction:column;gap:2px;min-width:60px}
+.pro-stat-lbl{font-size:10px;color:var(--hint);letter-spacing:0.1em;text-transform:uppercase}
+.pro-stat-val{font-family:'Bebas Neue',sans-serif;font-size:24px;color:var(--white);letter-spacing:0.04em;line-height:1}
+.pro-stat-val.pro-red{color:var(--red)}
+.pro-stat-unit{font-size:10px;color:var(--muted)}
+.pro-hint{font-size:11px;color:var(--hint);line-height:1.7;margin-top:6px;padding-top:8px;border-top:1px solid var(--border)}
+/* Spectrum analyzer — FabFilter Pro-Q-style EQ graph */
+.pro-spectrum{position:relative;width:100%;height:280px;background:#0a0a0a;border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:10px;cursor:crosshair}
+.pro-spectrum canvas{display:block;position:absolute;top:0;left:0}
+.pro-spectrum-bands{display:grid;grid-template-columns:repeat(6, 1fr);gap:6px}
+.pro-spectrum-band{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:6px 8px;text-align:center}
+.pro-spectrum-band-lbl{font-size:10px;color:var(--hint);letter-spacing:.04em;text-transform:uppercase}
+.pro-spectrum-band-val{font-size:14px;color:var(--white);font-family:monospace;font-weight:600;margin:2px 0}
+.pro-spectrum-band-freq{font-size:9px;color:var(--muted)}
+/* Hover readout — frequency + dB + nearest note. Appended into pro-title. */
+.pro-spectrum-readout{display:inline-block;margin-left:14px;font-size:11px;color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:500;letter-spacing:.02em;vertical-align:middle}
+
+/* Live indicator dot — gently pulses red while audio is playing, dims
+ * when the spectrum is just a static snapshot. */
+.pro-live-dot{display:inline-block;font-size:11px;color:#444;margin-left:8px;vertical-align:middle;transition:color .3s}
+.pro-live-dot.live{color:#e84040;animation:proLivePulse 1.5s ease-in-out infinite}
+@keyframes proLivePulse{0%,100%{opacity:.6}50%{opacity:1}}
+/* Legacy spectral-balance styles kept for any other view that might still use them */
+.sb-grid{display:flex;flex-direction:column;gap:7px}
+.sb-row{display:grid;grid-template-columns:56px 1fr 72px;align-items:center;gap:9px}
+.sb-row.with-val{grid-template-columns:56px 1fr 60px 72px}
+.sb-lbl{font-size:12px;color:var(--muted);text-align:right}
+.sb-track{height:5px;border-radius:3px;overflow:hidden;background:linear-gradient(to right,#0f2010 0%,#0f2010 70%,#1f1800 70%,#1f1800 88%,#1f0000 88%,#1f0000 100%)}
+.sb-fill{height:100%;border-radius:3px;transition:width .08s ease;background:#4caf50}
+.sb-val{font-size:12px;color:var(--off);font-family:monospace;text-align:right}
+.sb-freq{font-size:10px;color:var(--hint)}
+/* Section energy */
+.section-row{display:grid;grid-template-columns:70px 100px 1fr 50px;align-items:center;gap:9px;margin-bottom:6px}
+.sec-lbl{font-size:12px;color:var(--muted)}
+.sec-time{font-size:11px;color:var(--hint);font-family:monospace}
+.sec-bar-wrap{height:4px;background:var(--bg4);border-radius:2px;overflow:hidden}
+.sec-bar{height:100%;background:var(--white);border-radius:2px}
+.sec-db{font-size:11px;color:var(--muted);font-family:monospace;text-align:right}
+.sh{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.sh-title{font-size:13px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.row{display:flex;gap:9px;align-items:center}.mb{margin-bottom:14px}.mt{margin-top:14px}.mt2{margin-top:22px}.f1{flex:1}.hidden{display:none!important}
+
+/* ── Stem separator ── */
+/* ---------- Stem Mixer ---------- */
+/* Master transport bar — sits above the stem rows */
+.mixer-master{display:flex;align-items:center;gap:14px;padding:14px 18px;background:linear-gradient(180deg,var(--bg3),var(--bg2));border:1px solid var(--border2);border-radius:var(--rl);margin-bottom:10px;flex-wrap:wrap}
+.mixer-master-info{display:flex;flex-direction:column;gap:2px;min-width:120px}
+.mixer-master-title{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em}
+.mixer-master-time{font-size:14px;font-weight:600;color:var(--white);font-variant-numeric:tabular-nums}
+.mixer-master-controls{display:flex;gap:6px;align-items:center}
+.mixer-btn{display:inline-flex;align-items:center;gap:6px;padding:0 14px;height:34px;border-radius:var(--r);border:1px solid var(--border2);background:transparent;color:var(--white);font-size:13px;font-weight:500;cursor:pointer;transition:background var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out),color var(--t-base) var(--e-out),transform 80ms var(--e-out)}
+.mixer-btn:active{transform:scale(.96)}
+.mixer-btn:hover{border-color:var(--border3);background:var(--wbg)}
+.mixer-btn-primary{background:var(--white);color:var(--bg);border-color:var(--white);min-width:110px;justify-content:center}
+.mixer-btn-primary:hover{background:rgba(255,255,255,0.92);border-color:rgba(255,255,255,0.92)}
+.mixer-master-seek{flex:1 1 100%;height:4px;background:var(--bg4);border-radius:2px;cursor:pointer;position:relative;margin-top:6px;min-width:200px}
+.mixer-master-seek-fill{height:100%;background:var(--white);border-radius:2px;width:0%;pointer-events:none}
+
+/* Master fader — single fader controlling the whole mix output. Sits in
+ * the toolbar between transport buttons and seek bar. */
+.mixer-master-fader{display:flex;align-items:center;gap:8px;flex-shrink:0;padding:0 10px;border-left:1px solid var(--border);border-right:1px solid var(--border);height:34px;color:var(--muted)}
+.mixer-master-vol{width:130px;-webkit-appearance:none;appearance:none;height:4px;background:var(--bg4);border-radius:2px;outline:none;cursor:pointer}
+.mixer-master-vol::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;background:var(--white);border-radius:50%;cursor:pointer;transition:transform var(--t-fast) var(--e-out),box-shadow var(--t-fast) var(--e-out)}
+.mixer-master-vol:hover::-webkit-slider-thumb{transform:scale(1.25);box-shadow:0 0 0 6px rgba(255,255,255,.08)}
+.mixer-master-vol-lbl{font-size:10px;color:var(--hint);min-width:36px;text-align:right;font-variant-numeric:tabular-nums}
+
+/* Master VU meter — stereo bars, vertical, segmented look via background gradient */
+.mixer-master-vu{display:flex;gap:2px;width:8px;height:34px;flex-shrink:0}
+.mixer-master-vu-bar{flex:1;height:100%;background:var(--bg);border-radius:1px;position:relative;overflow:hidden;display:flex;align-items:flex-end}
+.mixer-master-vu-fill{width:100%;height:0%;background:linear-gradient(0deg,#4caf50 0%,#4caf50 60%,#f59e0b 70%,#f59e0b 88%,#ef4444 92%,#ef4444 100%);transition:height .04s linear;border-radius:1px}
+
+/* Loop button gets an "active" state showing the loop region is engaged */
+#mixer-loop-btn.active{background:rgba(255,255,255,.10);border-color:var(--white);color:var(--white)}
+
+/* Master waveform overview — DAW-style timeline showing all stems overlaid
+ * in their colors at low alpha. Click to seek; playhead is the white line
+ * that walks across as audio plays. Sits between master transport and the
+ * per-stem rows. */
+.mixer-master-waveform{position:relative;width:100%;height:96px;background:linear-gradient(180deg,#0d0d0d,#161616);border:1px solid var(--border2);border-radius:var(--rl);overflow:hidden;cursor:pointer;margin-bottom:10px;box-shadow:inset 0 1px 0 rgba(255,255,255,.03)}
+.mixer-master-waveform:hover{border-color:var(--border3)}
+.mixer-master-waveform canvas{position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none}
+.mixer-master-wave-playhead{position:absolute;top:0;bottom:0;width:2px;background:#fff;left:0%;pointer-events:none;box-shadow:0 0 8px rgba(255,255,255,.7),0 0 16px rgba(255,255,255,.4);z-index:3}
+
+/* Loop region overlay — visible when loop is enabled. Semi-transparent
+ * white box with subtle border markers at the start/end. Layered between
+ * the waveform canvas and the playhead. */
+.mixer-master-loop-region{position:absolute;top:0;bottom:0;left:0%;width:0%;background:rgba(255,255,255,.10);border-left:2px solid rgba(255,255,255,.65);border-right:2px solid rgba(255,255,255,.65);pointer-events:none;display:none;z-index:2}
+.mixer-master-loop-region.active{display:block}
+
+/* Bar/beat grid canvas — semi-transparent vertical lines aligned to BPM.
+ * Drawn from #mixer-master-grid; positioned above wave canvas but under
+ * the playhead/loop overlays. */
+#mixer-master-grid{z-index:1}
+
+/* Stems list */
+.mixer-stems{display:flex;flex-direction:column;gap:6px}
+
+/* Per-stem row — handle, color, name, controls, drag-out */
+.stem-row{display:flex;align-items:center;gap:14px;padding:14px 16px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);transition:background var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out),box-shadow var(--t-base) var(--e-out),opacity var(--t-base) var(--e-out);cursor:grab;min-height:88px}
+.stem-row:hover{border-color:var(--border2);background:var(--bg3)}
+.stem-row.dragging{opacity:0.4;cursor:grabbing;border-color:var(--white)}
+.stem-row.drop-target{border-color:var(--white);background:var(--bg4);box-shadow:0 0 0 1px var(--white) inset}
+.stem-row-handle{display:flex;align-items:center;justify-content:center;width:14px;color:var(--hint);cursor:grab;flex-shrink:0}
+.stem-row-handle:hover{color:var(--white)}
+.stem-color{width:6px;height:32px;border-radius:3px;flex-shrink:0}
+.stem-color.vocals{background:#e84040}
+.stem-color.drums{background:#f59e0b}
+.stem-color.bass{background:#a855f7}
+.stem-color.other{background:#6b7280}
+.stem-color.guitar{background:#4caf50}
+.stem-color.piano{background:#3b82f6}
+/* Vocal sub-stems — same red family as 'vocals', distinct shades */
+.stem-color.lead_vocal{background:#ff5566}
+.stem-color.back_vocal{background:#b03030}
+.stem-color.sample_vocal{background:#7a2424}
+.stem-name{flex:1;min-width:80px;font-size:14px;font-weight:600;color:var(--white);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* Stem name block — stacks the stem name on top, BPM/key chips below.
+ * Used in renderStemRow when per_stem_analysis is present in the done
+ * payload. The chips are small monospace-style badges that show the
+ * stem's detected tempo + tonality. Clicking a chip currently does
+ * nothing (future: filter or seek by it). */
+.stem-name-block{
+  flex:1;min-width:80px;
+  display:flex;flex-direction:column;gap:3px;
+  overflow:hidden;
+}
+.stem-name-block .stem-name{flex:initial}
+.stem-chips{display:flex;gap:6px;flex-wrap:wrap}
+.stem-chip{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:1px 7px;border-radius:3px;
+  font-size:10px;font-weight:600;letter-spacing:.04em;
+  font-variant-numeric:tabular-nums;
+  font-family:'Inter',sans-serif;
+  background:rgba(255,255,255,.05);
+  border:1px solid rgba(255,255,255,.08);
+  color:rgba(255,255,255,.7);
+  cursor:default;
+  white-space:nowrap;
+}
+.stem-chip-bpm{color:#9ecaff}
+.stem-chip-key{color:#c8a8ff}
+.stem-chip-camelot{
+  font-size:9px;opacity:.6;
+  padding:0 4px;border-radius:2px;
+  background:rgba(255,255,255,.08);
+}
+
+/* Per-stem inline waveform — DAW-style: fills remaining row width, tall
+ * enough to see detail, faint inner shadow for depth. Click anywhere to
+ * seek (handled in JS), drag-handle plays back at that position. */
+.stem-waveform{position:relative;flex:1;min-width:240px;height:60px;background:linear-gradient(180deg, rgba(0,0,0,0.20), rgba(0,0,0,0.05));border:1px solid var(--border);border-radius:4px;cursor:pointer;overflow:hidden;box-shadow:inset 0 1px 0 rgba(255,255,255,.02)}
+.stem-waveform:hover{border-color:var(--border2)}
+.stem-wave-canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+.stem-wave-playhead{position:absolute;top:0;bottom:0;width:1px;background:#fff;left:0%;pointer-events:none;box-shadow:0 0 6px rgba(255,255,255,.6),0 0 14px rgba(255,255,255,.3)}
+
+/* Stem-row layout reflows on narrow viewports — waveform goes to its own
+ * line below the controls so the row stays readable */
+@media (max-width: 1280px) {
+  .stem-waveform{min-width:180px}
+}
+@media (max-width: 1040px) {
+  .stem-row{flex-wrap:wrap;align-items:stretch}
+  .stem-waveform{width:100%;flex:1 1 100%;order:99;height:64px}
+}
+
+/* Mute/solo toggles + volume/pan sliders */
+.stem-mixer-controls{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.stem-tog{width:28px;height:28px;border-radius:6px;border:1px solid var(--border2);background:transparent;color:var(--muted);font-size:11px;font-weight:700;cursor:pointer;transition:background var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out),color var(--t-base) var(--e-out),transform 80ms var(--e-out);display:flex;align-items:center;justify-content:center}
+.stem-tog:active{transform:scale(.92)}
+.stem-tog:hover{border-color:var(--border3);color:var(--white)}
+.stem-tog-mute.active{background:#e84040;border-color:#e84040;color:#fff}
+.stem-tog-solo.active{background:#f59e0b;border-color:#f59e0b;color:#000}
+.stem-knob-group{display:flex;flex-direction:column;align-items:center;gap:2px;width:80px}
+.stem-knob-label{font-size:9px;color:var(--hint);font-variant-numeric:tabular-nums;font-weight:600;letter-spacing:0.03em}
+.stem-vol,.stem-pan{-webkit-appearance:none;appearance:none;width:80px;height:4px;background:var(--bg4);border-radius:2px;outline:none;cursor:pointer;margin:0}
+.stem-vol::-webkit-slider-thumb,.stem-pan::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:var(--white);cursor:grab;border:none;transition:transform var(--t-fast) var(--e-out),box-shadow var(--t-fast) var(--e-out)}
+.stem-vol::-moz-range-thumb,.stem-pan::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:var(--white);cursor:grab;border:none;transition:transform var(--t-fast) var(--e-out),box-shadow var(--t-fast) var(--e-out)}
+.stem-vol:hover::-webkit-slider-thumb,.stem-pan:hover::-webkit-slider-thumb{transform:scale(1.25);box-shadow:0 0 0 6px rgba(255,255,255,.08)}
+.stem-vol:hover::-moz-range-thumb,.stem-pan:hover::-moz-range-thumb{transform:scale(1.25);box-shadow:0 0 0 6px rgba(255,255,255,.08)}
+.stem-vol:active::-webkit-slider-thumb,.stem-pan:active::-webkit-slider-thumb{cursor:grabbing}
+.stem-vol:active::-moz-range-thumb,.stem-pan:active::-moz-range-thumb{cursor:grabbing}
+
+/* Drag-to-DAW handle on the right */
+.stem-drag-out{display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:6px;border:1px solid var(--border2);background:transparent;color:var(--muted);cursor:grab;transition:background var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out),color var(--t-base) var(--e-out),transform 80ms var(--e-out);flex-shrink:0}
+.stem-drag-out:active{cursor:grabbing;transform:scale(.92)}
+.stem-drag-out:hover{border-color:var(--border3);color:var(--white);background:var(--wbg)}
+.stem-drag-out:active{cursor:grabbing}
+
+/* Tighter mixer rows on narrow viewports — sliders shrink first */
+@media (max-width:900px){
+  .stem-knob-group{width:60px}
+  .stem-vol,.stem-pan{width:60px}
+  .stem-name{min-width:60px;font-size:13px}
+}
+
+/* Ensemble quality badge — shown on results header */
+/* ── Stockpile (style folders, mood tagging, suggestions) ── */
+.sp-summary-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+.sp-stat-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:14px 16px;text-align:center}
+.sp-stat-num{font-size:28px;font-weight:700;color:var(--white);font-variant-numeric:tabular-nums;line-height:1}
+.sp-stat-lbl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-top:6px}
+.sp-root-card{margin-bottom:14px}
+.sp-hint{font-size:11px;color:var(--hint);margin-top:8px;line-height:1.4}
+.sp-hint code{background:var(--bg);padding:1px 5px;border-radius:3px;font-size:10px;color:var(--off)}
+/* Folder grid — auto-fills as many columns as fit, but always shows at
+ * least 2 across on narrow viewports. Cards collapse to 180px min on
+ * narrow screens. Vertical: unlimited rows, container scrolls if app is
+ * tall enough but otherwise grows naturally. */
+.sp-folder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(220px,calc(50% - 5px)),1fr));gap:10px;align-content:start}
+.sp-folder-grid.scroll-y{max-height:520px;overflow-y:auto;padding-right:4px}
+.sp-folder-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:14px;cursor:pointer;transition:background var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out),transform var(--t-base) var(--e-out),box-shadow var(--t-base) var(--e-out);position:relative;overflow:hidden}
+.sp-folder-card:hover{transform:translateY(-2px);box-shadow:0 4px 16px rgba(0,0,0,.32)}
+.sp-folder-card:active{transform:translateY(0) scale(.99)}
+.sp-folder-card:hover{border-color:var(--white-50,rgba(255,255,255,0.18));transform:translateY(-1px)}
+.sp-folder-card .sp-fc-name{font-size:14px;font-weight:600;color:var(--white);margin-bottom:4px;display:flex;align-items:center;gap:8px}
+.sp-folder-card .sp-fc-color{width:10px;height:10px;border-radius:50%;flex-shrink:0;background:var(--accent,#7ed982)}
+.sp-folder-card .sp-fc-count{font-size:11px;color:var(--muted)}
+.sp-folder-card .sp-fc-desc{font-size:11px;color:var(--hint);margin-top:6px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.sp-folder-card .sp-fc-seeds{font-size:10px;color:var(--off);margin-top:6px;font-style:italic}
+.sp-folder-card .sp-fc-actions{position:absolute;top:8px;right:8px;display:none;gap:4px}
+.sp-folder-card:hover .sp-fc-actions{display:flex}
+.sp-folder-card .sp-fc-actions button{background:rgba(0,0,0,.4);border:none;color:var(--muted);width:22px;height:22px;border-radius:4px;cursor:pointer;font-size:11px;padding:0}
+.sp-folder-card .sp-fc-actions button:hover{background:rgba(0,0,0,.7);color:var(--white)}
+.sp-folder-card .sp-fc-actions .sp-fc-magic{color:#7ed982}
+.sp-folder-card .sp-fc-actions .sp-fc-magic:hover{background:rgba(126,217,130,.18);color:#a4ffaa}
+
+/* Match preview modal */
+.sp-match-section-lbl{font-size:10px;color:var(--hint);text-transform:uppercase;letter-spacing:.08em;margin:6px 0 4px;font-weight:600}
+.sp-match-row{display:grid;grid-template-columns:24px 1fr auto;align-items:center;gap:10px;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-bottom:4px;cursor:pointer;transition:border-color .12s}
+.sp-match-row:hover{border-color:rgba(126,217,130,.30)}
+.sp-match-row input[type=checkbox]{cursor:pointer;width:16px;height:16px;accent-color:#7ed982}
+.sp-match-info{min-width:0}
+.sp-match-title{font-size:12px;color:var(--white);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sp-match-meta{font-size:10px;color:var(--hint);margin-top:2px}
+.sp-match-conf{font-size:11px;color:#7ed982;font-variant-numeric:tabular-nums;font-weight:600;flex-shrink:0}
+.sp-untagged-list{display:flex;flex-direction:column;gap:6px;max-height:480px;overflow-y:auto}
+.sp-untagged-row{display:grid;grid-template-columns:1fr auto;gap:12px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;align-items:center}
+.sp-untagged-row .sp-ut-title{font-size:12px;color:var(--white);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sp-untagged-row .sp-ut-meta{font-size:10px;color:var(--hint);margin-top:2px}
+.sp-untagged-row .sp-ut-suggestions{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end;max-width:340px}
+.sp-suggestion-chip{font-size:10px;padding:3px 8px;border-radius:11px;background:rgba(126,217,130,0.10);border:1px solid rgba(126,217,130,0.30);color:#7ed982;cursor:pointer;white-space:nowrap;transition:background var(--t-fast) var(--e-out),border-color var(--t-fast) var(--e-out),color var(--t-fast) var(--e-out),transform 80ms var(--e-out)}
+.sp-suggestion-chip:hover{background:rgba(126,217,130,.18);border-color:rgba(126,217,130,.5)}
+.sp-suggestion-chip:active{transform:scale(.94)}
+.sp-suggestion-chip:hover{background:rgba(126,217,130,0.22);transform:translateY(-1px)}
+.sp-suggestion-chip .sp-sc-conf{opacity:.7;margin-left:4px;font-size:9px}
+.sp-suggestion-chip.low{background:rgba(255,255,255,0.04);border-color:rgba(255,255,255,0.12);color:var(--muted)}
+.sp-suggestion-chip.low:hover{background:rgba(255,255,255,0.10);color:var(--white)}
+.sp-empty{text-align:center;padding:24px 12px;color:var(--muted)}
+
+/* Folder browser view */
+.sp-fv-header{display:flex;align-items:center;gap:14px;margin-bottom:14px}
+.sp-fv-header .btn.sm{flex-shrink:0;display:inline-flex;align-items:center;gap:6px}
+.sp-fv-title-block{flex:1;min-width:0}
+.sp-fv-title{font-size:24px;font-weight:700;color:var(--white);letter-spacing:-0.01em;line-height:1.1;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sp-fv-meta{font-size:12px;color:var(--muted)}
+.sp-fv-header-actions{display:flex;gap:6px;flex-shrink:0}
+.sp-fv-desc{font-size:12px;color:var(--off);margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border);line-height:1.5}
+.sp-fv-mood{margin-bottom:8px}
+.sp-fv-mood-lbl{font-size:10px;color:var(--hint);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:600}
+.sp-fv-mood-bars{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.sp-fv-mood-bar{display:flex;align-items:center;gap:8px}
+.sp-fv-mood-name{font-size:11px;color:var(--muted);min-width:64px;flex-shrink:0}
+.sp-fv-mood-track{flex:1;height:6px;background:var(--bg);border-radius:3px;overflow:hidden}
+.sp-fv-mood-fill{display:block;height:100%;background:linear-gradient(90deg,#7ed982,#5eb8e8);width:0%;transition:width .35s ease;border-radius:3px}
+.sp-fv-seeds-row{font-size:11px;color:var(--muted);margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
+.sp-fv-seeds-lbl{color:var(--hint);margin-right:6px;text-transform:uppercase;letter-spacing:.08em;font-size:10px;font-weight:600}
+.sp-fv-toolbar{display:flex;gap:10px;align-items:center;padding:12px 14px}
+.sp-fv-select{height:34px;padding:0 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--white);font-size:12px;font-family:inherit;cursor:pointer}
+.sp-fv-select:focus{outline:none;border-color:#7ed982}
+.sp-fv-track-list{display:flex;flex-direction:column;gap:6px;max-height:560px;overflow-y:auto}
+.sp-fv-row{display:grid;grid-template-columns:auto 36px 1fr auto auto;gap:12px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;align-items:center;transition:border-color .12s}
+.sp-fv-row:hover{border-color:rgba(113,112,110,.30)}
+.sp-fv-row .sp-fv-row-thumb{width:36px;height:36px;border-radius:4px;object-fit:cover;background:var(--bg2);flex-shrink:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:14px}
+.sp-fv-row .sp-fv-row-thumb.fallback{background:var(--bg2)}
+.sp-fv-row .sp-fv-play{width:28px;height:28px;border-radius:50%;border:1px solid var(--border);background:transparent;color:var(--white);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0;font-size:11px;outline:none;transition:transform .1s,background .1s,color .1s,border-color .1s}
+.sp-fv-row .sp-fv-play:hover{background:var(--white);color:#000;border-color:var(--white);transform:scale(1.06)}
+.sp-fv-row .sp-fv-play.playing{background:var(--white);color:#000;border-color:var(--white)}
+.sp-fv-row .sp-fv-play:focus{outline:none;box-shadow:none}
+.sp-fv-row .sp-fv-info{min-width:0}
+.sp-fv-row .sp-fv-info-clickable{cursor:pointer;border-radius:4px;padding:2px 4px;margin:-2px -4px;transition:background .12s}
+.sp-fv-row .sp-fv-info-clickable:hover{background:rgba(113,112,110,.10)}
+.sp-fv-row .sp-fv-info-clickable:hover .sp-fv-row-title{color:#a8a7a4}
+.sp-fv-row .sp-fv-row-title{font-size:12px;color:var(--white);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.sp-fv-row .sp-fv-row-meta{font-size:10px;color:var(--hint);margin-top:2px;display:flex;gap:8px;flex-wrap:wrap}
+.sp-fv-row .sp-fv-row-meta .badge{font-size:10px;padding:1px 6px;border-radius:8px;background:var(--bg2);color:var(--off)}
+.sp-fv-row .sp-fv-row-meta .badge.committed{background:rgba(126,217,130,.10);color:#7ed982;border:1px solid rgba(126,217,130,.25)}
+.sp-fv-row .sp-fv-row-actions{display:flex;gap:4px;flex-shrink:0;opacity:.5;transition:opacity .12s}
+.sp-fv-row:hover .sp-fv-row-actions{opacity:1}
+.sp-fv-row .sp-fv-row-actions button{background:transparent;border:1px solid transparent;color:var(--muted);padding:4px 8px;border-radius:4px;cursor:pointer;font-size:11px}
+.sp-fv-row .sp-fv-row-actions button:hover{background:var(--bg2);color:var(--white);border-color:var(--border)}
+.sp-fv-row .sp-fv-row-actions button.danger:hover{color:#ff8888;border-color:rgba(255,136,136,.30)}
+/* ── Mini-DAW overlay ─────────────────────────────────────────────────────
+ * Full-screen editor that slides up from below when stems are ready and the
+ * user clicks "Open DAW". Position: fixed inset 0 so it covers everything.
+ * Uses transform translateY for the entrance — GPU-accelerated, butter smooth.
+ * The .opening class is the START state (off-screen below); removing it
+ * lets the transition animate to the resting state. */
+.daw-overlay{
+  /* Start below the OS titlebar (#tb is 46px tall) so users can still drag
+   * the window, minimize/maximize/close, and use the back/forward tab nav.
+   * The titlebar's -webkit-app-region:drag works at the element bounding-
+   * box level, not z-stacking, so covering it with the DAW would also
+   * hide the OS-level chrome controls. Easier to just not cover it. */
+  position:fixed;top:46px;right:0;bottom:0;left:0;z-index:9500;
+  background:#080808;
+  display:flex;flex-direction:column;
+  transform:translateY(0);opacity:1;
+  transition:transform 360ms cubic-bezier(.2,.9,.3,1),opacity 280ms ease;
+  will-change:transform,opacity;
+  /* The overlay itself is no-drag so DAW buttons receive their clicks.
+   * The OS titlebar sits ABOVE the overlay vertically (now uncovered),
+   * keeping its own drag region intact. Best of both worlds. */
+  -webkit-app-region:no-drag;
+}
+.daw-overlay.opening{transform:translateY(40px);opacity:0}
+.daw-overlay.out{transform:translateY(20px);opacity:0}
+
+.daw-header{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:space-between;
+  padding:8px 12px;border-bottom:1px solid var(--border);
+  background:var(--bg2);
+  flex-shrink:0;
+  gap:8px 12px;
+  /* row-gap kicks in when the toolbar wraps to a second line on narrow windows */
+}
+.daw-header-left,.daw-header-right{display:flex;align-items:center;gap:8px;flex-shrink:0}
+/* Toolbar — center area. flex-wrap so on narrow windows it spills to a new
+ * line under the back-button row instead of overflowing offscreen.
+ * justify-content:center keeps it centered on wide screens; when wrapped to
+ * its own line it stays centered too. */
+.daw-toolbar{
+  display:flex;align-items:center;gap:10px;
+  justify-content:center;
+  flex-wrap:wrap;
+  flex:1 1 auto;
+  min-width:0;
+}
+.daw-tool-group{display:flex;align-items:center;gap:4px;padding:2px;border:1px solid var(--border);border-radius:6px;background:var(--bg)}
+.daw-tool-group .daw-tbtn,
+.daw-tool-group .daw-tool,
+.daw-tool-group .daw-tbtn-sm{border:none}
+.daw-tool{
+  background:transparent;color:var(--muted);
+  cursor:pointer;width:30px;height:30px;border-radius:4px;
+  display:flex;align-items:center;justify-content:center;outline:none;
+  transition:background 120ms,color 120ms;
+}
+.daw-tool:hover{color:var(--white);background:var(--bg2)}
+.daw-tool.on{background:var(--white);color:#000}
+.daw-tool.on:hover{background:#e8e8e8;color:#000}
+.daw-back-btn{
+  background:var(--bg);border:1px solid var(--border2);color:var(--white);
+  cursor:pointer;padding:9px 16px;border-radius:6px;
+  display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;outline:none;
+  transition:background 120ms,color 120ms,border-color 120ms,transform 80ms;
+  min-height:38px;
+  letter-spacing:.02em;
+}
+.daw-back-btn:hover{background:var(--white);color:#000;border-color:var(--white)}
+.daw-back-btn:active{transform:scale(.97)}
+/* Ensure SVG + text inside back button don't intercept clicks before the
+ * button. This is the fix for the "half-broken back button" — clicking on
+ * the icon or label inside should still trigger the button's click. */
+.daw-back-btn > *{pointer-events:none}
+.daw-title{font-size:13px;font-weight:600;color:var(--white);letter-spacing:.03em}
+.daw-tbtn{
+  background:transparent;border:1px solid var(--border);color:var(--white);
+  cursor:pointer;width:36px;height:36px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;outline:none;
+  transition:background 120ms,border-color 120ms,transform 100ms;
+}
+.daw-tbtn:hover{background:var(--bg);border-color:var(--border2);transform:scale(1.04)}
+.daw-tbtn:active{transform:scale(0.96)}
+/* Make ALL child elements of toolbar buttons transparent to mouse events.
+ * The button itself catches the click; without this, SVG paths can absorb
+ * clicks on certain browsers/Electron versions and the onclick never fires. */
+.daw-tbtn > *,.daw-tool > *,.daw-tbtn-sm > *,.daw-tbtn-stop > *,
+.daw-export-btn > *,.daw-mini-btn > *{pointer-events:none}
+#daw-play-btn{background:var(--white);color:#000;border-color:var(--white);width:42px;height:42px}
+#daw-play-btn:hover{background:#e8e8e8;border-color:#e8e8e8}
+.daw-tbtn-stop{
+  background:transparent;border:1px solid var(--border);color:var(--muted);
+  cursor:pointer;width:30px;height:30px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;outline:none;
+  transition:background 120ms,color 120ms,border-color 120ms;
+}
+.daw-tbtn-stop:hover{color:var(--white);background:var(--bg);border-color:var(--border2)}
+.daw-tbtn-sm{
+  background:transparent;border:1px solid var(--border);color:var(--muted);
+  cursor:pointer;width:26px;height:26px;border-radius:4px;font-size:14px;
+  display:flex;align-items:center;justify-content:center;outline:none;
+  font-family:inherit;line-height:1;
+}
+.daw-tbtn-sm:hover{color:var(--white);background:var(--bg);border-color:var(--border2)}
+.daw-time{
+  font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;
+  min-width:90px;text-align:center;padding:0 6px;
+}
+.daw-export-btn{
+  background:transparent;border:1px solid var(--border);color:var(--muted);
+  cursor:pointer;padding:7px 12px;border-radius:4px;
+  display:flex;align-items:center;gap:6px;font-size:12px;font-weight:500;outline:none;
+  transition:background 120ms,color 120ms,border-color 120ms;
+  min-height:34px;
+}
+.daw-export-btn:hover{color:var(--white);background:var(--bg);border-color:var(--border2)}
+
+/* Master fader — sits in the header-right next to zoom. Speaker icon,
+ * slider, dB readout. Fixed widths so layout stays predictable across
+ * resizes; the slider itself gets the bulk of the space. Ctrl+click on
+ * the slider resets to default (-1.4 dB). */
+.daw-master-fader{
+  display:flex;align-items:center;gap:8px;
+  padding:6px 10px;background:var(--bg);
+  border:1px solid var(--border);border-radius:6px;
+  min-height:34px;
+}
+.daw-master-vol-slider{
+  width:100px;height:14px;cursor:pointer;
+  accent-color:var(--white);background:transparent;
+  flex-shrink:0;
+}
+.daw-master-vol-db{
+  font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;
+  min-width:48px;text-align:right;
+}
+
+/* Cut-tool mode: change cursor app-wide so it's obvious */
+.daw-overlay.cut-mode .daw-clip{cursor:crosshair}
+.daw-overlay.cut-mode .daw-track-canvas{cursor:crosshair}
+
+/* Selected clip highlight */
+.daw-clip.selected{
+  border-width:2px !important;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.3),0 0 12px rgba(255,255,255,.18);
+}
+
+.daw-body{
+  flex:1;overflow:auto;position:relative;
+  background:#0a0a0a;
+}
+.daw-tracks-area{
+  position:relative;min-width:100%;
+}
+/* Ruler row sits at top, sticky so it stays visible when scrolling
+ * vertically. The ruler-head (top-left corner cell) is double-sticky:
+ * sticks to the top AND to the left so it stays in the corner even when
+ * the user scrolls horizontally to inspect later parts of the timeline.
+ * Z-indexes: ruler-wrap=11 (above track-heads at 10), ruler-head=12
+ * (above the wrap so the corner stays on top of itself). Playhead is z:5
+ * so it sits BELOW all sticky headers — no more bleeding through. */
+.daw-ruler-wrap{
+  position:sticky;top:0;z-index:11;
+  display:flex;background:#0d0d0d;border-bottom:1px solid var(--border);
+  /* Same reason as .daw-track-row — flex container must be as wide as the
+   * ruler canvas content for sticky-left on .daw-ruler-head to work. */
+  min-width:max-content;
+}
+.daw-ruler-head{
+  background:#0d0d0d;border-right:1px solid var(--border);
+  flex-shrink:0;height:36px;width:220px;
+  position:sticky;left:0;z-index:12;
+}
+.daw-ruler{
+  display:block;cursor:pointer;height:36px;
+}
+.daw-tracks{position:relative}
+.daw-track-row{
+  display:flex;border-bottom:1px solid #161616;
+  /* CRITICAL for sticky-left to work: row must be as wide as its lane content.
+   * Without min-width:max-content, flex shrinks the row to viewport width and
+   * the sticky head has nowhere to stick TO (the scroll target IS the row's
+   * left edge). With max-content, the row extends across the full timeline,
+   * the head sticks to the left of the scroll viewport while the lane
+   * scrolls beneath. */
+  min-width:max-content;
+}
+/* Per-track header (Vocals / Drums / Bass / etc + M/S/volume) sticks to
+ * the left as the user scrolls horizontally through the timeline. Without
+ * this, the headers scroll off-screen and the user can't tell which row
+ * is which. Sticky requires the scroll ancestor to be .daw-body (which
+ * has overflow:auto). z-index 10 keeps it above the playhead line (which
+ * sits at z:5) so the white playhead doesn't bleed through the header. */
+.daw-track-head{
+  background:#0d0d0d;border-right:1px solid var(--border);
+  flex-shrink:0;padding:10px 12px;
+  display:flex;flex-direction:column;justify-content:space-between;
+  position:sticky;left:0;z-index:10;
+}
+.daw-track-name{
+  font-size:12px;font-weight:600;letter-spacing:.02em;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.daw-track-controls{
+  display:flex;align-items:center;gap:5px;
+}
+/* Mute / Solo buttons — bumped to 30×30 from old 24×24 so they're easy to
+ * hit. Bold letter, clear color states (red when muted, green when soloed).
+ * Same size for both so the row stays balanced. */
+.daw-mute-btn,.daw-solo-btn{
+  background:transparent;border:1px solid var(--border);color:var(--muted);
+  cursor:pointer;width:30px;height:30px;border-radius:5px;font-size:12px;
+  font-weight:700;display:flex;align-items:center;justify-content:center;
+  outline:none;transition:background 120ms,color 120ms,border-color 120ms,transform 80ms;
+  font-family:inherit;letter-spacing:.02em;flex-shrink:0;
+}
+.daw-mute-btn:hover,.daw-solo-btn:hover{color:var(--white);background:var(--bg);border-color:var(--border2)}
+.daw-mute-btn:active,.daw-solo-btn:active{transform:scale(.92)}
+.daw-mute-btn.on{background:#ff5555;color:#fff;border-color:#ff5555}
+.daw-mute-btn.on:hover{background:#ff4040;border-color:#ff4040}
+.daw-solo-btn.on-solo{background:#7ed982;color:#000;border-color:#7ed982}
+.daw-solo-btn.on-solo:hover{background:#6fcb73;border-color:#6fcb73}
+/* Legacy class kept so existing references don't crash */
+.daw-mini-btn{
+  background:transparent;border:1px solid var(--border);color:var(--muted);
+  cursor:pointer;width:30px;height:30px;border-radius:5px;font-size:12px;
+  font-weight:700;display:flex;align-items:center;justify-content:center;
+  outline:none;transition:background 120ms,color 120ms,border-color 120ms;
+  font-family:inherit;
+}
+.daw-mini-btn:hover{color:var(--white);background:var(--bg)}
+.daw-mini-btn.on{background:#ff5555;color:#fff;border-color:#ff5555}
+.daw-mini-btn.on-solo{background:#7ed982;color:#000;border-color:#7ed982}
+
+.daw-vol-slider{
+  flex:1;height:14px;cursor:pointer;accent-color:var(--white);
+  background:transparent;min-width:0;
+}
+
+/* Pan row — sits below the M/S/Vol row. Small L/R labels flanking a
+ * centered slider. Double-click slider to reset to center. */
+.daw-pan-row{
+  display:flex;align-items:center;gap:6px;margin-top:2px;
+}
+.daw-pan-label-l,.daw-pan-label-r{
+  font-size:9px;color:var(--muted);font-weight:600;
+  letter-spacing:.04em;flex-shrink:0;width:9px;text-align:center;
+}
+.daw-pan-slider{
+  flex:1;height:12px;cursor:pointer;accent-color:var(--muted);
+  background:transparent;min-width:0;
+}
+.daw-pan-slider:hover{accent-color:#aaa}
+.daw-track-lane{
+  position:relative;flex-shrink:0;
+  overflow:hidden;
+}
+.daw-track-canvas{
+  display:block;position:absolute;top:0;left:0;
+  pointer-events:none;
+}
+.daw-clip{
+  position:absolute;top:6px;bottom:6px;
+  border:1px solid;border-radius:4px;
+  cursor:grab;user-select:none;
+  transition:border-color 120ms,background 120ms;
+}
+.daw-clip:hover{filter:brightness(1.15)}
+.daw-clip:active{cursor:grabbing}
+.daw-clip-handle{
+  position:absolute;top:0;bottom:0;width:6px;
+  cursor:ew-resize;
+  background:rgba(255,255,255,.0);
+}
+.daw-clip-handle:hover{background:rgba(255,255,255,.25)}
+.daw-clip-handle-l{left:0;border-top-left-radius:4px;border-bottom-left-radius:4px}
+.daw-clip-handle-r{right:0;border-top-right-radius:4px;border-bottom-right-radius:4px}
+
+.daw-playhead-line{
+  position:absolute;top:0;bottom:0;width:1px;
+  background:#fff;pointer-events:none;z-index:5;
+  box-shadow:0 0 4px rgba(255,255,255,.6);
+}
+
+.daw-hint{
+  position:absolute;bottom:10px;left:50%;transform:translateX(-50%);
+  font-size:11px;color:var(--hint);
+  background:rgba(13,13,13,.92);padding:6px 12px;border-radius:14px;
+  border:1px solid var(--border);
+  pointer-events:none;
+  z-index:10;
+  white-space:nowrap;
+  max-width:calc(100vw - 40px);overflow:hidden;text-overflow:ellipsis;
+}
+
+/* ── Update banner ─────────────────────────────────────────────────────────
+ * Slides in from the top-right when an update is available. Non-modal so
+ * the user can keep working while it downloads in the background.
+ * Uses transform + opacity for GPU-accelerated entrance — same easing as
+ * the mini player compact transition (Material's decelerate curve). */
+.update-banner{
+  position:fixed;top:48px;right:14px;z-index:9000;
+  background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);
+  padding:12px 14px;display:flex;align-items:center;gap:12px;
+  box-shadow:0 12px 36px rgba(0,0,0,.55);
+  width:380px;max-width:calc(100vw - 28px);
+  /* Slide-in animation. opacity + translateX for the entrance feel.
+   * cubic-bezier(.4,0,.2,1) decelerate curve, 320ms — slightly longer than
+   * the mini-player transition so it reads as a deliberate notification
+   * arriving, not a UI element flickering. */
+  transition:opacity 320ms cubic-bezier(.4,0,.2,1),transform 320ms cubic-bezier(.4,0,.2,1);
+  will-change:transform,opacity;
+}
+.update-banner.hidden{display:none}
+/* When hidden via .out class (instead of full display:none), animate the
+ * exit too — slides right + fades. Caller adds .out, waits 320ms, then
+ * adds .hidden for true removal. */
+.update-banner.out{opacity:0;transform:translateX(20px)}
+.update-banner-icon{
+  flex-shrink:0;color:var(--white);
+  width:36px;height:36px;border-radius:50%;
+  background:rgba(126,217,130,.12);
+  display:flex;align-items:center;justify-content:center;
+}
+.update-banner-icon svg{color:#7ed982}
+.update-banner-body{flex:1;min-width:0;overflow:hidden}
+.update-banner-title{
+  font-size:13px;font-weight:600;color:var(--white);
+  line-height:1.3;margin-bottom:2px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.update-banner-sub{
+  font-size:11px;color:var(--hint);line-height:1.3;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+/* Progress bar — only visible during DOWNLOADING state */
+.update-banner-progress{
+  margin-top:6px;height:3px;width:100%;
+  background:var(--bg);border-radius:2px;overflow:hidden;
+}
+.update-banner-progress.hidden{display:none}
+.update-banner-progress-fill{
+  height:100%;background:#7ed982;width:0%;
+  transition:width 200ms cubic-bezier(.4,0,.2,1);
+}
+.update-banner-actions{display:flex;gap:6px;flex-shrink:0;align-items:center}
+.update-banner-btn{
+  background:transparent;border:1px solid var(--border);color:var(--muted);
+  cursor:pointer;padding:6px 10px;border-radius:4px;font-size:11px;
+  font-weight:500;font-family:'Inter',sans-serif;outline:none;
+  transition:background 120ms,color 120ms,border-color 120ms;
+}
+.update-banner-btn:hover{color:var(--white);border-color:var(--border2);background:var(--bg)}
+.update-banner-btn.primary{background:var(--white);color:#000;border-color:var(--white)}
+.update-banner-btn.primary:hover{background:#e8e8e8;color:#000;border-color:#e8e8e8}
+.update-banner-btn:disabled{opacity:.45;cursor:default}
+.update-banner-btn:focus{outline:none;box-shadow:none}
+
+/* Mini player — single-row Spotify-bar style with thumbnail */
+.sp-fv-mini-player{position:fixed;bottom:14px;right:14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:8px 12px;display:flex;align-items:center;gap:8px;box-shadow:0 8px 32px rgba(0,0,0,.45);z-index:8000;width:760px;max-width:calc(100vw - 28px);height:56px;
+  /* Animate width changes for the compact-mode swap (Analyze tab vs others).
+   * cubic-bezier(.4,0,.2,1) is Material's standard decelerate curve —
+   * the same one Spotify, YouTube Music, and Apple Music use for player
+   * transitions. 280ms is long enough to read as intentional, short enough
+   * not to feel sluggish. The will-change hint promotes to its own layer
+   * so the GPU handles the resize without paint flicker. gap also
+   * transitions so dead-space between collapsed items closes smoothly. */
+  transition:width 280ms var(--e-out),gap 280ms var(--e-out),box-shadow 280ms var(--e-out);
+  will-change:width}
+
+/* ── Compact mode — applied on Analyze tab while in mirror mode ─────────────
+ * The Analyzer view already exposes time, seek bar, and volume on its own
+ * page, so duplicating them in the mini player is noise. Compact keeps the
+ * actually-useful controls (transport, favorite, notepad) and slides
+ * everything else away. The non-compact -> compact transition reads as
+ * "the mini player shrinks into a clean toolbar" which feels far more
+ * polished than show/hide. */
+.sp-fv-mini-player.compact{width:420px;gap:6px}
+/* The elements that collapse share the same shrink-out treatment: width
+ * goes to 0, content fades, margins shrink to nothing. Because each one
+ * sits in the flex row, eliminating their width lets the player shrink
+ * smoothly. pointer-events:none during the fade prevents click flickers. */
+.sp-fv-mini-player.compact #sp-fv-mini-time-cur,
+.sp-fv-mini-player.compact #sp-fv-mini-time-dur,
+.sp-fv-mini-player.compact #sp-fv-mini-seek,
+.sp-fv-mini-player.compact .sp-fv-mini-volume-wrap,
+.sp-fv-mini-player.compact #sp-fv-mini-loop,
+.sp-fv-mini-player.compact > .sp-fv-mini-close{
+  max-width:0;min-width:0;width:0;
+  opacity:0;
+  margin:0;padding:0;border:none;
+  pointer-events:none;
+  overflow:hidden;
+  flex-basis:0;flex-grow:0;flex-shrink:1;
+}
+/* When NOT compact, these elements need explicit transitions so going
+ * back to full-mode is just as smooth as going compact. The transitions
+ * apply in both directions because they're on the elements themselves,
+ * triggered by the .compact class toggling on the parent. */
+#sp-fv-mini-time-cur,#sp-fv-mini-time-dur,
+#sp-fv-mini-seek,
+.sp-fv-mini-volume-wrap,
+#sp-fv-mini-loop,
+.sp-fv-mini-close{
+  transition:
+    max-width 280ms var(--e-out),
+    opacity 200ms var(--e-out),
+    margin 280ms var(--e-out),
+    padding 280ms var(--e-out);
+}
+/* Avoid a flash of the wrong layout on first paint — only animate after
+ * the player has been mounted once. The hidden→shown transition is
+ * handled by display:none so opacity/width transitions don't fight it. */
+.sp-fv-mini-player.hidden{display:none}
+
+/* Shuffle/loop toggles dimmed when off, white when on */
+.sp-fv-mini-mode-btn{background:transparent;border:none;color:var(--muted);cursor:pointer;width:26px;height:26px;display:flex;align-items:center;justify-content:center;padding:0;border-radius:4px;outline:none;transition:color .12s,background .12s}
+.sp-fv-mini-mode-btn:hover{color:var(--white);background:var(--bg)}
+.sp-fv-mini-mode-btn.on{color:#7ed982}
+.sp-fv-mini-mode-btn:focus{outline:none}
+
+/* Mirror-mode dim state — applied to prev/next/shuffle/loop when the
+ * mini player is mirroring the Analyzer (Analyzer is single-track, no
+ * playlist concept). Visibly dimmed + pointer-events:none so the buttons
+ * are obviously inert. */
+.sp-fv-mini-transport button.disabled-mirror{opacity:.28;cursor:not-allowed;pointer-events:none}
+.sp-fv-mini-transport button.disabled-mirror:hover{color:var(--muted);background:transparent}
+
+/* Heart + notepad icons in the player toolbar */
+.sp-fv-mini-extra-btn{background:transparent;border:none;color:var(--muted);cursor:pointer;width:26px;height:26px;display:flex;align-items:center;justify-content:center;padding:0;border-radius:4px;outline:none;flex-shrink:0;transition:color .12s,transform .1s}
+.sp-fv-mini-extra-btn:hover{color:var(--white);transform:scale(1.08)}
+.sp-fv-mini-extra-btn:focus{outline:none}
+#sp-fv-mini-fav.on{color:#ff5555}
+#sp-fv-mini-fav.on svg{fill:#ff5555;stroke:#ff5555}
+#sp-fv-mini-notepad-btn.on{color:#7ed982}
+
+/* Notepad popover — folds up above the player */
+.sp-fv-mini-notepad{position:absolute;bottom:64px;right:0;width:340px;max-width:calc(100vw - 28px);background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:10px;box-shadow:0 8px 32px rgba(0,0,0,.5);z-index:1}
+.sp-fv-mini-notepad.hidden{display:none}
+.sp-fv-mini-notepad-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.sp-fv-mini-notepad-title{font-size:11px;color:var(--hint);letter-spacing:.05em;text-transform:uppercase;font-weight:600}
+.sp-fv-mini-notepad-close{background:transparent;border:none;color:var(--muted);cursor:pointer;padding:2px;display:flex;align-items:center;justify-content:center;border-radius:3px;outline:none}
+.sp-fv-mini-notepad-close:hover{color:var(--white);background:var(--bg)}
+.sp-fv-mini-notepad textarea{width:100%;height:140px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--white);padding:8px;font-family:'Inter',sans-serif;font-size:13px;line-height:1.4;resize:vertical;outline:none}
+.sp-fv-mini-notepad textarea:focus{border-color:var(--border2)}
+.sp-fv-mini-notepad-foot{font-size:10px;color:var(--hint);margin-top:6px;text-align:right}
+.sp-fv-mini-player.hidden{display:none}
+.sp-fv-mini-thumb{width:40px;height:40px;border-radius:4px;background:var(--bg);overflow:hidden;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.sp-fv-mini-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.sp-fv-mini-thumb-fallback{font-size:18px;color:var(--muted)}
+.sp-fv-mini-info{min-width:100px;max-width:140px;flex-shrink:0}
+.sp-fv-mini-title{font-size:12px;color:var(--white);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;line-height:1.2}
+.sp-fv-mini-sub{font-size:10px;color:var(--hint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}
+.sp-fv-mini-transport{display:flex;align-items:center;gap:4px;flex-shrink:0}
+/* Mini player buttons — force the same font as the rest of the UI to
+ * prevent Segoe UI Emoji from rendering U+23EE/U+23EF/U+23ED as colored
+ * emoji blocks on Windows. We use SVGs for the glyphs themselves now, but
+ * this also ensures any future Unicode character we use stays monochrome. */
+.sp-fv-mini-player button{font-family:'Inter',sans-serif;font-variant-emoji:text}
+.sp-fv-mini-transport button{background:transparent;border:none;color:var(--muted);cursor:pointer;width:26px;height:26px;display:flex;align-items:center;justify-content:center;padding:0;border-radius:4px;font-size:12px;line-height:1;outline:none}
+.sp-fv-mini-transport button:hover{color:var(--white);background:var(--bg)}
+.sp-fv-mini-transport button:focus{outline:none;box-shadow:none}
+.sp-fv-mini-transport button:disabled{opacity:.3;cursor:default}
+.sp-fv-mini-transport button:disabled:hover{background:transparent;color:var(--muted)}
+.sp-fv-mini-transport .sp-fv-play{width:30px;height:30px;border-radius:50%;background:var(--white);color:#000;border:none}
+.sp-fv-mini-transport .sp-fv-play:hover{background:var(--white);color:#000;transform:scale(1.06)}
+.sp-fv-mini-time-cur,.sp-fv-mini-time-dur{font-size:10px;color:var(--hint);font-variant-numeric:tabular-nums;flex-shrink:0;min-width:30px}
+.sp-fv-mini-time-cur{text-align:right}
+.sp-fv-mini-time-dur{text-align:left}
+
+/* Scrubber bar — bigger and more prominent than volume (it's the principal control) */
+.sp-fv-mini-seek{flex:1;height:18px;cursor:pointer;display:flex;align-items:center;position:relative;min-width:120px}
+.sp-fv-mini-seek-track{width:100%;height:5px;background:var(--bg);border-radius:3px;position:relative;overflow:visible}
+.sp-fv-mini-seek-buffered{position:absolute;top:0;left:0;height:100%;background:rgba(255,255,255,.15);border-radius:3px;width:0%;transition:width .1s linear}
+.sp-fv-mini-seek-fill{position:absolute;top:0;left:0;height:100%;background:#71706E;border-radius:3px;width:0%;transition:width .1s linear}
+.sp-fv-mini-seek-thumb{position:absolute;top:50%;transform:translate(-50%,-50%);width:12px;height:12px;border-radius:50%;background:#a8a7a4;left:0%;opacity:0;transition:opacity .12s,left .1s linear;pointer-events:none}
+.sp-fv-mini-seek:hover .sp-fv-mini-seek-thumb{opacity:1}
+.sp-fv-mini-seek:hover .sp-fv-mini-seek-fill{background:#8d8c89}
+
+/* Volume — slimmer inline slider so timeline has the priority real estate */
+.sp-fv-mini-volume-wrap{display:flex;align-items:center;gap:7px;flex-shrink:0;width:84px}
+.sp-fv-mini-vol-btn{background:transparent;border:none;color:var(--muted);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;flex-shrink:0;border-radius:4px;width:22px;height:22px;outline:none}
+.sp-fv-mini-vol-btn:hover{color:var(--white)}
+.sp-fv-mini-vol-btn:focus{outline:none;box-shadow:none}
+.sp-fv-mini-vol-btn.muted{color:#ff8888}
+.sp-fv-mini-volume{flex:1;height:16px;cursor:pointer;display:flex;align-items:center;position:relative}
+.sp-fv-mini-volume-track{width:100%;height:4px;background:var(--bg);border-radius:2px;position:relative;overflow:visible}
+.sp-fv-mini-volume-fill{position:absolute;top:0;left:0;height:100%;background:rgba(255,255,255,.55);border-radius:2px;width:80%;transition:width .08s linear}
+.sp-fv-mini-volume-thumb{position:absolute;top:50%;transform:translate(-50%,-50%);width:10px;height:10px;border-radius:50%;background:var(--white);left:80%;opacity:0;transition:opacity .12s,left .08s linear;pointer-events:none}
+.sp-fv-mini-volume:hover .sp-fv-mini-volume-thumb{opacity:1}
+.sp-fv-mini-volume:hover .sp-fv-mini-volume-fill{background:#fff}
+.sp-fv-mini-close{background:transparent;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:0 4px;line-height:1;flex-shrink:0;outline:none}
+.sp-fv-mini-close:hover{color:var(--white)}
+.sp-fv-mini-close:focus{outline:none;box-shadow:none}
+
+/* Kill blue focus rings globally on the mini player + folder view buttons */
+.sp-fv-mini-player *:focus,.sp-fv-mini-player *:focus-visible{outline:none!important;box-shadow:none!important}
+.sp-fv-row button:focus,.sp-fv-row button:focus-visible{outline:none!important;box-shadow:none!important}
+
+/* History row tag chips + tag picker */
+/* Reserve a minimum height so the row doesn't grow when tag chips arrive async
+ * (was causing the visible "jiggle" during history reload) */
+.hist-tag-row{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px;min-height:22px}
+.hist-tag-chip{font-size:10px;padding:2px 7px;border-radius:11px;background:rgba(126,217,130,0.10);border:1px solid rgba(126,217,130,0.30);color:#7ed982;display:inline-flex;align-items:center;gap:4px}
+.hist-tag-chip.primary{background:rgba(126,217,130,0.20);font-weight:600}
+.hist-tag-chip .hist-tag-x{cursor:pointer;color:rgba(255,255,255,.5);padding:0 2px}
+.hist-tag-chip .hist-tag-x:hover{color:#ff8888}
+.hist-tag-add{font-size:10px;padding:2px 8px;border-radius:11px;background:transparent;border:1px dashed rgba(255,255,255,.2);color:var(--muted);cursor:pointer}
+.hist-tag-add:hover{border-color:#7ed982;color:#7ed982}
+
+/* Modal overlay (reused for new folder + tag picker popup) */
+.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.65);z-index:9000;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+.modal-overlay.hidden{display:none}
+.modal-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:24px;width:min(440px,92vw);box-shadow:0 16px 60px rgba(0,0,0,.5)}
+.modal-title{font-size:16px;font-weight:600;color:var(--white);margin-bottom:16px}
+/* Body + detail used by confirmModal(). Body is the main message; detail
+ * is a smaller muted secondary line for surfacing filenames, formats,
+ * etc. — anything that helps the user understand what they're confirming. */
+.modal-body{font-size:13px;color:var(--off);line-height:1.55;margin-bottom:10px}
+.modal-detail{font-size:12px;color:var(--muted);line-height:1.55;background:var(--bg);border:1px solid var(--border);border-radius:5px;padding:9px 11px;margin-bottom:14px}
+.modal-input{width:100%;height:36px;padding:0 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--white);font-size:13px;margin-top:6px;margin-bottom:10px;font-family:inherit}
+.modal-input:focus{outline:none;border-color:#7ed982}
+.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+
+.sh-meta{font-size:11px;color:var(--muted)}
+
+/* Tag picker popup (smaller modal that lists folders + suggestions) */
+.tag-picker{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:14px;width:min(380px,92vw);max-height:60vh;overflow-y:auto}
+.tag-picker-title{font-size:13px;font-weight:600;color:var(--white);margin-bottom:10px}
+.tag-picker-section-lbl{font-size:10px;color:var(--hint);text-transform:uppercase;letter-spacing:.08em;margin:10px 0 6px}
+.tag-picker-row{display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg);border-radius:5px;margin-bottom:4px;cursor:pointer;transition:background .1s}
+.tag-picker-row:hover{background:rgba(126,217,130,0.10)}
+.tag-picker-row .tp-name{font-size:12px;color:var(--white);flex:1}
+.tag-picker-row .tp-conf{font-size:10px;color:var(--off);font-variant-numeric:tabular-nums}
+.tag-picker-row .tp-reasons{font-size:10px;color:var(--hint);margin-top:2px}
+.tag-picker-empty{text-align:center;color:var(--muted);font-size:12px;padding:16px}
+
+/* Build-tamper banner — shown at top of app if integrity check fails */
+.tamper-banner{position:sticky;top:0;left:0;right:0;z-index:9999;display:flex;align-items:center;gap:14px;padding:10px 18px;background:linear-gradient(90deg,rgba(232,64,64,0.16),rgba(232,64,64,0.08));border-bottom:1px solid rgba(232,64,64,0.45);color:#ffb4b4;font-size:13px;backdrop-filter:blur(8px)}
+.tamper-banner.soft{background:linear-gradient(90deg,rgba(255,200,80,0.10),rgba(255,200,80,0.04));border-bottom-color:rgba(255,200,80,0.35);color:#ffd99a}
+.tamper-banner.soft strong{color:#ffc864}
+.tamper-banner strong{color:#ff6464;font-weight:700;flex-shrink:0}
+.tamper-banner-files{margin-left:auto;font-size:11px;color:rgba(255,180,180,0.7);flex-shrink:0}
+.tamper-banner.soft .tamper-banner-files{color:rgba(255,217,154,0.7)}
+.tamper-banner-x{background:transparent;border:none;color:inherit;font-size:18px;cursor:pointer;padding:0 4px;opacity:.6;flex-shrink:0;line-height:1}
+.tamper-banner-x:hover{opacity:1}
+.ensemble-badge{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:30px;background:rgba(76,175,80,0.10);border:1px solid rgba(76,175,80,0.32);color:#7ed982;font-size:11px;font-weight:600;letter-spacing:0.04em;text-transform:none}
+.ensemble-badge svg{flex-shrink:0}
+
+/* Mastering section on the stems results card. Sits below the stem list
+ * so users see their stems first, then optional rule-based mastering as
+ * a follow-up step. Honest labeling — "rule-based, no AI" — avoids the
+ * AI-mastering hype. */
+/* ── Quality Advanced (Separator tab) ────────────────────────────────────
+ * Collapsible panel below the toggles. Header shows the active preset
+ * pill. Body has a preset dropdown + (optional) expandable per-pass
+ * sliders for power users. */
+/* ── Download queue panel (visual queue + recent downloads) ──────────────
+ * The Download tab now persists a list of all queue items from this
+ * session: pending, downloading, completed, and errored. This solves
+ * two problems:
+ *   1. Users couldn't see queue progress without keeping the toast open
+ *   2. Users would re-paste a URL they'd already downloaded because the
+ *      toast had faded
+ * The panel itself uses .card styling. Items inside it have status-driven
+ * left borders so the user can scan at a glance which ones are done. */
+.dl-queue-header{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:12px;
+}
+.dl-queue-title{
+  display:flex;align-items:center;gap:8px;
+  font-family:'Barlow Condensed',sans-serif;
+  font-size:18px;letter-spacing:.6px;color:var(--white);
+}
+.dl-queue-title svg{color:var(--muted)}
+.dl-queue-count{
+  background:var(--bg3);border:1px solid var(--border2);
+  color:var(--muted);font-family:'Inter',sans-serif;
+  font-size:11px;font-weight:600;letter-spacing:.04em;
+  padding:1px 8px;border-radius:11px;
+  font-variant-numeric:tabular-nums;
+}
+.dl-queue-clear{
+  background:transparent;border:0;
+  color:var(--muted);cursor:pointer;
+  font-family:'Inter',sans-serif;font-size:11px;
+  padding:4px 8px;border-radius:4px;
+  transition:color var(--t-fast) var(--e-out),background var(--t-fast) var(--e-out);
+}
+.dl-queue-clear:hover{color:var(--white);background:var(--bg3)}
+.dl-queue-actions{display:flex;align-items:center;gap:10px}
+.dl-queue-items{display:flex;flex-direction:column;gap:6px}
+
+/* Each row in the queue. Status drives the left border color so a quick
+ * vertical scan shows the user how far along everything is. */
+.dl-queue-item{
+  display:flex;align-items:center;gap:10px;
+  padding:9px 12px;
+  background:var(--bg3);border:1px solid var(--border);
+  border-left-width:3px;
+  border-radius:var(--r);
+  transition:background var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out);
+  position:relative;overflow:hidden;
+}
+.dl-queue-item.waiting{border-left-color:var(--border3)}
+.dl-queue-item.downloading{border-left-color:#f59e0b}
+.dl-queue-item.done{border-left-color:var(--green)}
+.dl-queue-item.error{border-left-color:var(--red)}
+.dl-queue-item.duplicate-pulse{
+  animation:dlDupePulse 1.6s var(--e-in-out) 3;
+  border-left-color:#f59e0b;background:rgba(245,158,11,.06);
+}
+@keyframes dlDupePulse{
+  0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,0)}
+  50%{box-shadow:0 0 0 4px rgba(245,158,11,.18)}
+}
+/* The colored status dot before the name */
+.dl-qi-status{
+  width:14px;height:14px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+}
+.dl-qi-status.waiting   { color:var(--hint) }
+.dl-qi-status.downloading { color:#f59e0b; animation:pulse 1.6s var(--e-in-out) infinite }
+.dl-qi-status.done      { color:var(--green) }
+.dl-qi-status.error     { color:var(--red) }
+.dl-qi-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.dl-qi-name{
+  font-size:13px;color:var(--white);font-weight:500;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.dl-qi-meta{
+  font-size:10px;color:var(--hint);
+  display:flex;gap:8px;align-items:center;
+  font-variant-numeric:tabular-nums;
+}
+.dl-qi-fmt-pill{
+  font-size:9px;font-weight:600;letter-spacing:.05em;
+  background:var(--bg4);border:1px solid var(--border2);
+  color:var(--muted);
+  padding:1px 5px;border-radius:3px;
+  text-transform:uppercase;
+}
+/* Inline progress fill for downloading items. Absolute-positioned
+ * behind the row content so the row layout doesn't shift. */
+.dl-qi-bar{
+  position:absolute;left:0;bottom:0;
+  height:2px;width:0%;background:#f59e0b;
+  transition:width 280ms var(--e-out);
+  pointer-events:none;
+}
+.dl-queue-item.done .dl-qi-bar{background:var(--green);width:100%}
+.dl-queue-item.error .dl-qi-bar{background:var(--red);width:100%}
+/* Right-side action buttons */
+.dl-qi-actions{display:flex;gap:4px;align-items:center}
+.dl-qi-action{
+  background:transparent;border:0;color:var(--muted);cursor:pointer;
+  padding:4px 6px;border-radius:4px;font-size:11px;
+  display:flex;align-items:center;justify-content:center;
+  transition:color var(--t-fast) var(--e-out),background var(--t-fast) var(--e-out);
+}
+.dl-qi-action:hover{color:var(--white);background:var(--bg4)}
+.dl-qi-action.danger:hover{color:var(--red)}
+
+.quality-advanced{
+  margin-bottom:20px;
+  background:var(--bg2);
+  border:1px solid var(--border);
+  border-radius:var(--r);
+  overflow:hidden;
+}
+.quality-advanced-header{
+  display:flex;align-items:center;gap:9px;
+  width:100%;padding:11px 14px;
+  background:transparent;border:0;color:var(--white);
+  cursor:pointer;font-family:'Inter',sans-serif;
+  text-align:left;outline:none;
+  transition:background var(--t-fast) var(--e-out);
+}
+.quality-advanced-header:hover{background:var(--bg3)}
+.quality-chevron{
+  flex-shrink:0;color:var(--muted);
+  transition:transform var(--t-base) var(--e-out);
+}
+.quality-advanced.open .quality-chevron{transform:rotate(90deg)}
+.quality-advanced-title{
+  flex:1;font-size:13px;font-weight:600;letter-spacing:.02em;
+}
+.quality-advanced-pill{
+  font-size:10px;font-weight:600;letter-spacing:.04em;
+  padding:2px 8px;border-radius:11px;
+  background:rgba(126,217,130,.10);
+  border:1px solid rgba(126,217,130,.30);
+  color:#7ed982;text-transform:capitalize;
+}
+.quality-advanced-pill.subtle{background:rgba(155,200,255,.10);border-color:rgba(155,200,255,.30);color:#9bc8ff}
+.quality-advanced-pill.aggressive{background:rgba(255,170,90,.10);border-color:rgba(255,170,90,.30);color:#ffaa5a}
+.quality-advanced-body{
+  padding:0 14px 14px 14px;
+  border-top:1px solid var(--border);
+}
+.qa-row{margin-top:12px;display:flex;flex-direction:column;gap:6px}
+.qa-label{font-size:11px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+.qa-select{
+  height:34px;padding:0 10px;
+  background:var(--bg);color:var(--white);
+  border:1px solid var(--border);border-radius:var(--r);
+  font-family:'Inter',sans-serif;font-size:12px;
+  cursor:pointer;outline:none;
+  transition:border-color var(--t-fast) var(--e-out);
+}
+.qa-select:hover,.qa-select:focus{border-color:var(--border3)}
+.qa-advanced-toggle{
+  margin-top:12px;display:flex;align-items:center;gap:7px;
+  background:transparent;border:0;color:var(--muted);
+  cursor:pointer;font-family:'Inter',sans-serif;font-size:11px;
+  padding:4px 0;outline:none;
+  transition:color var(--t-fast) var(--e-out);
+}
+.qa-advanced-toggle:hover{color:var(--white)}
+#qa-perpass-chevron{transition:transform var(--t-base) var(--e-out)}
+.qa-advanced-toggle.open #qa-perpass-chevron{transform:rotate(90deg)}
+.qa-perpass{margin-top:8px;display:flex;flex-direction:column;gap:14px}
+.qa-slider-row{display:flex;flex-direction:column;gap:5px}
+.qa-slider-lbl-row{display:flex;align-items:center;justify-content:space-between}
+.qa-slider-name{font-size:12px;color:var(--white);font-weight:500}
+.qa-slider-val{
+  font-size:11px;color:var(--muted);
+  font-variant-numeric:tabular-nums;
+  font-family:'Inter',sans-serif;
+}
+.qa-slider{width:100%;height:18px;accent-color:#c8a8ff;cursor:pointer}
+.qa-slider-desc{font-size:10px;color:var(--hint);line-height:1.4}
+.qa-reset-btn{
+  align-self:flex-start;
+  background:transparent;border:1px solid var(--border2);
+  color:var(--muted);cursor:pointer;
+  padding:5px 10px;border-radius:var(--r);
+  font-family:'Inter',sans-serif;font-size:11px;
+  transition:border-color var(--t-fast) var(--e-out),color var(--t-fast) var(--e-out);
+}
+.qa-reset-btn:hover{border-color:var(--border3);color:var(--white)}
+
+.master-section{
+  margin-top:24px;padding:14px 16px;
+  background:var(--bg2);border:1px solid var(--border);
+  border-radius:var(--r);
+}
+.master-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.master-title{display:flex;align-items:center;gap:8px;color:var(--white);font-size:13px;font-weight:600;letter-spacing:.02em}
+.master-title svg{color:#c8a8ff}
+.master-hint{color:var(--hint);font-size:11px;font-weight:400;letter-spacing:0}
+.master-row{display:flex;gap:10px;align-items:center}
+.master-preset-select{
+  flex:1;height:38px;padding:0 12px;
+  background:var(--bg);color:var(--white);
+  border:1px solid var(--border);border-radius:6px;
+  font-size:12px;font-family:inherit;
+  cursor:pointer;outline:none;
+}
+.master-preset-select:hover{border-color:var(--border2)}
+.master-progress{margin-top:12px}
+.master-progress-track{
+  height:4px;background:rgba(255,255,255,.06);
+  border-radius:2px;overflow:hidden;
+}
+.master-progress-fill{
+  height:100%;width:0%;background:#c8a8ff;
+  transition:width 200ms ease;
+}
+.master-progress-text{
+  margin-top:6px;font-size:11px;color:var(--muted);
+  font-variant-numeric:tabular-nums;
+}
+.master-result{
+  margin-top:12px;padding:10px 12px;
+  background:rgba(126,217,130,.06);
+  border:1px solid rgba(126,217,130,.2);
+  border-radius:6px;
+  display:flex;align-items:center;justify-content:space-between;
+  gap:12px;flex-wrap:wrap;
+}
+.master-result-stats{
+  font-size:11px;color:#a8e6a8;
+  font-variant-numeric:tabular-nums;
+  letter-spacing:.02em;
+}
+.master-result-actions{display:flex;gap:6px}
+
+/* Reference-match controls — appear below the preset row when the user
+ * picks "Reference Match" from the dropdown. The drop area accepts a
+ * dragged audio file or click-to-pick; the strength slider controls
+ * how aggressively the matching EQ pushes input toward reference. */
+.master-ref-row{
+  margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+}
+.master-ref-drop{
+  flex:1;min-width:200px;
+  display:flex;align-items:center;gap:8px;
+  padding:8px 12px;height:38px;
+  background:var(--bg);border:1px dashed var(--border2);border-radius:6px;
+  color:var(--muted);font-size:12px;cursor:pointer;outline:none;
+  transition:border-color 120ms,color 120ms,background 120ms;
+  position:relative;
+}
+.master-ref-drop:hover,
+.master-ref-drop.dragover{
+  border-color:#c8a8ff;color:var(--white);background:rgba(200,168,255,.04);
+}
+.master-ref-drop.has-file{
+  border-style:solid;border-color:rgba(200,168,255,.4);color:#d6c4ff;
+}
+.master-ref-drop svg{flex-shrink:0}
+.master-ref-drop span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.master-ref-clear{
+  background:transparent;border:0;color:var(--muted);
+  cursor:pointer;font-size:18px;line-height:1;
+  padding:0 4px;border-radius:3px;
+  transition:color 120ms,background 120ms;
+}
+.master-ref-clear:hover{color:#ff6b6b;background:rgba(255,107,107,.1)}
+.master-strength{display:flex;align-items:center;gap:8px}
+.master-strength-lbl{font-size:11px;color:var(--muted);white-space:nowrap}
+.master-strength-slider{width:100px;height:14px;accent-color:#c8a8ff;cursor:pointer}
+.master-strength-val{
+  font-size:11px;color:var(--white);font-variant-numeric:tabular-nums;
+  min-width:36px;text-align:right;
+}
+
+/* Quality option chips — small descriptors below the option pills */
+.q-chip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:30px;background:var(--bg4);border:1px solid var(--border2);color:var(--muted);font-size:11px;font-weight:500;margin-right:6px}
+.q-chip.warn{background:rgba(245,158,11,0.08);color:#f59e0b;border-color:rgba(245,158,11,0.28)}
+
+/* Stage progress — visualizes the 2-stage ensemble pipeline */
+.stage-row{display:flex;gap:8px;margin-top:10px;font-size:11px;color:var(--hint)}
+.stage-pill{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:30px;background:var(--bg4);border:1px solid var(--border2);transition:background var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out),color var(--t-base) var(--e-out),opacity var(--t-base) var(--e-out)}
+.stage-pill.active{background:rgba(255,255,255,0.06);border-color:var(--border3);color:var(--white)}
+.stage-pill.done{background:rgba(76,175,80,0.10);border-color:rgba(76,175,80,0.32);color:#7ed982}
+.stage-pill .stage-num{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;background:var(--bg5);color:var(--white);font-size:10px;font-weight:700;flex-shrink:0}
+.stage-pill.done .stage-num{background:#4caf50}
+
+/* Separator history */
+.sep-hist-row{display:flex;align-items:center;gap:14px;padding:12px 16px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);margin-bottom:6px;cursor:pointer;transition:background var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out),transform 80ms var(--e-out)}
+.sep-hist-row:hover{border-color:var(--border2);background:var(--bg3)}
+.sep-hist-info{flex:1;min-width:0}
+.sep-hist-title{font-size:14px;font-weight:500;color:var(--white);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px}
+.sep-hist-meta{font-size:12px;color:var(--muted)}
+
+/* ── First-launch engines setup modal ── */
+.setup-modal{position:fixed;inset:0;background:rgba(8,8,8,0.96);backdrop-filter:blur(6px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px;-webkit-app-region:drag}
+.setup-card{background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:32px 30px;width:100%;max-width:480px;box-shadow:0 20px 60px rgba(0,0,0,0.5);-webkit-app-region:no-drag}
+.setup-logo{display:flex;justify-content:center;margin-bottom:18px}
+.setup-logo img{width:56px;height:56px;border-radius:10px;opacity:0.92}
+.setup-title{font-family:'Bebas Neue',sans-serif;font-size:30px;letter-spacing:0.06em;color:var(--white);text-align:center;font-weight:400;margin-bottom:6px}
+.setup-sub{font-size:13px;color:var(--muted);text-align:center;margin-bottom:24px;line-height:1.5}
+.setup-info{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:20px}
+.setup-info-row{display:flex;gap:12px;padding:8px 0;align-items:flex-start}
+.setup-info-row + .setup-info-row{border-top:1px solid var(--border)}
+.setup-info-icon{font-size:16px;flex-shrink:0;width:22px;display:flex;justify-content:center;color:var(--muted)}
+.setup-info-name{font-size:13px;font-weight:600;color:var(--white);margin-bottom:2px}
+.setup-info-detail{font-size:12px;color:var(--hint);line-height:1.4}
+.setup-buttons{display:flex;flex-direction:column;gap:0}
+.setup-fineprint{font-size:11px;color:var(--hint);text-align:center;margin-top:14px;line-height:1.5}
+.setup-step{font-size:14px;font-weight:500;color:var(--white);margin-bottom:14px;text-align:center}
+.setup-prog-track{height:6px;background:var(--bg4);border-radius:3px;overflow:hidden;margin-bottom:6px}
+.setup-prog-fill{height:100%;background:var(--white);border-radius:3px;width:0%;transition:width .35s ease}
+.setup-prog-row{display:flex;justify-content:space-between;align-items:center;margin-top:4px}
+.setup-error-msg{padding:14px 16px;background:rgba(232,64,64,0.08);border:1px solid rgba(232,64,64,0.30);border-radius:8px;color:#e84040;font-size:13px;line-height:1.5;margin-bottom:8px}
+.setup-error-hint{padding:0 4px 16px;font-size:12px;color:var(--muted);line-height:1.5}
+.setup-done-icon{display:flex;align-items:center;justify-content:center;width:64px;height:64px;border-radius:50%;background:rgba(76,175,80,0.12);color:#4caf50;font-size:32px;margin:8px auto 16px;border:2px solid rgba(76,175,80,0.30)}
+.setup-done-msg{font-size:18px;font-weight:600;color:var(--white);text-align:center;margin-bottom:6px}
+
+/* Log viewer tabs */
+.logs-tab{opacity:0.6;transition:opacity var(--t-base) var(--e-out),color var(--t-base) var(--e-out),background var(--t-base) var(--e-out)}
+.logs-tab.on{opacity:1;background:var(--bg4);border-color:var(--border3)}
+
+/* Repair review modal */
+.review-row{padding:14px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;margin-bottom:10px;transition:opacity .2s}
+.review-candidates{display:flex;flex-direction:column;gap:6px}
+.review-cand{display:flex;align-items:flex-start;gap:8px;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;cursor:pointer;transition:background var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out)}
+.review-cand:hover{border-color:var(--border2);background:var(--bg4)}
+.review-cand input[type="radio"]{margin-top:2px;flex-shrink:0;cursor:pointer;accent-color:var(--white)}
+.review-cand label{display:block}
+
+
+
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.92)}}
+@keyframes loadpulse{0%,100%{opacity:.55;transform:scale(1)}50%{opacity:1;transform:scale(1.04)}}
+@keyframes loadbar{0%{width:0%}50%{width:60%}80%{width:85%}100%{width:100%}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+/* ── Download queue list ── */
+.dl-queue-list{display:flex;flex-direction:column;gap:3px;margin-top:10px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;}
+.dl-qi{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:6px;background:var(--bg2);border:1px solid var(--border);transition:border-color .12s;}
+.dl-qi.active{border-color:var(--border3);background:var(--bg3);}
+.dl-qi-icon{font-size:13px;flex-shrink:0;}
+.dl-qi-name{flex:1;font-family:"Barlow Condensed",sans-serif;font-size:13px;color:var(--hi);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dl-qi-fmt{font-family:"Barlow Condensed",sans-serif;font-size:10px;letter-spacing:1.5px;color:var(--lo);text-transform:uppercase;padding:2px 7px;border:1px solid var(--border);border-radius:3px;}
+.dl-qi-rm{border:none;background:none;color:var(--lo);cursor:pointer;font-size:13px;padding:2px 6px;border-radius:4px;transition:background var(--t-fast) var(--e-out),color var(--t-fast) var(--e-out)}
+.dl-qi-rm:hover{color:var(--red);background:rgba(240,96,96,.1);}
+
+/* ── App notifications (modernized) ──────────────────────────────────────
+ * Top-right stack. Each toast slides in from the right with a soft spring,
+ * shows a left-edge accent in the type color, a per-type icon, a 1-2 line
+ * message, and a thin progress bar at the bottom that depletes to indicate
+ * auto-dismiss. Hovering the stack pauses every timer (Apple-style). The
+ * container itself is pointer-events:none so the empty area never blocks
+ * clicks on the app underneath — only the actual toasts intercept input. */
+.app-notif-stack{
+  position:fixed;top:62px;right:14px;z-index:9998;
+  display:flex;flex-direction:column;gap:10px;
+  max-width:380px;width:calc(100vw - 28px);
+  pointer-events:none;
+}
+.app-notif{
+  position:relative;
+  display:flex;align-items:flex-start;gap:11px;
+  padding:12px 14px 12px 16px;
+  background:rgba(20,20,20,.92);
+  border:1px solid rgba(255,255,255,.08);
+  border-left:3px solid var(--muted);
+  border-radius:10px;
+  box-shadow:0 10px 32px rgba(0,0,0,.5),0 1px 0 rgba(255,255,255,.04) inset;
+  backdrop-filter:blur(14px) saturate(140%);
+  -webkit-backdrop-filter:blur(14px) saturate(140%);
+  /* Initial off-screen state — sliding in handled by .show class.
+   * cubic-bezier(.22,1.2,.36,1) is a gentle overshoot spring; reads as
+   * "polished iOS / macOS" rather than "linear web 2010". */
+  transform:translateX(30px);opacity:0;
+  transition:transform 320ms cubic-bezier(.22,1.2,.36,1),
+             opacity 240ms cubic-bezier(.22,1,.36,1),
+             margin-top 220ms ease,
+             max-height 220ms ease;
+  pointer-events:auto;cursor:pointer;
+  overflow:hidden;
+  will-change:transform,opacity;
+}
+.app-notif.show{transform:translateX(0);opacity:1}
+/* Exit: fly right + shrink the gap so the stack collapses smoothly */
+.app-notif.out{
+  transform:translateX(40px);opacity:0;
+  max-height:0;margin-top:-10px;padding-top:0;padding-bottom:0;
+  border-top-width:0;border-bottom-width:0;
+}
+/* Type-specific accent + icon background. Each accent color is muted so
+ * the toast doesn't scream "ERROR" — modern apps use restrained color
+ * with a clear icon doing the heavy lifting for type recognition. */
+.app-notif.ok{border-left-color:#7ed982}
+.app-notif.err{border-left-color:#ff6b6b}
+.app-notif.info{border-left-color:#6ab0ff}
+.app-notif.warn{border-left-color:#ffb84d}
+
+.app-notif-icon{
+  flex-shrink:0;width:22px;height:22px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  margin-top:1px;
+}
+.app-notif.ok   .app-notif-icon{background:rgba(126,217,130,.16);color:#7ed982}
+.app-notif.err  .app-notif-icon{background:rgba(255,107,107,.16);color:#ff8585}
+.app-notif.info .app-notif-icon{background:rgba(106,176,255,.16);color:#85b9ff}
+.app-notif.warn .app-notif-icon{background:rgba(255,184,77,.16);color:#ffc875}
+.app-notif-icon svg{display:block}
+
+.app-notif-body{flex:1;min-width:0}
+.app-notif-msg{
+  font-family:'Inter',sans-serif;font-size:13px;
+  color:#f0f0f0;line-height:1.4;
+  word-wrap:break-word;
+  display:-webkit-box;
+  -webkit-line-clamp:3;-webkit-box-orient:vertical;
+  overflow:hidden;
+}
+.app-notif-close{
+  flex-shrink:0;background:transparent;border:0;
+  color:rgba(255,255,255,.4);cursor:pointer;
+  padding:2px;margin:-2px -4px 0 0;
+  display:flex;align-items:center;justify-content:center;
+  border-radius:4px;outline:none;
+  transition:color 120ms,background 120ms;
+}
+.app-notif-close:hover{color:#fff;background:rgba(255,255,255,.08)}
+.app-notif-close svg{pointer-events:none}
+
+/* Progress bar — thin strip at the bottom. CSS animation depletes width
+ * from 100% to 0% over the duration. Paused by class .paused (hover). */
+.app-notif-timer{
+  position:absolute;bottom:0;left:0;right:0;
+  height:2px;background:rgba(255,255,255,.06);
+  overflow:hidden;
+}
+.app-notif-timer-fill{
+  height:100%;background:currentColor;
+  transform-origin:left;transform:scaleX(1);
+  animation:notifTimerShrink linear forwards;
+  animation-play-state:running;
+}
+.app-notif.paused .app-notif-timer-fill{animation-play-state:paused}
+.app-notif.ok   .app-notif-timer-fill{background:#7ed982}
+.app-notif.err  .app-notif-timer-fill{background:#ff6b6b}
+.app-notif.info .app-notif-timer-fill{background:#6ab0ff}
+.app-notif.warn .app-notif-timer-fill{background:#ffb84d}
+@keyframes notifTimerShrink{from{transform:scaleX(1)}to{transform:scaleX(0)}}
+
+/* Reduce-motion users get instant fades, no spring. */
+@media (prefers-reduced-motion: reduce){
+  /* Honor accessibility setting: kill non-essential motion across the app.
+   * Transitions become near-instant (1ms not 0ms so transitionend still
+   * fires and any JS that waits on it doesn't hang), and infinite/decorative
+   * keyframe animations are disabled. State-essential animations like the
+   * loading bar still play because removing them would lose information. */
+  *,*::before,*::after{
+    animation-duration:1ms!important;
+    animation-iteration-count:1!important;
+    transition-duration:1ms!important;
+    scroll-behavior:auto!important;
+  }
+  /* Preserve a few that convey actual state, not just polish */
+  .load-bar{animation-duration:4s!important}
+  .prog-fill,.move-fill{transition-duration:200ms!important}
+  /* Notifications keep their own reduced-motion handling below */
+  .app-notif{transition:opacity 120ms linear;transform:none}
+  .app-notif.show{transform:none}
+  .app-notif.out{transform:none;max-height:none;margin-top:0}
+  .app-notif-timer-fill{animation:none;transform:scaleX(0)}
+}
+
+/* ── Settings ── */
+.settings-list{display:flex;flex-direction:column;gap:0}
+.setting-row{display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:1px solid var(--border);gap:16px}
+.setting-info{flex:1;min-width:0}
+/* History → Filter by folder dropdown. Matches the height of the search
+ * input next to it so the row reads as one cohesive toolbar. */
+.hist-filter-sel{
+  height:42px;padding:0 12px;
+  background:var(--bg2);color:var(--white);
+  border:1px solid var(--border);border-radius:var(--r);
+  font-family:'Inter',sans-serif;font-size:13px;
+  cursor:pointer;outline:none;min-width:140px;max-width:200px;
+  transition:border-color var(--t-fast) var(--e-out);
+}
+.hist-filter-sel:hover,
+.hist-filter-sel:focus{border-color:var(--border3)}
+.hist-filter-sel optgroup{font-style:normal;color:var(--muted)}
+/* Standardized select styling for Settings rows. Matches the visual
+ * weight of the .switch toggles so the controls don't fight each other
+ * visually. Used by the download auto-clear dropdown; future Settings
+ * options that need a small picker can reuse this class. */
+.setting-select{
+  height:34px;padding:0 12px;
+  background:var(--bg3);color:var(--white);
+  border:1px solid var(--border2);border-radius:var(--r);
+  font-family:'Inter',sans-serif;font-size:13px;
+  cursor:pointer;outline:none;
+  transition:border-color var(--t-fast) var(--e-out);
+}
+.setting-select:hover,
+.setting-select:focus{border-color:var(--border3)}
+.setting-name{font-family:"Barlow Condensed",sans-serif;font-size:15px;letter-spacing:.5px;color:var(--white);margin-bottom:3px}
+.setting-desc{font-size:12px;color:var(--muted);line-height:1.4}
+.lang-toggle{display:flex;gap:0;border:1px solid var(--border2);border-radius:6px;overflow:hidden}
+.lt{border:none;background:var(--bg2);color:var(--muted);font-family:"Barlow Condensed",sans-serif;font-size:13px;letter-spacing:1px;font-weight:600;padding:6px 16px;cursor:pointer;transition:background var(--t-fast) var(--e-out),color var(--t-fast) var(--e-out),border-color var(--t-fast) var(--e-out)}
+.lt.on{background:var(--white);color:#080808}
+.lt:hover:not(.on){background:var(--bg3);color:var(--text)}
+/* Toggle switch */
+.switch{position:relative;display:inline-block;width:42px;height:22px;flex-shrink:0}
+.switch input{opacity:0;width:0;height:0}
+.slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:var(--bg4);transition:.2s;border-radius:22px;border:1px solid var(--border2)}
+.slider:before{position:absolute;content:"";height:16px;width:16px;left:2px;bottom:2px;background:var(--muted);transition:.2s;border-radius:50%}
+.switch input:checked+.slider{background:var(--green);border-color:var(--green)}
+.switch input:checked+.slider:before{transform:translateX(20px);background:var(--white)}
+</style>
+</head>
+<body>
+
+<!-- Loading screen with diagnostic log -->
+<div id="loading">
+  <img class="load-logo" src="../assets/hk-logo.png" alt="HK"
+       onerror="this.style.opacity='0'"/>
+  <div class="load-name">Freq.Phull</div>
+  <div class="load-sub">Artist Edition</div>
+  <div class="load-bar-wrap"><div class="load-bar"></div></div>
+  <div class="load-status" id="load-status">Starting backend…</div>
+  <div class="diag-title">Diagnostic log</div>
+  <div id="diag"></div>
+  <div id="log-path-row">Log file: <span id="log-path-txt">loading…</span></div>
+</div>
+
+<!-- Titlebar -->
+<div id="tb">
+  <img class="tb-logo" src="../assets/hk-logo.png" alt="HK" onerror="this.style.display='none'"/>
+  <div class="tb-div"></div>
+  <div class="tb-nav">
+    <button class="tb-nav-btn" id="tb-back" onclick="tabHistoryBack()" title="Back (Ctrl+Alt+←)" disabled>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+    </button>
+    <button class="tb-nav-btn" id="tb-forward" onclick="tabHistoryForward()" title="Forward (Ctrl+Alt+→)" disabled>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+    </button>
+  </div>
+  <div class="tb-div"></div>
+  <div class="tb-name">Freq.Phull</div>
+  <div class="tb-sub">Artist Edition</div>
+  <div class="tb-sp"></div>
+  <div class="tb-dot-row">
+    <div class="tb-dot loading" id="tb-dot"></div>
+    <span class="tb-dot-txt" id="tb-txt">Starting…</span>
+  </div>
+  <div class="tb-ctrls">
+    <button class="tb-btn" onclick="api.minimize()"><svg width="11" height="2"><rect width="11" height="2" fill="currentColor"/></svg></button>
+    <button class="tb-btn" onclick="api.maximize()"><svg width="10" height="10"><rect x=".5" y=".5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
+    <button class="tb-btn x" onclick="api.close()"><svg width="10" height="10"><line x1="1" y1="1" x2="9" y2="9" stroke="currentColor" stroke-width="1.5"/><line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  </div>
+</div>
+
+<!-- Layout -->
+<div id="layout">
+  <div id="sidebar">
+    <div class="nav-sec">Workspace</div>
+    <button class="nav-btn on" data-tab="download" onclick="showTab(this)">
+      <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Download
+    </button>
+    <button class="nav-btn" data-tab="analyze" onclick="showTab(this)">
+      <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+      Analyze
+    </button>
+    <button class="nav-btn" data-tab="stems" onclick="showTab(this)">
+      <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="5" y1="4" x2="5" y2="20"/><line x1="10" y1="4" x2="10" y2="20"/><line x1="15" y1="4" x2="15" y2="20"/><line x1="20" y1="4" x2="20" y2="20"/></svg>
+      Separator
+    </button>
+    <button class="nav-btn" data-tab="transcribe" onclick="showTab(this)">
+      <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>
+      Transcribe
+    </button>
+    <div class="nav-sec" style="margin-top:4px">Artist Tools</div>
+    <button class="nav-btn" data-tab="tools" onclick="showTab(this)">
+      <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
+      Tools
+    </button>
+    <button class="nav-btn" data-tab="history" onclick="showTab(this)">
+      <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="12 8 12 12 14 14"/><path d="M3.05 11a9 9 0 1 1 .5 4m-.5 5v-5h5"/></svg>
+      History
+    </button>
+    <button class="nav-btn" data-tab="stockpile" onclick="showTab(this)">
+      <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7l9-4 9 4v10l-9 4-9-4V7z"/><path d="M3 7l9 4 9-4M12 11v10"/></svg>
+      Stockpile
+    </button>
+    <button class="nav-btn" data-tab="settings" onclick="showTab(this)">
+      <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Settings
+    </button>
+    <div class="nav-fill"></div>
+    <div class="sidebar-credit">Hood Knights ©</div>
+  </div>
+
+  <div id="main">
+
+    <!-- DOWNLOAD -->
+    <div class="tab-pane on" id="tab-download">
+      <div class="ph"><div class="ph-title">Download</div><div class="ph-sub">Paste a YouTube URL and save as MP3, WAV, FLAC and more</div></div>
+      <div class="card">
+        <div class="card-lbl">YouTube URL</div>
+        <div class="row mb">
+          <input type="text" id="url-in" class="url-inp" placeholder="https://www.youtube.com/watch?v=…"/>
+          <button class="btn pri" id="btn-fetch" onclick="fetchInfo()" style="height:50px;padding:0 26px;font-size:15px">Fetch</button>
+        </div>
+        <div class="card-lbl" style="margin-top:6px">Format</div>
+        <div class="fmt-row">
+          <button class="fmt on" data-fmt="mp3" onclick="setFmt(this)">MP3</button>
+          <button class="fmt" data-fmt="wav" onclick="setFmt(this)">WAV</button>
+          <button class="fmt" data-fmt="flac" onclick="setFmt(this)">FLAC</button>
+          <button class="fmt" data-fmt="aac" onclick="setFmt(this)">AAC</button>
+          <button class="fmt" data-fmt="m4a" onclick="setFmt(this)">M4A</button>
+        </div>
+      </div>
+      <div class="status hidden" id="dl-status"><div class="dot" id="dl-dot"></div><span id="dl-txt">Paste a YouTube URL to get started</span></div>
+
+      <!-- ── Download Queue panel ────────────────────────────────────────
+           Visible whenever there are items in the queue OR completed
+           items in this session. Replaces the old transient queue UI
+           that disappeared once downloads finished. Each row shows the
+           status (waiting / downloading / done / error) and progress.
+           Completed items stay visible so the user can see what they
+           already downloaded this session — solves the "I missed the
+           toast and didn't realize it downloaded, so I re-pasted the
+           URL" double-download problem.
+      -->
+      <div class="card hidden" id="dl-queue-card">
+        <div class="dl-queue-header">
+          <div class="dl-queue-title">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            <span>Downloads</span>
+            <span class="dl-queue-count" id="dl-queue-count">0</span>
+          </div>
+          <div class="dl-queue-actions">
+            <!-- Auto-clear duration is configured in Settings → "Auto-clear
+                 download queue" so this card stays uncluttered. The sweep
+                 runs regardless of whether this card is visible. -->
+            <button class="dl-queue-clear" onclick="clearCompletedDownloads()" title="Clear completed">Clear completed</button>
+          </div>
+        </div>
+        <div class="dl-queue-items" id="dl-queue-items"></div>
+      </div>
+
+      <div class="card hidden" id="vid-card">
+        <div class="vid-row">
+          <img class="thumb" id="vid-thumb" src="" alt=""/>
+          <div style="flex:1;min-width:0"><div class="vid-title" id="vid-title">—</div><div class="vid-sub" id="vid-sub">—</div></div>
+        </div>
+        <div class="folder-row">
+          <div class="folder-disp" id="folder-lbl">Downloads folder</div>
+          <button class="btn sm" onclick="pickFolder()">Change</button>
+          <button class="btn sm pri" id="btn-dl" onclick="startDownload()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Download
+          </button>
+        </div>
+        <div class="hidden" id="dl-prog-wrap">
+          <div class="prog-track"><div class="prog-fill" id="dl-fill"></div></div>
+          <div class="prog-lbl" id="dl-prog-lbl">0%</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ANALYZE -->
+    <div class="tab-pane" id="tab-analyze">
+      <div class="ph"><div class="ph-title">Analyze</div><div class="ph-sub">Detect BPM, key, chords and more from any audio file</div></div>
+      <div class="card">
+        <div class="drop" id="drop-analyze" onclick="document.getElementById('file-analyze').click()">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+          <h3>Drop an audio file here</h3><p>or click to browse — MP3 · WAV · FLAC · OGG · M4A</p>
+        </div>
+        <input type="file" id="file-analyze" accept="audio/*" style="display:none" onchange="loadAnalyzeFile(event)">
+      </div>
+      <div class="card hidden" id="player-card">
+        <div class="sh"><div class="sh-title" id="player-name">—</div><div style="font-size:13px;color:var(--hint)" id="hist-lbl"></div></div>
+        <div class="wave-wrap" id="wave-wrap" onclick="seekWave(event)">
+          <canvas id="waveform"></canvas><div class="playbar" id="playbar" style="left:0%"></div>
+        </div>
+        <div class="transport">
+          <button class="play-btn" onclick="togglePlay()"><svg id="play-ico" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg></button>
+          <span class="ttime" id="ttime">0:00 / 0:00</span>
+          <div class="seek" id="seek-bar" onclick="seekBar(event)"><div class="seek-fill" id="seek-fill"></div></div>
+          <!-- Volume fader -->
+          <div class="vol-wrap">
+            <svg class="vol-icon" onclick="toggleMute()" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" id="vol-ico">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
+            </svg>
+            <input type="range" class="vol-slider" id="vol-slider" min="0" max="130" value="85" step="1" oninput="setVolume(this.value)"/>
+            <span class="vol-db" id="vol-db">0 dB</span>
+          </div>
+        </div>
+        <!-- Professional meter -->
+        <div class="meter-section" id="meter-section">
+          <!-- Scale -->
+          <div class="meter-scale">
+            <span>-60</span><span>-48</span><span>-36</span><span>-24</span><span>-18</span><span>-12</span><span>-9</span><span>-6</span><span>-3</span><span>0</span>
+          </div>
+          <!-- L channel -->
+          <div class="meter-row">
+            <span class="meter-lbl">L</span>
+            <div class="meter-track">
+              <div class="meter-fill" id="meter-l"></div>
+              <div class="meter-peak" id="peak-l" style="left:0%"></div>
+            </div>
+            <span class="meter-val" id="val-l">-∞</span>
+          </div>
+          <!-- R channel -->
+          <div class="meter-row">
+            <span class="meter-lbl">R</span>
+            <div class="meter-track">
+              <div class="meter-fill" id="meter-r"></div>
+              <div class="meter-peak" id="peak-r" style="left:0%"></div>
+            </div>
+            <span class="meter-val" id="val-r">-∞</span>
+          </div>
+          <!-- Stats -->
+          <div class="meter-stats">
+            <div class="meter-stat">
+              <div class="meter-stat-lbl">Integrated</div>
+              <div class="meter-stat-val" id="stat-lufs">-∞</div>
+              <div class="meter-stat-unit">LUFS</div>
+            </div>
+            <div class="meter-stat">
+              <div class="meter-stat-lbl">Short-term</div>
+              <div class="meter-stat-val" id="stat-short">-∞</div>
+              <div class="meter-stat-unit">LUFS</div>
+            </div>
+            <div class="meter-stat">
+              <div class="meter-stat-lbl">Momentary</div>
+              <div class="meter-stat-val" id="stat-mom">-∞</div>
+              <div class="meter-stat-unit">LUFS</div>
+            </div>
+            <div class="meter-stat">
+              <div class="meter-stat-lbl">True Peak</div>
+              <div class="meter-stat-val" id="stat-peak">-∞</div>
+              <div class="meter-stat-unit">dBTP</div>
+            </div>
+            <div class="meter-stat">
+              <div class="meter-stat-lbl">RMS</div>
+              <div class="meter-stat-val" id="stat-rms">-∞</div>
+              <div class="meter-stat-unit">dBFS</div>
+            </div>
+            <div class="meter-stat">
+              <div class="meter-stat-lbl">Dyn Range</div>
+              <div class="meter-stat-val" id="stat-dr">—</div>
+              <div class="meter-stat-unit">dBFS</div>
+            </div>
+          </div>
+          <!-- Live spectrum analyzer — replaces the old 6-bar Spectral Balance.
+               Animated Pro-Q-style curve that reacts to playback in real time.
+               Reads from analyserL (same FFT tap used for VU). Hover for
+               freq/dB/note readout in the title.
+               This canvas is the primary visualizer; the previous bar version
+               was removed because the curve communicates the same info with
+               much higher resolution + temporal animation. -->
+          <div style="margin-top:14px">
+            <div class="meter-stat-lbl" style="margin-bottom:8px;display:flex;align-items:center;gap:6px">
+              <span>LIVE SPECTRUM ANALYZER</span>
+              <span class="pro-live-dot" id="pro-spectrum-live-dot" title="Live while playing">●</span>
+              <span class="pro-spectrum-readout" id="pro-spectrum-readout"></span>
+            </div>
+            <div class="pro-spectrum" id="pro-spectrum">
+              <canvas id="pro-spectrum-canvas" width="800" height="280"></canvas>
+              <canvas id="pro-spectrum-hover" width="800" height="280"
+                      style="position:absolute;top:0;left:0;pointer-events:none"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="hidden" id="metrics-wrap">
+        <div class="metrics">
+          <div class="metric"><div class="m-lbl">Tempo</div><div class="m-val dim" id="bpm">—</div><div class="m-sub">BPM</div><div class="m-conf"><div class="m-conf-fill" id="bpm-conf"></div></div></div>
+          <div class="metric"><div class="m-lbl">Key</div><div class="m-val dim" id="key">—</div><div class="m-sub" id="key-mode">—</div><div class="m-conf"><div class="m-conf-fill" id="key-conf"></div></div></div>
+          <div class="metric"><div class="m-lbl">Duration</div><div class="m-val dim" id="dur">—</div><div class="m-sub">Seconds</div><div class="m-conf"><div class="m-conf-fill" id="dur-conf"></div></div></div>
+        </div>
+        <!-- Top 3 key candidates — shown when confidence is low, critical for autotune -->
+        <div id="key-candidates" style="display:none;padding:0 4px 12px"></div>
+        <div class="ag">
+          <div class="ag-card"><div class="ag-title">Chord Progressions</div><div class="chord-list" id="chord-list"><div style="font-size:14px;color:var(--hint)">Analyze a track first</div></div></div>
+          <div class="ag-card"><div class="ag-title">Compatible Keys — Camelot</div><div class="cam-grid" id="cam-grid"><div style="font-size:14px;color:var(--hint)">—</div></div></div>
+          <div class="ag-card">
+            <div class="ag-title">Pitch Preview</div>
+            <div class="pitch-row"><span class="pitch-val" id="pitch-lbl">0</span><input type="range" id="pitch-sl" min="-6" max="6" value="0" step="1" oninput="setPitch(this.value)"/><span style="font-size:13px;color:var(--hint)">±6st</span></div>
+            <div style="font-size:13px;color:var(--muted);margin-bottom:12px" id="pitch-key">—</div>
+            <button class="btn sm" style="width:100%" onclick="setPitch(0);document.getElementById('pitch-sl').value=0">Reset</button>
+          </div>
+        </div>
+        <!-- Professional analysis panel — injected here by applyAnalysisResult -->
+        <div id="pro-metrics-wrap"></div>
+
+        <div class="card mt2">
+          <div class="sh"><div class="sh-title">Track Notes</div><span style="font-size:13px;color:var(--hint)" id="notes-saved"></span></div>
+          <textarea class="notes-box" id="notes-box" placeholder="Write lyrics ideas, structure, vocal notes…" oninput="scheduleNoteSave()"></textarea>
+        </div>
+
+        <!-- Send to Separator -->
+        <div class="card mt2">
+          <button class="btn pri" id="btn-send-stems" onclick="sendToSeparator()" style="width:100%;height:50px;font-size:15px" disabled>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px"><line x1="5" y1="4" x2="5" y2="20"/><line x1="10" y1="4" x2="10" y2="20"/><line x1="15" y1="4" x2="15" y2="20"/><line x1="20" y1="4" x2="20" y2="20"/></svg>
+            <span id="btn-send-stems-lbl">Send to Separator</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- SEPARATOR -->
+    <div class="tab-pane" id="tab-stems">
+      <div class="ph"><div class="ph-title">Separator</div><div class="ph-sub">Split any track into individual stems — vocals, drums, bass &amp; more</div></div>
+
+      <!-- Drop zone -->
+      <div class="card">
+        <div class="drop" id="drop-stems" onclick="document.getElementById('file-stems').click()">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><line x1="5" y1="4" x2="5" y2="20"/><line x1="10" y1="4" x2="10" y2="20"/><line x1="15" y1="4" x2="15" y2="20"/><line x1="20" y1="4" x2="20" y2="20"/></svg>
+          <h3 id="stems-drop-title">Drop a track to separate</h3><p id="stems-drop-sub">or click to browse — MP3 · WAV · FLAC · OGG · M4A</p>
+        </div>
+        <input type="file" id="file-stems" accept="audio/*" style="display:none" onchange="loadSeparatorFile(event)">
+      </div>
+
+      <!-- Loaded source + options -->
+      <div class="card hidden" id="stems-options">
+        <div class="sh"><div class="sh-title" id="stems-source-name">—</div><button class="btn xs" onclick="clearSeparatorSource()">✕</button></div>
+
+        <div style="margin-bottom:18px">
+          <div class="card-lbl" style="margin-bottom:10px"><span id="stems-mode-lbl">Stems</span></div>
+          <div class="fmt-row">
+            <button class="fmt on" data-mode="4" onclick="setStemMode(this)"><span class="stem-mode-en">4 Stems</span></button>
+            <button class="fmt"    data-mode="6" onclick="setStemMode(this)"><span class="stem-mode-en">6 Stems</span></button>
+          </div>
+          <div style="font-size:12px;color:var(--hint);margin-top:8px" id="stems-mode-desc">Vocals · Drums · Bass · Other</div>
+        </div>
+
+        <div style="margin-bottom:18px">
+          <div class="card-lbl" style="margin-bottom:10px"><span id="stems-quality-lbl">Quality</span></div>
+          <div class="fmt-row">
+            <button class="fmt"    data-quality="fast"  onclick="setStemQuality(this)"><span class="stem-q-fast">Fast</span></button>
+            <button class="fmt on" data-quality="high"  onclick="setStemQuality(this)"><span class="stem-q-high">High</span></button>
+            <button class="fmt"    data-quality="ultra" onclick="setStemQuality(this)"><span class="stem-q-ultra">Ultra</span></button>
+          </div>
+          <div style="font-size:12px;color:var(--hint);margin-top:8px" id="stems-quality-desc">Balanced — 1 shift, recommended</div>
+        </div>
+
+        <!-- Direct mode toggle -->
+        <label class="direct-toggle" style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);margin-bottom:10px;cursor:pointer">
+          <input type="checkbox" id="stems-direct" onchange="setDirectMode(this.checked)" style="margin-top:3px;flex-shrink:0">
+          <div style="flex:1">
+            <div style="font-size:13px;font-weight:600;color:var(--white)" id="stems-direct-lbl">Keep producer vocal samples in beat</div>
+            <div style="font-size:11px;color:var(--hint);margin-top:2px" id="stems-direct-desc">Skips Stage 1. Faster. Vocal samples in the instrumental (ad-libs, vocal chops) stay in 'other' instead of being merged with lead vocals.</div>
+          </div>
+        </label>
+
+        <!-- Lead vocal split toggle -->
+        <label class="direct-toggle" style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);margin-bottom:10px;cursor:pointer">
+          <input type="checkbox" id="stems-split-lead" onchange="setSplitLead(this.checked)" style="margin-top:3px;flex-shrink:0">
+          <div style="flex:1">
+            <div style="font-size:13px;font-weight:600;color:var(--white)" id="stems-split-lead-lbl">Split lead vocal from BV / samples <span style="font-weight:400;color:var(--hint);font-size:11px">— best effort</span></div>
+            <div style="font-size:11px;color:var(--hint);margin-top:2px" id="stems-split-lead-desc">Adds an extra pass that separates the vocals stem into "lead_vocal" (main performance) and "back_vocal" (harmonies + ad-libs + samples). Adds ~30-60s on CPU. Quality varies by track — perfect on clean pop/R&amp;B, less reliable on dense rap.</div>
+          </div>
+        </label>
+
+        <!-- Ensemble (Stage 2 model averaging) toggle. Only adds value on
+             high/ultra quality presets — at 'fast' the script silently
+             skips ensemble even when this is on, since fast already trades
+             quality for speed. -->
+        <label class="direct-toggle" style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);margin-bottom:10px;cursor:pointer">
+          <input type="checkbox" id="stems-ensemble" onchange="setEnsemble(this.checked)" style="margin-top:3px;flex-shrink:0">
+          <div style="flex:1">
+            <div style="font-size:13px;font-weight:600;color:var(--white)" id="stems-ensemble-lbl">Ensemble — better piano / guitar / other <span style="font-weight:400;color:var(--hint);font-size:11px">— quality-bonus</span></div>
+            <div style="font-size:11px;color:var(--hint);margin-top:2px" id="stems-ensemble-desc">Runs a second Stage 2 model and averages outputs on harmonic stems. Lifts SDR by 0.3-0.8 dB and reduces model-specific artifacts (kick bleed, attack smearing). Adds ~30% to Stage 2 runtime. Requires quality 'high' or 'ultra' — ignored on 'fast'.</div>
+          </div>
+        </label>
+
+        <!-- Vocal ensemble: runs a SECOND vocal isolation model (different
+             architecture, complementary failure modes) and averages with
+             the primary. Specifically targets Stage 1, not Stage 2. The
+             two ensembles are independent — you can run either, both, or
+             neither. -->
+        <label class="direct-toggle" style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);margin-bottom:10px;cursor:pointer">
+          <input type="checkbox" id="stems-vocal-ensemble" onchange="setVocalEnsemble(this.checked)" style="margin-top:3px;flex-shrink:0">
+          <div style="flex:1">
+            <div style="font-size:13px;font-weight:600;color:var(--white)" id="stems-vocal-ensemble-lbl">Vocal ensemble — cleaner vocals <span style="font-weight:400;color:var(--hint);font-size:11px">— vocal-quality bonus</span></div>
+            <div style="font-size:11px;color:var(--hint);margin-top:2px" id="stems-vocal-ensemble-desc">Runs an additional vocal isolation model (different architecture) and averages outputs with the primary. Cancels each model's specific weaknesses (BS-Roformer sibilance leak, MDX-Net breath softness). Lifts vocal SDR by 0.3-0.6 dB. Cost: roughly doubles Stage 1 runtime.</div>
+          </div>
+        </label>
+
+        <!-- De-reverb toggle — replaces wet vocals with dry. Targets the
+             lead_vocal stem when split is on, else the merged vocals stem.
+             Useful for sampling/remixing wet vocals into a new beat. -->
+        <label class="direct-toggle" style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);margin-bottom:20px;cursor:pointer">
+          <input type="checkbox" id="stems-dereverb" onchange="setDereverb(this.checked)" style="margin-top:3px;flex-shrink:0">
+          <div style="flex:1">
+            <div style="font-size:13px;font-weight:600;color:var(--white)" id="stems-dereverb-lbl">De-reverb vocal <span style="font-weight:400;color:var(--hint);font-size:11px">— dry vocal for sampling</span></div>
+            <div style="font-size:11px;color:var(--hint);margin-top:2px" id="stems-dereverb-desc">Removes reverb tail and slap echo from the isolated vocal stem. Replaces the wet vocal with a dry version. Targets "lead_vocal" when the split toggle is on, otherwise the merged "vocals" stem. Adds ~20-40s on CPU.</div>
+          </div>
+        </label>
+
+        <!-- ── Quality Advanced (collapsible) ──────────────────────────
+             Controls for the fullness restoration pass (always-on as of
+             patch 15h). Power users can pick a preset OR dial in the
+             per-pass strengths individually. Default = Balanced + no
+             overrides, which behaves identically to the previous build.
+        -->
+        <div class="quality-advanced" id="quality-advanced">
+          <button type="button" class="quality-advanced-header"
+                  id="quality-advanced-toggle"
+                  onclick="toggleQualityAdvanced()">
+            <svg class="quality-chevron" id="quality-chevron" width="11" height="11"
+                 viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="9 18 15 12 9 6"/>
+            </svg>
+            <span class="quality-advanced-title">Quality Advanced</span>
+            <span class="quality-advanced-pill" id="quality-advanced-pill">Balanced</span>
+          </button>
+          <div class="quality-advanced-body hidden" id="quality-advanced-body">
+            <!-- Preset picker -->
+            <div class="qa-row">
+              <label class="qa-label">Fullness restoration</label>
+              <select id="qa-preset"
+                      class="qa-select"
+                      onchange="setFullnessPreset(this.value)">
+                <option value="subtle">Subtle — barely-there enhancement</option>
+                <option value="balanced" selected>Balanced — default sweet spot</option>
+                <option value="aggressive">Aggressive — for very thin stems</option>
+              </select>
+            </div>
+
+            <!-- Advanced toggle: shows the per-pass sliders. Hidden by
+                 default because most users just want the preset. -->
+            <button type="button" class="qa-advanced-toggle" id="qa-advanced-toggle"
+                    onclick="toggleQualityPerPass()">
+              <svg id="qa-perpass-chevron" width="9" height="9" viewBox="0 0 24 24"
+                   fill="none" stroke="currentColor" stroke-width="2.5"
+                   stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+              <span>Per-pass controls (override preset)</span>
+            </button>
+            <div class="qa-perpass hidden" id="qa-perpass">
+              <!-- Sustain rebuild strength -->
+              <div class="qa-slider-row">
+                <div class="qa-slider-lbl-row">
+                  <span class="qa-slider-name">Sustain rebuild</span>
+                  <span class="qa-slider-val" id="qa-sustain-val">1.0×</span>
+                </div>
+                <input type="range" min="0" max="2" step="0.05" value="1.0"
+                       id="qa-sustain" class="qa-slider"
+                       oninput="onFullnessSustainChange(this.value)"/>
+                <div class="qa-slider-desc">Rebuilds truncated note tails (piano, guitar, other). 0 = off, 1× = balanced, 2× = aggressive.</div>
+              </div>
+              <!-- Ghost-ducking max lift -->
+              <div class="qa-slider-row">
+                <div class="qa-slider-lbl-row">
+                  <span class="qa-slider-name">Ghost-ducking lift</span>
+                  <span class="qa-slider-val" id="qa-ducking-val">+4 dB</span>
+                </div>
+                <input type="range" min="0" max="8" step="0.5" value="4"
+                       id="qa-ducking" class="qa-slider"
+                       oninput="onFullnessDuckingChange(this.value)"/>
+                <div class="qa-slider-desc">Max boost for moments where a stem dipped behind the original mix. 0 dB = off, +4 dB = balanced, +8 dB = aggressive.</div>
+              </div>
+              <!-- Transient consistency clamp -->
+              <div class="qa-slider-row">
+                <div class="qa-slider-lbl-row">
+                  <span class="qa-slider-name">Transient consistency</span>
+                  <span class="qa-slider-val" id="qa-transient-val">±3 dB</span>
+                </div>
+                <input type="range" min="0" max="8" step="0.5" value="3"
+                       id="qa-transient" class="qa-slider"
+                       oninput="onFullnessTransientChange(this.value)"/>
+                <div class="qa-slider-desc">Equalizes attack levels across the track. 0 dB = off, ±3 dB = balanced, ±8 dB = aggressive.</div>
+              </div>
+              <button type="button" class="qa-reset-btn" onclick="resetFullnessOverrides()">
+                Reset overrides to preset
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <button class="btn pri" id="btn-separate" onclick="startSeparation()" style="width:100%;height:54px;font-size:16px">
+          <span id="btn-separate-lbl">Separate Stems</span>
+        </button>
+      </div>
+
+      <!-- Progress -->
+      <div class="card hidden" id="stems-progress">
+        <div class="sh"><div class="sh-title" id="stems-prog-title">Separating…</div><span style="font-size:14px;color:var(--muted);font-variant-numeric:tabular-nums" id="stems-prog-pct">0%</span></div>
+        <div class="prog-track"><div class="prog-fill" id="stems-prog-fill" style="width:0%"></div></div>
+        <div class="prog-lbl" id="stems-prog-msg">Preparing engine…</div>
+        <div style="font-size:12px;color:var(--hint);margin-top:4px" id="stems-prog-detail"></div>
+        <div class="stage-row">
+          <div class="stage-pill" id="stage-pill-1">
+            <span class="stage-num">1</span>
+            <span id="stage-pill-1-text">Vocal isolation</span>
+          </div>
+          <div class="stage-pill" id="stage-pill-2">
+            <span class="stage-num">2</span>
+            <span id="stage-pill-2-text">Instrumental split</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Results -->
+      <div class="hidden" id="stems-results">
+        <div class="sh" style="margin-bottom:14px">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <div class="sh-title" id="stems-results-title">Separated Stems</div>
+            <div class="ensemble-badge hidden" id="ensemble-badge">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="20 6 9 17 4 12"/></svg>
+              <span id="ensemble-badge-text">Ensemble · BS-RoFormer 12.97 + Demucs FT</span>
+            </div>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn xs pri" onclick="openMiniDAW()" id="btn-open-daw" title="Edit stems in timeline"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="margin-right:4px;vertical-align:-2px"><rect x="3" y="6" width="18" height="3" rx="1"/><rect x="3" y="11" width="18" height="3" rx="1"/><rect x="3" y="16" width="18" height="3" rx="1"/></svg>Open Mini-DAW</button>
+            <button class="btn xs" onclick="openStemFolder()" id="btn-open-stems"><span id="btn-open-stems-lbl">Open Folder</span></button>
+            <button class="btn xs" onclick="closeSeparatorResults()">✕</button>
+          </div>
+        </div>
+        <div id="stem-list"></div>
+
+        <!-- Master section — applies a rule-based mastering preset to the
+             ORIGINAL source track (not the stems). Outputs a separate
+             mastered WAV alongside the stem folder so the user can A/B
+             with the unmastered original. -->
+        <div id="master-section" class="master-section">
+          <div class="master-header">
+            <div class="master-title">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <path d="M3 12h4l3 8 4-16 3 8h4"/>
+              </svg>
+              <span>Master</span>
+              <span class="master-hint">— rule-based, no AI</span>
+            </div>
+          </div>
+          <div class="master-row">
+            <select id="master-preset" class="master-preset-select" onchange="onMasterPresetChange()">
+              <option value="loudness_normalize">Loudness Normalize — hit −14 LUFS</option>
+              <option value="bright">Bright — adds air (+2 dB &gt; 6 kHz)</option>
+              <option value="warm">Warm — adds body (+2 dB &lt; 250 Hz)</option>
+              <option value="reference_match">Reference Match — match a track you like</option>
+            </select>
+            <button class="btn pri" id="btn-master" onclick="startMastering()">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="margin-right:5px;vertical-align:-1px"><polygon points="5 3 19 12 5 21" fill="currentColor"/></svg>
+              <span id="btn-master-lbl">Apply</span>
+            </button>
+          </div>
+
+          <!-- Reference picker — only shown when preset = reference_match.
+               Drop area for the user to drag a track they want to match,
+               or click to file-pick. Plus a strength slider so they can
+               control how aggressively to push their input toward the
+               reference (0 = LUFS only, 1 = full EQ matching). -->
+          <div class="master-ref-row hidden" id="master-ref-row">
+            <div class="master-ref-drop" id="master-ref-drop" onclick="document.getElementById('master-ref-file').click()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M9 11h6m-3-3v6m9-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/>
+              </svg>
+              <span id="master-ref-label">Drop a reference track or click to pick</span>
+              <button class="master-ref-clear hidden" id="master-ref-clear" onclick="event.stopPropagation();clearMasterReference()" title="Remove reference">×</button>
+            </div>
+            <input type="file" id="master-ref-file" accept="audio/*" style="display:none" onchange="onMasterReferencePicked(event)">
+            <div class="master-strength">
+              <label for="master-strength-slider" class="master-strength-lbl">Match strength</label>
+              <input type="range" id="master-strength-slider" class="master-strength-slider"
+                     min="0" max="1" step="0.05" value="0.5"
+                     oninput="onMasterStrengthChange(this.value)">
+              <span id="master-strength-val" class="master-strength-val">50%</span>
+            </div>
+          </div>
+          <div class="master-progress hidden" id="master-progress">
+            <div class="master-progress-track"><div class="master-progress-fill" id="master-prog-fill"></div></div>
+            <div class="master-progress-text" id="master-prog-text">Starting…</div>
+          </div>
+          <div class="master-result hidden" id="master-result">
+            <div class="master-result-stats" id="master-result-stats"></div>
+            <div class="master-result-actions">
+              <button class="btn xs" onclick="openMasteredFolder()">Open folder</button>
+              <button class="btn xs" onclick="playMastered()">Preview</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Separator History -->
+      <div class="sh mt2"><div class="sh-title" id="sep-hist-title">Separator History</div></div>
+      <div id="sep-hist-list"><div class="hist-empty" id="sep-hist-empty">No separations yet</div></div>
+    </div>
+
+    <!-- TRANSCRIBE -->
+    <div class="tab-pane" id="tab-transcribe">
+      <div class="ph"><div class="ph-title">Transcribe</div><div class="ph-sub">AI converts vocals or audio to text — runs locally, offline</div></div>
+      <div class="card">
+        <div class="drop" id="drop-trans" onclick="document.getElementById('file-trans').click()">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="14" y2="13"/><line x1="8" y1="17" x2="11" y2="17"/></svg>
+          <h3>Drop a vocal or audio file</h3><p>Works best on vocals-only tracks</p>
+        </div>
+        <input type="file" id="file-trans" accept="audio/*" style="display:none" onchange="startTranscribe(event)">
+        <div class="row mt" style="gap:10px">
+          <select id="wmodel" style="flex:1;height:42px;font-size:13px;padding:0 12px"><option value="tiny">Tiny — fastest</option><option value="base" selected>Base — recommended</option><option value="small">Small</option><option value="medium">Medium — best</option></select>
+          <select id="wlang" style="flex:1;height:42px;font-size:13px;padding:0 12px"><option value="auto">Auto-detect</option><option value="en">English</option><option value="fr">French</option><option value="es">Spanish</option><option value="pt">Portuguese</option></select>
+        </div>
+      </div>
+      <div class="status" id="trans-status"><div class="dot" id="trans-dot"></div><span id="trans-txt">Drop an audio file above to begin</span></div>
+      <div class="card hidden" id="trans-card">
+        <div class="sh"><div class="sh-title">Transcript</div><div class="row" style="gap:7px"><button class="btn xs" onclick="copyTranscript()">Copy</button><button class="btn xs" onclick="saveTranscript()">Save .txt</button></div></div>
+        <textarea class="transcript-box" id="transcript-out" placeholder="Transcript appears here…"></textarea>
+      </div>
+      <div class="info-note mt">Runs via <strong style="color:var(--off)">OpenAI Whisper</strong> — no data leaves your machine.<br>First time: run <code>AI Transcribe Setup.exe</code> included with the app.</div>
+    </div>
+
+    <!-- TOOLS -->
+    <div class="tab-pane" id="tab-tools">
+      <div class="ph"><div class="ph-title">Tools</div><div class="ph-sub">Metronome, tap BPM, and scale reference</div></div>
+      <div class="tgrid">
+        <div class="card">
+          <div class="card-lbl">Metronome</div>
+          <div class="metro-num" id="metro-num">120</div>
+          <div class="metro-beat" id="metro-beats"><div class="beat-dot"></div><div class="beat-dot"></div><div class="beat-dot"></div><div class="beat-dot"></div></div>
+          <input type="range" id="metro-sl" min="40" max="220" value="120" step="1" style="width:100%;margin:8px 0" oninput="setMetroBpm(this.value)"/>
+          <div class="row mt" style="gap:8px">
+            <button class="btn f1 pri" id="metro-btn" onclick="toggleMetro()">Start</button>
+            <select id="metro-sig" style="height:46px;font-size:13px;padding:0 12px"><option value="4">4/4</option><option value="3">3/4</option><option value="2">2/4</option><option value="6">6/8</option></select>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-lbl">Tap BPM</div>
+          <button class="tap-btn" onclick="tapBpm()">TAP</button>
+          <div class="tap-num" id="tap-num">—</div>
+          <div style="text-align:center;font-size:14px;color:var(--hint);margin-top:5px" id="tap-ct">tap at least 4 times</div>
+          <button class="btn sm" style="width:100%;margin-top:14px" onclick="resetTap()">Reset</button>
+        </div>
+        <div class="card" style="grid-column:1/-1">
+          <div class="card-lbl">Scale & Chord Reference</div>
+          <div class="row mb" style="gap:10px">
+            <select id="ref-key" onchange="renderRef()" style="height:42px;font-size:14px;padding:0 13px"><option>C</option><option>C#</option><option>D</option><option>D#</option><option>E</option><option>F</option><option>F#</option><option>G</option><option>G#</option><option>A</option><option>A#</option><option>B</option></select>
+            <select id="ref-mode" onchange="renderRef()" style="height:42px;font-size:14px;padding:0 13px"><option value="major">Major</option><option value="minor">Minor</option></select>
+          </div>
+          <div id="ref-out"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- HISTORY -->
+    <div class="tab-pane" id="tab-history">
+      <div class="ph"><div class="ph-title">History</div><div class="ph-sub">Every track downloaded — BPM and key saved automatically</div></div>
+
+      <!-- Search + Filter + Select Mode Toggle -->
+      <div class="row mb" style="gap:6px">
+        <input type="search" id="hist-search" placeholder="Search tracks…" style="flex:1;height:42px;font-size:14px;padding:0 14px" oninput="renderHistory()"/>
+        <!-- Category filter — driven by stockpile folders. "All tracks" is
+             the default; user can also pick Untagged, Favorites, or a
+             specific folder. Built by populateHistoryFilterDropdown(). -->
+        <select id="hist-filter" class="hist-filter-sel" onchange="renderHistory()" title="Filter by folder">
+          <option value="all">All tracks</option>
+        </select>
+        <button class="btn" id="hist-select-btn" onclick="toggleSelectMode()" style="height:42px;padding:0 14px;font-size:12px;white-space:nowrap;display:inline-flex;align-items:center;gap:6px">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/></svg>
+          <span id="hist-select-lbl">Select</span>
+        </button>
+      </div>
+
+      <!-- Batch Action Bar (hidden until select mode) -->
+      <div id="hist-batch" class="hist-batch hidden">
+        <div class="hb-left">
+          <label class="hb-check"><input type="checkbox" id="hist-check-all" onchange="toggleCheckAll(this.checked)"/> <span>Select All</span></label>
+          <span class="hb-count" id="hist-sel-count">0 selected</span>
+        </div>
+        <div class="hb-right hidden" id="batch-move-actions">
+          <button class="btn sm" id="btn-stockpile" onclick="bulkMoveSelected('stockpile')" title="Move selected to Stockpile folder">📦 To Stockpile</button>
+          <button class="btn sm" id="btn-moveto" onclick="bulkMoveSelected('pick')" title="Choose folder">📁 Move to…</button>
+        </div>
+      </div>
+
+      <!-- Move Progress (only shows during active move) -->
+      <div id="move-progress" class="move-progress hidden">
+        <div class="move-info">
+          <span id="move-status">Moving…</span>
+          <span id="move-count" class="move-count">0/0</span>
+        </div>
+        <div class="move-track"><div class="move-fill" id="move-fill"></div></div>
+        <div class="move-current" id="move-current"></div>
+      </div>
+
+      <!-- Stockpile Folder Setting (only visible in select mode) -->
+      <div id="hist-stockpile-row" class="stockpile-row hidden">
+        <span class="stockpile-lbl">📦 Stockpile:</span>
+        <span class="stockpile-path" id="stockpile-path" title="Click to change" onclick="pickStockpileFolder()">Not set — click to choose</span>
+      </div>
+
+      <div id="hist-list"><div class="hist-empty">No history yet</div></div>
+    </div>
+
+    <!-- STOCKPILE -->
+    <div class="tab-pane" id="tab-stockpile">
+      <div class="ph"><div class="ph-title" id="sp-title">Stockpile</div><div class="ph-sub" id="sp-sub">Organize your beats by style, mood, and artist</div></div>
+
+      <!-- Dashboard view: summary + folder grid + untagged list -->
+      <div id="sp-dashboard">
+
+      <!-- Summary cards row -->
+      <div class="sp-summary-row">
+        <div class="sp-stat-card">
+          <div class="sp-stat-num" id="sp-stat-folders">0</div>
+          <div class="sp-stat-lbl" id="sp-stat-folders-lbl">Style Folders</div>
+        </div>
+        <div class="sp-stat-card">
+          <div class="sp-stat-num" id="sp-stat-tagged">0</div>
+          <div class="sp-stat-lbl" id="sp-stat-tagged-lbl">Tagged</div>
+        </div>
+        <div class="sp-stat-card">
+          <div class="sp-stat-num" id="sp-stat-committed">0</div>
+          <div class="sp-stat-lbl" id="sp-stat-committed-lbl">Committed</div>
+        </div>
+        <div class="sp-stat-card">
+          <div class="sp-stat-num" id="sp-stat-untagged">0</div>
+          <div class="sp-stat-lbl" id="sp-stat-untagged-lbl">Untagged</div>
+        </div>
+      </div>
+
+      <!-- Stockpile root selector — hidden because the path is managed
+           from the Settings page. Keeping the markup so any code that
+           queries sp-root-path doesn't break, but no longer rendered. -->
+      <div class="card sp-root-card hidden">
+        <div class="sh">
+          <div class="sh-title" id="sp-root-title">Stockpile destination</div>
+        </div>
+        <div class="row">
+          <span class="stockpile-path" id="sp-root-path" style="flex:1" title="Click to change" onclick="pickStockpileFolder()">Not set — click to choose</span>
+        </div>
+        <div class="sp-hint" id="sp-root-hint">Tagged tracks move into <code>{root}/{folder name}/</code> when committed.</div>
+      </div>
+
+      <!-- Style folders section -->
+      <div class="card">
+        <div class="sh">
+          <div class="sh-title" id="sp-folders-title">Style Folders</div>
+          <button class="btn sm" onclick="openCreateFolderDialog()" id="btn-sp-new"><span id="sp-new-lbl">+ New folder</span></button>
+        </div>
+        <div id="sp-folder-grid" class="sp-folder-grid">
+          <div class="sp-empty" id="sp-folder-empty">
+            <div style="font-size:14px;margin-bottom:8px">No folders yet.</div>
+            <div style="font-size:12px;color:var(--hint)">Create your first style folder — Cali Trap, Detroit, Atlanta Trap, Drill, whatever scenes you work in.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Untagged tracks section -->
+      <div class="card">
+        <div class="sh">
+          <div class="sh-title" id="sp-untagged-title">Untagged</div>
+          <span class="sh-meta" id="sp-untagged-count">0 tracks</span>
+        </div>
+        <div id="sp-untagged-list" class="sp-untagged-list">
+          <div class="sp-empty" id="sp-untagged-empty" style="font-size:12px;color:var(--hint)">All tracks tagged.</div>
+        </div>
+      </div>
+
+      </div><!-- /sp-dashboard -->
+
+      <!-- Folder browser view (shown when a folder card is clicked) -->
+      <div id="sp-folder-view" class="hidden">
+        <!-- Header with back button + folder identity + actions -->
+        <div class="sp-fv-header">
+          <button class="btn sm" onclick="closeFolderView()" id="sp-fv-back">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="15 18 9 12 15 6"/></svg>
+            <span id="sp-fv-back-lbl">Stockpile</span>
+          </button>
+          <div class="sp-fv-title-block">
+            <div class="sp-fv-title" id="sp-fv-title">—</div>
+            <div class="sp-fv-meta" id="sp-fv-meta">—</div>
+          </div>
+          <div class="sp-fv-header-actions">
+            <button class="btn sm" onclick="openMatchPreviewFromView()" id="sp-fv-automatch" title="Auto-match more tracks">⚡ <span id="sp-fv-automatch-lbl">Auto-match</span></button>
+            <button class="btn sm" onclick="editFolderFromView()" id="sp-fv-edit" title="Edit folder">✎</button>
+          </div>
+        </div>
+
+        <!-- Mood centroid display + folder description -->
+        <div class="card" id="sp-fv-meta-card">
+          <div id="sp-fv-desc" class="sp-fv-desc" style="display:none"></div>
+          <div class="sp-fv-mood" id="sp-fv-mood-row" style="display:none">
+            <div class="sp-fv-mood-lbl" id="sp-fv-mood-lbl">Folder mood profile</div>
+            <div class="sp-fv-mood-bars">
+              <div class="sp-fv-mood-bar"><span class="sp-fv-mood-name" id="sp-fv-mood-energy-lbl">Energy</span><span class="sp-fv-mood-track"><span class="sp-fv-mood-fill" id="sp-fv-mood-energy"></span></span></div>
+              <div class="sp-fv-mood-bar"><span class="sp-fv-mood-name" id="sp-fv-mood-tonality-lbl">Brightness</span><span class="sp-fv-mood-track"><span class="sp-fv-mood-fill" id="sp-fv-mood-tonality"></span></span></div>
+              <div class="sp-fv-mood-bar"><span class="sp-fv-mood-name" id="sp-fv-mood-density-lbl">Density</span><span class="sp-fv-mood-track"><span class="sp-fv-mood-fill" id="sp-fv-mood-density"></span></span></div>
+              <div class="sp-fv-mood-bar"><span class="sp-fv-mood-name" id="sp-fv-mood-tempo-lbl">Tempo</span><span class="sp-fv-mood-track"><span class="sp-fv-mood-fill" id="sp-fv-mood-tempo"></span></span></div>
+            </div>
+          </div>
+          <div id="sp-fv-seeds-row" class="sp-fv-seeds-row" style="display:none">
+            <span class="sp-fv-seeds-lbl" id="sp-fv-seeds-lbl">Artist seeds:</span>
+            <span id="sp-fv-seeds"></span>
+          </div>
+        </div>
+
+        <!-- Toolbar: search + sort -->
+        <div class="card sp-fv-toolbar">
+          <input type="text" class="modal-input" id="sp-fv-search" oninput="filterFolderTracks()" placeholder="Search inside this folder…" style="margin:0;flex:1;height:34px"/>
+          <select id="sp-fv-sort" onchange="renderFolderTracks()" class="sp-fv-select">
+            <option value="date">Newest first</option>
+            <option value="date-asc">Oldest first</option>
+            <option value="title">Title A→Z</option>
+            <option value="bpm">BPM ↑</option>
+            <option value="bpm-desc">BPM ↓</option>
+            <option value="key">Key</option>
+          </select>
+        </div>
+
+        <!-- Track list -->
+        <div class="card" id="sp-fv-list-card">
+          <div class="sh">
+            <div class="sh-title" id="sp-fv-list-title">Tracks</div>
+            <span class="sh-meta" id="sp-fv-list-count">0</span>
+          </div>
+          <div id="sp-fv-track-list" class="sp-fv-track-list">
+            <div class="sp-empty" id="sp-fv-track-empty">No tracks yet</div>
+          </div>
+        </div>
+      </div><!-- /sp-folder-view -->
+    </div><!-- /tab-stockpile -->
+
+    <!-- New-folder dialog (modal) -->
+    <div id="sp-new-folder-modal" class="modal-overlay hidden">
+      <div class="modal-card">
+        <div class="modal-title" id="sp-modal-title">New style folder</div>
+        <label class="card-lbl" id="sp-modal-name-lbl">Folder name</label>
+        <input type="text" id="sp-modal-name" placeholder="e.g. Cali Trap" class="modal-input"/>
+        <label class="card-lbl" id="sp-modal-desc-lbl">Description (optional)</label>
+        <input type="text" id="sp-modal-desc" placeholder="e.g. West coast trap, melodic minor hooks, hard 808s" class="modal-input"/>
+        <label class="card-lbl" id="sp-modal-seeds-lbl">Artist seeds — comma-separated</label>
+        <input type="text" id="sp-modal-seeds" placeholder="e.g. Mozzy, Luh Tyj, Sleepy Hallow" class="modal-input"/>
+        <div class="sp-hint" id="sp-modal-seeds-hint">When a track filename mentions any of these, it'll be auto-suggested for this folder.</div>
+        <div class="modal-actions">
+          <button class="btn" onclick="closeCreateFolderDialog()" id="sp-modal-cancel">Cancel</button>
+          <button class="btn pri" onclick="submitCreateFolder()" id="sp-modal-create">Create</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- SETTINGS -->
+    <div class="tab-pane" id="tab-settings">
+      <div class="ph"><div class="ph-title">Settings</div><div class="ph-sub">Customize your Freq.Phull experience</div></div>
+      <div id="settings-content" class="settings-list"></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── First-launch engines setup modal ─────────────────────────────────── -->
+<div id="setup-modal" class="setup-modal" style="display:none">
+  <div class="setup-card">
+    <div class="setup-logo">
+      <img src="../assets/hk-logo.png" alt="HK" onerror="this.style.opacity='0'"/>
+    </div>
+    <div class="setup-title">Welcome to Freq.Phull</div>
+    <div class="setup-sub" id="setup-sub">Set up the AI engines to unlock stem separation and lyric transcription</div>
+
+    <!-- Confirmation card (shown initially) -->
+    <div id="setup-confirm">
+      <div class="setup-info">
+        <div class="setup-info-row">
+          <span class="setup-info-icon">⬇</span>
+          <div>
+            <div class="setup-info-name">First-time download</div>
+            <div class="setup-info-detail" id="setup-size-line">~1.2GB total · runs once · all local, no cloud</div>
+          </div>
+        </div>
+        <div class="setup-info-row">
+          <span class="setup-info-icon">⏱</span>
+          <div>
+            <div class="setup-info-name">Time</div>
+            <div class="setup-info-detail">5–15 minutes depending on connection</div>
+          </div>
+        </div>
+        <div class="setup-info-row">
+          <span class="setup-info-icon">📦</span>
+          <div>
+            <div class="setup-info-name">What's installed</div>
+            <div class="setup-info-detail">Python · PyTorch · audio-separator · Whisper · model weights</div>
+          </div>
+        </div>
+      </div>
+      <div class="setup-buttons">
+        <button class="btn pri" id="setup-start-btn" onclick="startEnginesSetup()" style="width:100%;height:50px;font-size:15px">Begin Setup</button>
+        <button class="btn xs" id="setup-skip-btn" onclick="skipEnginesSetup()" style="width:100%;margin-top:8px">Skip — I'll set up later</button>
+      </div>
+      <div class="setup-fineprint">You can re-run setup anytime from Settings → Engines.</div>
+    </div>
+
+    <!-- Progress card (shown during setup) -->
+    <div id="setup-progress" class="hidden">
+      <div class="setup-step" id="setup-step-msg">Starting…</div>
+      <div class="setup-prog-track"><div class="setup-prog-fill" id="setup-prog-fill" style="width:0%"></div></div>
+      <div class="setup-prog-row">
+        <span id="setup-prog-detail" style="font-size:12px;color:var(--hint)"></span>
+        <span id="setup-prog-pct" style="font-variant-numeric:tabular-nums;font-size:13px;color:var(--muted)">0%</span>
+      </div>
+      <div class="setup-fineprint" style="margin-top:18px">Downloading engines and AI models. Setup keeps running even if you close this dialog — you can reopen and rejoin from Settings.</div>
+      <div style="margin-top:14px">
+        <button class="btn xs" onclick="hideSetupModal()" style="width:100%">Hide window (setup keeps running)</button>
+        <button class="btn xs" onclick="cancelEnginesSetup()" style="width:100%;margin-top:6px;color:#e84040">Cancel setup</button>
+      </div>
+    </div>
+
+    <!-- Error card -->
+    <div id="setup-error" class="hidden">
+      <div class="setup-error-msg" id="setup-error-msg"></div>
+      <div class="setup-error-hint" id="setup-error-hint"></div>
+      <div class="setup-buttons">
+        <button class="btn pri" onclick="retryEnginesSetup()" style="width:100%;height:44px">Retry</button>
+        <button class="btn xs" onclick="skipEnginesSetup()" style="width:100%;margin-top:8px">Continue without engines</button>
+      </div>
+    </div>
+
+    <!-- Success card -->
+    <div id="setup-done" class="hidden">
+      <div class="setup-done-icon">✓</div>
+      <div class="setup-done-msg">All set</div>
+      <div class="setup-fineprint">Stem separator and transcription are ready to use.</div>
+    </div>
+  </div>
+</div>
+
+<!-- Mini player (global — shows for any track playing in any view) -->
+<div id="sp-fv-mini-player" class="sp-fv-mini-player hidden">
+  <div class="sp-fv-mini-thumb" id="sp-fv-mini-thumb"><span class="sp-fv-mini-thumb-fallback">♪</span></div>
+  <div class="sp-fv-mini-info">
+    <div class="sp-fv-mini-title" id="sp-fv-mini-title">—</div>
+    <div class="sp-fv-mini-sub" id="sp-fv-mini-sub"></div>
+  </div>
+  <div class="sp-fv-mini-transport">
+    <button id="sp-fv-mini-shuffle" class="sp-fv-mini-mode-btn" tabindex="-1" onmousedown="this.blur()" onclick="toggleShuffleMode();this.blur()" title="Shuffle">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+    </button>
+    <button id="sp-fv-mini-prev" tabindex="-1" onmousedown="this.blur()" onclick="globalPlayerPrev();this.blur()" title="Previous (Ctrl+←)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><polygon points="19,5 19,19 9,12"/><rect x="5" y="5" width="3" height="14"/></svg>
+    </button>
+    <button class="sp-fv-play" tabindex="-1" onmousedown="this.blur()" onclick="folderViewTogglePlay();this.blur()" id="sp-fv-mini-toggle" title="Play / Pause (Space)">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true" id="sp-fv-mini-toggle-svg"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>
+    </button>
+    <button id="sp-fv-mini-next" tabindex="-1" onmousedown="this.blur()" onclick="globalPlayerNext();this.blur()" title="Next (Ctrl+→)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><polygon points="5,5 5,19 15,12"/><rect x="16" y="5" width="3" height="14"/></svg>
+    </button>
+    <button id="sp-fv-mini-loop" class="sp-fv-mini-mode-btn" tabindex="-1" onmousedown="this.blur()" onclick="toggleLoopMode();this.blur()" title="Loop">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+    </button>
+  </div>
+  <span class="sp-fv-mini-time-cur" id="sp-fv-mini-time-cur">0:00</span>
+  <div class="sp-fv-mini-seek" id="sp-fv-mini-seek" onclick="folderViewSeekClick(event)">
+    <div class="sp-fv-mini-seek-track">
+      <div class="sp-fv-mini-seek-buffered" id="sp-fv-mini-seek-buffered"></div>
+      <div class="sp-fv-mini-seek-fill" id="sp-fv-mini-seek-fill"></div>
+      <div class="sp-fv-mini-seek-thumb" id="sp-fv-mini-seek-thumb"></div>
+    </div>
+  </div>
+  <span class="sp-fv-mini-time-dur" id="sp-fv-mini-time-dur">0:00</span>
+  <button class="sp-fv-mini-extra-btn" id="sp-fv-mini-fav" tabindex="-1" onmousedown="this.blur()" onclick="miniPlayerToggleFavorite();this.blur()" title="Favorite">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+  </button>
+  <button class="sp-fv-mini-extra-btn" id="sp-fv-mini-notepad-btn" tabindex="-1" onmousedown="this.blur()" onclick="toggleMiniNotepad();this.blur()" title="Notepad">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+  </button>
+  <div class="sp-fv-mini-volume-wrap">
+    <button class="sp-fv-mini-vol-btn" tabindex="-1" onmousedown="this.blur()" onclick="folderViewToggleMute();this.blur()" id="sp-fv-mini-vol-btn" title="Mute / Unmute">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" id="sp-fv-mini-vol-icon"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+    </button>
+    <div class="sp-fv-mini-volume" id="sp-fv-mini-volume" onclick="folderViewVolumeClick(event)">
+      <div class="sp-fv-mini-volume-track">
+        <div class="sp-fv-mini-volume-fill" id="sp-fv-mini-volume-fill"></div>
+        <div class="sp-fv-mini-volume-thumb" id="sp-fv-mini-volume-thumb"></div>
+      </div>
+    </div>
+  </div>
+  <button class="sp-fv-mini-close" tabindex="-1" onmousedown="this.blur()" onclick="stopGlobalPlay();this.blur()" title="Stop">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
+  </button>
+
+  <!-- Foldable notepad — pops up above the player when the user clicks the
+       notepad icon. Auto-saves to history.user_notes on blur. -->
+  <div class="sp-fv-mini-notepad hidden" id="sp-fv-mini-notepad">
+    <div class="sp-fv-mini-notepad-head">
+      <span class="sp-fv-mini-notepad-title" id="sp-fv-mini-notepad-title">Notes</span>
+      <button class="sp-fv-mini-notepad-close" onclick="toggleMiniNotepad()" title="Close">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
+      </button>
+    </div>
+    <textarea id="sp-fv-mini-notepad-text"
+              placeholder="Jot something about this track…"
+              onblur="saveMiniNotepad()"></textarea>
+    <div class="sp-fv-mini-notepad-foot" id="sp-fv-mini-notepad-foot">Saved automatically</div>
+  </div>
+</div>
+
+<!-- ────────────────────────────────────────────────────────────────────────
+     Update banner — top-right hover card. Hidden by default; the renderer
+     wires it to the electron-updater events via window.api.updater.
+     Has 3 states:
+       1. AVAILABLE  — "Update 0.0.2 available · Install / Later"
+       2. DOWNLOADING — "Downloading update… 47%"  with progress bar
+       3. READY      — "Update ready · Restart now / Later"
+     The banner is non-modal: users can keep using the app while it downloads
+     in the background. Closing it (Later) just hides it until next launch.
+     ─────────────────────────────────────────────────────────────────────── -->
+<div id="update-banner" class="update-banner hidden" aria-live="polite">
+  <div class="update-banner-icon">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.85.99 6.56 2.6L21 8"/>
+      <polyline points="21 3 21 8 16 8"/>
+    </svg>
+  </div>
+  <div class="update-banner-body">
+    <div class="update-banner-title" id="update-banner-title">Update available</div>
+    <div class="update-banner-sub" id="update-banner-sub">Version 0.0.0</div>
+    <!-- Progress bar — hidden unless downloading -->
+    <div class="update-banner-progress hidden" id="update-banner-progress">
+      <div class="update-banner-progress-fill" id="update-banner-progress-fill"></div>
+    </div>
+  </div>
+  <div class="update-banner-actions">
+    <button class="update-banner-btn primary" id="update-banner-primary" onclick="onUpdateBannerPrimary()">Install</button>
+    <button class="update-banner-btn" id="update-banner-later" onclick="onUpdateBannerLater()">Later</button>
+  </div>
+</div>
+
+<script src="app.js"></script>
+<script src="daw.js"></script>
+</body>
+</html>
