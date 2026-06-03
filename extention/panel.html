@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"/><title>Freq.Phull</title><link rel="stylesheet" href="panel.css"/></head>
+<body>
+<div class="hdr">
+  <img src="icons/icon32.png" alt=""/>
+  <b>Freq.Phull</b>
+  <span class="f"></span>
+  <span class="dot checking" id="backendDot"></span>
+  <small id="backendTxt">Checking…</small>
+</div>
+<div class="tabs">
+  <button class="on" data-i="0">Analyze</button>
+  <button data-i="1">Tools</button>
+  <button data-i="2">History</button>
+  <button data-i="3">Settings</button>
+</div>
+<div class="scroll">
+
+<div class="pane on" id="p0">
+  <div class="ytc hide" id="ytcard">
+    <img id="ytimg" src="" alt=""/>
+    <div class="yi">
+      <div class="yt" id="yttitle">—</div>
+      <div class="yc" id="ytch">—</div>
+      <div class="fmts" id="fmts">
+        <button class="on" data-fmt="mp3">MP3</button>
+        <button data-fmt="wav">WAV</button>
+        <button data-fmt="flac">FLAC</button>
+      </div>
+    </div>
+    <button class="grab" id="grabBtn">⬇ Grab &amp; Analyze</button>
+  </div>
+  <div class="queueWrap hide" id="queueList"></div>
+  <div class="sbar hide" id="sbar"><span class="sd" id="sdot"></span><span id="smsg">—</span></div>
+  <div class="progwrap hide" id="progwrap"><div class="progtrack"><div class="progfill" id="progfill"></div></div><div class="proglbl" id="proglbl">0%</div></div>
+  <div class="dz" id="dz">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+    <b>Drop audio or click to browse</b><small>MP3 · WAV · FLAC · OGG · M4A</small>
+  </div>
+  <input type="file" id="fin" accept="audio/*" style="display:none"/>
+  <div class="card hide" id="player">
+    <div class="pn" id="pname">—</div>
+    <div class="ww" id="ww"><canvas id="wave"></canvas><div class="pb" id="pb"></div></div>
+    <div class="tp">
+      <button class="plb" id="playbtn"><svg id="pico" width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg></button>
+      <span class="tt" id="tt">0:00/0:00</span>
+      <div class="sk" id="skbar"><div class="skf" id="skf"></div></div>
+      <svg id="vico" style="cursor:pointer;color:var(--m);flex-shrink:0" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+      <input type="range" class="vsl" id="vsl" min="0" max="100" value="85"/>
+    </div>
+    <div class="meters">
+      <div class="mrow"><span class="l">L</span><div class="t"><div class="f" id="mL"></div><div class="pk" id="pL"></div></div><span class="v" id="vL">-∞</span></div>
+      <div class="mrow"><span class="l">R</span><div class="t"><div class="f" id="mR"></div><div class="pk" id="pR"></div></div><span class="v" id="vR">-∞</span></div>
+      <div class="mss">
+        <div class="ms"><div class="a">LUFS</div><div class="b" id="xlufs">-∞</div></div>
+        <div class="ms"><div class="a">Short</div><div class="b" id="xshort">-∞</div></div>
+        <div class="ms"><div class="a">Peak</div><div class="b" id="xpeak">-∞</div></div>
+        <div class="ms"><div class="a">RMS</div><div class="b" id="xrms">-∞</div></div>
+        <div class="ms"><div class="a">DR</div><div class="b" id="xdr">—</div></div>
+      </div>
+      <div class="spl">SPECTRAL — LIVE</div>
+      <div class="sg">
+        <div class="sr"><span class="n">Sub</span><div class="t"><div class="f" id="s0"></div></div></div>
+        <div class="sr"><span class="n">Bass</span><div class="t"><div class="f" id="s1"></div></div></div>
+        <div class="sr"><span class="n">Low</span><div class="t"><div class="f" id="s2"></div></div></div>
+        <div class="sr"><span class="n">Mid</span><div class="t"><div class="f" id="s3"></div></div></div>
+        <div class="sr"><span class="n">Hi</span><div class="t"><div class="f" id="s4"></div></div></div>
+        <div class="sr"><span class="n">Air</span><div class="t"><div class="f" id="s5"></div></div></div>
+      </div>
+    </div>
+  </div>
+  <div id="results" class="hide">
+    <div class="rg">
+      <div class="rc"><div class="a">BPM</div><div class="b" id="xbpm">—</div></div>
+      <div class="rc"><div class="a">KEY</div><div class="b" id="xkey">—</div><div class="c" id="xmode">—</div></div>
+      <div class="rc"><div class="a">LENGTH</div><div class="b" id="xdur">—</div><div class="c">sec</div></div>
+    </div>
+    <div id="analysisTag" class="atag hide"></div>
+    <div id="keycands" class="hide"></div>
+    <div class="sec">CAMELOT</div><div id="camgrid" class="cg"></div>
+    <div class="sec">CHORDS</div><div id="chords" class="cl"></div>
+    <div class="sec">PITCH</div>
+    <div class="pr"><span class="pv" id="plbl">0</span><input type="range" id="psl" min="-6" max="6" value="0" step="1"/><span class="pk" id="pkey">—</span></div>
+    <button class="bexp" id="expBtn">⬇ Export WAV</button>
+    <div class="export-hint">After grabbing, drag from Chrome's download bar straight into FL Studio</div>
+    <div class="sec">NOTES</div>
+    <textarea class="nb" id="notesbox" placeholder="Lyrics, ideas…"></textarea>
+  </div>
+</div>
+
+<div class="pane" id="p1">
+  <div class="sec" style="border:none;margin-top:0">METRONOME</div>
+  <div class="mn" id="metnum">120</div>
+  <div class="mb" id="metbeat"><div class="bd"></div><div class="bd"></div><div class="bd"></div><div class="bd"></div></div>
+  <input type="range" id="metsl" min="40" max="220" value="120" step="1" style="width:100%;margin:4px 0"/>
+  <div class="rr"><button class="bp" id="metbtn">Start</button><select id="metsig" class="sel"><option value="4">4/4</option><option value="3">3/4</option><option value="2">2/4</option><option value="6">6/8</option></select></div>
+  <div class="sec">TAP BPM</div>
+  <button class="tb2" id="tapbtn">TAP</button>
+  <div class="tn" id="tapn">—</div>
+  <div class="tc" id="tapc">tap at least 4 times</div>
+  <div class="sec">SCALE REFERENCE</div>
+  <div class="rr" style="margin-bottom:6px"><select id="rk" class="sel"><option>C</option><option>C#</option><option>D</option><option>D#</option><option>E</option><option>F</option><option>F#</option><option>G</option><option>G#</option><option>A</option><option>A#</option><option>B</option></select><select id="rm" class="sel"><option value="major">Major</option><option value="minor">Minor</option></select></div>
+  <div id="rout"></div>
+</div>
+
+<div class="pane" id="p2">
+  <input type="search" id="hsrch" class="sinp" placeholder="Search…"/>
+  <div id="hlist"><div class="he">No history yet</div></div>
+  <button class="bc" id="clearBtn">Clear All</button>
+</div>
+
+<div class="pane" id="p3">
+  <div class="sec" style="border:none;margin-top:0">DOWNLOAD QUEUE</div>
+  <div class="set-row">
+    <div class="set-info">
+      <div class="set-name">Auto-clear completed</div>
+      <div class="set-desc">Completed and failed downloads disappear from the queue after this much time. Active downloads are never auto-cleared.</div>
+    </div>
+    <select id="autoclear-sel" class="sel" onchange="setQueueAutoclear(this.value)">
+      <option value="0">Off</option>
+      <option value="1">1 hour</option>
+      <option value="12">12 hours</option>
+      <option value="24" selected>24 hours</option>
+      <option value="72">72 hours</option>
+    </select>
+  </div>
+  <div class="sec">ABOUT</div>
+  <div class="set-row">
+    <div class="set-info">
+      <div class="set-name">Freq.Phull Extension</div>
+      <div class="set-desc">v4.1.0 — Cynphull / Hood Knights<br/>Connects to the local desktop engine on 127.0.0.1:47891. Start the desktop app to use download + analyze.</div>
+    </div>
+  </div>
+</div>
+
+</div>
+<div id="dragGhost" style="position:fixed;top:-9999px;left:-9999px;z-index:-1;width:200px;height:48px;background:linear-gradient(135deg,rgba(18,18,18,.95),rgba(28,28,28,.92));border:1px solid rgba(255,255,255,.12);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.5);display:flex;align-items:center;gap:8px;padding:0 10px;pointer-events:none">
+  <canvas width="90" height="30" style="width:90px;height:30px;border-radius:3px;flex-shrink:0"></canvas>
+  <div style="display:flex;flex-direction:column;gap:1px;min-width:0">
+    <div class="dg-name" style="font-size:10px;font-weight:600;color:rgba(255,255,255,.85);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:80px">audio</div>
+    <div style="font-size:8px;color:rgba(255,255,255,.35);letter-spacing:.08em;text-transform:uppercase">WAV Export</div>
+  </div>
+</div>
+
+<script src="panel.js"></script>
+</body>
+</html>
