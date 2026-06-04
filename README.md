@@ -1,8 +1,22 @@
 # Freq.Phull
 
+[![Latest Release](https://img.shields.io/github/v/release/CodePhull/FreqPhull-realease?style=for-the-badge&color=7c3aed&label=Latest)](https://github.com/CodePhull/FreqPhull-realease/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/CodePhull/FreqPhull-realease/total?style=for-the-badge&color=22c55e)](https://github.com/CodePhull/FreqPhull-realease/releases)
+[![Platform](https://img.shields.io/badge/Windows-10%2B-blue?style=for-the-badge)](https://github.com/CodePhull/FreqPhull-realease/releases/latest)
+
 **Local-first beat toolkit for music producers.** Download tracks from YouTube, analyze BPM/key/loudness, separate stems with AI, master with reference matching, organize a sample library — all running on your own machine. No subscriptions, no upload limits, no sending your audio to someone else's server.
 
 Built by **Cynphull / Hood Knights** ©.
+
+---
+
+## ⬇️ Download
+
+### 👉 **[Download the latest installer](https://github.com/CodePhull/FreqPhull-realease/releases/latest)**
+
+Go to the **[Releases page](https://github.com/CodePhull/FreqPhull-realease/releases/latest)** and grab `Freq.Phull-Setup-x.x.x.exe`. That's all you need — don't clone the repository unless you want to build from source.
+
+> **Heads up:** You're on the source-code page right now. The actual app is in [**Releases**](https://github.com/CodePhull/FreqPhull-realease/releases/latest) (link on the right sidebar of the repo).
 
 ---
 
@@ -23,8 +37,8 @@ A companion **Chrome extension** lets you grab + analyze YouTube tracks straight
 
 ## Install (end users)
 
-1. Download the latest `Freq.Phull-Setup-x.x.x.exe` from the [Releases](https://github.com/CodePhull/FreqPhull-realease/releases) page.
-2. Run it. Windows SmartScreen may warn because the build isn't code-signed — click **More info -> Run anyway**.
+1. Download `Freq.Phull-Setup-x.x.x.exe` from the [Releases page](https://github.com/CodePhull/FreqPhull-realease/releases/latest).
+2. Run it. Windows SmartScreen may warn because the build isn't code-signed — click **More info → Run anyway**.
 3. On first launch the app installs its AI engines (Python packages for separation/analysis). This is a one-time setup and needs an internet connection.
 
 ### If downloads or analysis fail immediately
@@ -35,34 +49,19 @@ The app bundles `yt-dlp.exe` and `ffmpeg.exe`. Windows Defender sometimes quaran
 2. Add the Freq.Phull install folder as an exclusion.
 3. Restart the app.
 
+### If AI engines setup fails with "PyTorch can't load its native libraries" or `WinError 127`
+
+This means Windows is missing a system component that PyTorch depends on. The fix is fast:
+
+1. Download the **Visual C++ 2015-2022 Redistributable (x64)** from Microsoft: https://aka.ms/vs/17/release/vc_redist.x64.exe
+2. Run the installer (takes ~30 seconds).
+3. Re-run Freq.Phull's engine setup.
+
+If the error still appears after installing VC++ Redist, add these folders to your antivirus exclusions and retry:
+- `%LOCALAPPDATA%\Programs\Python`
+- `%USERPROFILE%\.cache`
+
 ---
-
-## Build from source (developers)
-
-### Requirements
-
-- **Node.js 18.x** (project tested on 18.18.2)
-- **Python 3.11** on PATH (for the analysis/separation engines)
-- Windows x64 (the build targets NSIS + portable for Windows)
-
-### Steps
-
-```bash
-git clone https://github.com/CodePhull/FreqPhull-realease.git
-cd FreqPhull-realease
-npm install
-npm run build          # NSIS installer + portable, output in dist/
-```
-
-Other scripts:
-
-```bash
-npm start              # run in dev (electron .)
-npm run build-portable # portable .exe only
-npm run check          # run prebuild integrity checks
-```
-
-The bundled binaries (`bin/yt-dlp.exe`, `bin/ffmpeg.exe`) are not committed to the repo. Run `Download-Binaries.bat` to fetch them before building, or place your own copies in `bin/`.
 
 ---
 
@@ -70,25 +69,6 @@ The bundled binaries (`bin/yt-dlp.exe`, `bin/ffmpeg.exe`) are not committed to t
 
 The app uses [electron-updater](https://www.electron.build/auto-update) pointed at this repo's GitHub Releases. On launch it checks for a newer published release and offers to download + install it.
 
-### Publishing a new release (maintainers)
-
-1. Bump `"version"` in `package.json`.
-2. Create a GitHub Personal Access Token with `repo` scope: https://github.com/settings/tokens
-3. Set it as an environment variable:
-   ```powershell
-   [Environment]::SetEnvironmentVariable("GH_TOKEN", "ghp_your_token", "User")
-   ```
-   Restart your terminal so the variable is picked up.
-4. Build + publish:
-   ```bash
-   npx electron-builder --win --x64 --publish always
-   ```
-
-This uploads the installer, its `.blockmap`, and `latest.yml` to a new GitHub release. `latest.yml` is the file electron-updater reads to detect updates — without it, auto-update won't work.
-
-> **Note:** the repo name keeps the original `FreqPhull-realease` spelling. The `publish` block in `package.json` must match it exactly.
-
----
 
 ## Architecture
 

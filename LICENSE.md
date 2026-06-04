@@ -1,6 +1,6 @@
 # Freq.Phull License
 
-**Copyright © Real General · Hood Knights ©. All rights reserved.**
+**Copyright © Cynphull · Hood Knights ©. All rights reserved.**
 
 This software, including but not limited to its source code, compiled
 binaries, user interface designs, brand assets (Hood Knights logo and
@@ -65,7 +65,7 @@ deadlines, or commercial loss. Use at your own risk.
 ## Contact
 
 For licensing inquiries, partnership requests, or to report violations of
-the terms above, contact Real General through the Hood Knights brand.
+the terms above, contact the maintainer through the Hood Knights brand, or open an issue on the GitHub repository.
 
 ---
 

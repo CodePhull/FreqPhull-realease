@@ -1,5 +1,5 @@
 // Freq.Phull integrity verification
-// Copyright © Real General · Hood Knights — all rights reserved.
+// Copyright © Cynphull · Hood Knights — all rights reserved.
 //
 // Verifies that critical app files match the SHA-256 hashes recorded at
 // build time. Tampered or modified files cause the engine layer to refuse

@@ -1,6 +1,6 @@
 # Freq.Phull — Patch Notes
 
-> Real General · Hood Knights ©
+> Cynphull · Hood Knights ©
 > Solo-developed by Cynphull
 
 A chronological record of every significant change since the BPM detector
@@ -463,4 +463,4 @@ everything else has stood on since.
 
 ---
 
-*All work by Real General · Hood Knights ©*
+*All work by Cynphull · Hood Knights ©*

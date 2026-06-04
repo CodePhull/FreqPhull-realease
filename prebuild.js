@@ -65,7 +65,7 @@ if (issues.length) {
 // key_model.pkl is REQUIRED — it's the trained MLP that drives the primary
 // path of detect_key() in analyze.py. Without it, detection falls back to
 // the algorithmic Krumhansl voting, which is functional but lower accuracy
-// on edge cases. Real General has decided accuracy is non-negotiable, so
+// on edge cases. Cynphull has decided accuracy is non-negotiable, so
 // the file ships in every patch zip going forward and the build aborts if
 // it's missing.
 const aux = [

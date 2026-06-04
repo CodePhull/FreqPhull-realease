@@ -395,6 +395,58 @@ try {
 }
 
 # ============================================================================
+# Visual C++ Redistributable preflight check
+# ============================================================================
+# PyTorch's CPU wheels are compiled against MSVC and dynamically link against
+# the Visual C++ 2015-2022 Redistributable. Without it, torch_cpu.dll and
+# c10.dll exist on disk but can't load (WinError 127 — "specified procedure
+# not found"). Detecting this before the 250MB pytorch download saves the
+# user ~5 minutes of retries.
+#
+# The runtime is installed as MSVCP140.dll + VCRUNTIME140.dll + others into
+# System32. We check the registry key the installer creates, which is the
+# canonical way to detect the redist independent of file presence.
+EmitStatus "checking_vcredist" 20 "Checking Visual C++ runtime..."
+$vcRedistFound = $false
+$vcRedistVersion = $null
+try {
+    # The 14.x line covers VC++ 2015, 2017, 2019, and 2022 (all binary-compatible).
+    $vcKey = "HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64"
+    if (Test-Path $vcKey) {
+        $vcProp = Get-ItemProperty -Path $vcKey -ErrorAction Stop
+        if ($vcProp.Installed -eq 1) {
+            $vcRedistFound = $true
+            $vcRedistVersion = "$($vcProp.Major).$($vcProp.Minor).$($vcProp.Bld)"
+            Log "VC++ Redistributable detected: $vcRedistVersion"
+        }
+    }
+    # Older registry location used by some VC++ 2017 versions.
+    if (-not $vcRedistFound) {
+        $vcKeyAlt = "HKLM:\SOFTWARE\Wow6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\x64"
+        if (Test-Path $vcKeyAlt) {
+            $vcProp = Get-ItemProperty -Path $vcKeyAlt -ErrorAction Stop
+            if ($vcProp.Installed -eq 1) {
+                $vcRedistFound = $true
+                $vcRedistVersion = "$($vcProp.Major).$($vcProp.Minor).$($vcProp.Bld) (alt key)"
+                Log "VC++ Redistributable detected via alt key: $vcRedistVersion"
+            }
+        }
+    }
+} catch {
+    Log "VC++ Redist check threw: $($_.Exception.Message)"
+}
+
+if (-not $vcRedistFound) {
+    # Don't fail outright — some installs work without the registry key
+    # being detectable, and PyTorch's import will still verify at the end.
+    # Just log a warning and tell the user what to do if pytorch fails next.
+    Log "WARN: Visual C++ 2015-2022 Redistributable not detected. PyTorch may fail to load."
+    EmitStatus "vcredist_missing" 20 "VC++ runtime not detected — proceeding, but may fail" "If PyTorch install fails, install https://aka.ms/vs/17/release/vc_redist.x64.exe and retry"
+} else {
+    EmitStatus "vcredist_ok" 21 "Visual C++ runtime OK" "$vcRedistVersion"
+}
+
+# ============================================================================
 # Step 3: Install PyTorch + torchaudio (CPU)
 # ============================================================================
 # We install torch and torchaudio TOGETHER from the same PyTorch index. They
@@ -425,22 +477,46 @@ if (-not $torchInstalled) {
     # on flaky residential WiFi. The retry is cheap when it works the first
     # time (the loop exits immediately) and ~5 minutes amortized when it
     # doesn't.
+    #
+    # SPECIAL CASE: WinError 127 ("the specified procedure could not be
+    # found") is NOT a network problem — it's a DLL dependency mismatch.
+    # The torchaudio .pyd loaded but couldn't find a function in c10.dll
+    # or torch_cpu.dll. Two known causes:
+    #   1. Missing/old Visual C++ 2015-2022 Redistributable
+    #   2. Stale broken install from a previous attempt that pip won't
+    #      replace because it thinks the package is already there
+    # Plain retry won't fix either, so when we see WinError 127 we
+    # force-uninstall + purge the pip cache before the next attempt.
     $maxAttempts = 3
     $attempt = 0
     $succeeded = $false
+    $sawWinError127 = $false
     while ($attempt -lt $maxAttempts -and -not $succeeded) {
         $attempt++
         try {
             if ($attempt -gt 1) {
                 EmitStatus "installing_pytorch_retry" 22 "PyTorch install retry $attempt of $maxAttempts..." "Previous attempt failed; retrying"
                 Start-Sleep -Seconds 5
+                # If a previous attempt died with WinError 127, the existing
+                # files on disk are broken and pip will skip reinstalling
+                # them. Force-clean before retrying so the next install
+                # writes fresh files.
+                if ($sawWinError127) {
+                    Log "Detected WinError 127 — uninstalling stale torch/torchaudio + purging cache before retry"
+                    Invoke-Py -m pip uninstall -y torch torchaudio torchvision 2>&1 | ForEach-Object { Log "[uninstall] $_" }
+                    Invoke-Py -m pip cache purge 2>&1 | ForEach-Object { Log "[cache] $_" }
+                }
             }
             # Install both at once - guarantees compatible versions.
             # --retries 5 also handles within-pip transient errors.
-            Invoke-Py -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu --retries 5 --timeout 120 --quiet 2>&1 | ForEach-Object { Log "[torch] $_" }
+            # --force-reinstall on attempt 2+ ensures we overwrite any
+            # corrupt files left behind.
+            $forceFlag = if ($attempt -gt 1) { "--force-reinstall" } else { "" }
+            Invoke-Py -m pip install torch torchaudio $forceFlag --index-url https://download.pytorch.org/whl/cpu --retries 5 --timeout 120 --quiet 2>&1 | ForEach-Object { Log "[torch] $_" }
             if ($LASTEXITCODE -eq 0) {
                 # Re-verify post-install — the pip install can return 0 but
-                # leave a broken install if a wheel was corrupted in transit.
+                # leave a broken install if a wheel was corrupted in transit
+                # or if a DLL dependency is missing system-wide.
                 $reverify = Invoke-Py -c "import torch, torchaudio; t=torch.tensor([1.0]); print('OK', torch.__version__, torchaudio.__version__)" 2>&1
                 if ("$reverify" -match "^OK ") {
                     $succeeded = $true
@@ -448,6 +524,15 @@ if (-not $torchInstalled) {
                     break
                 }
                 Log "Pytorch install attempt ${attempt}: verify failed: $reverify"
+                # WinError 127 detection: the message comes through as
+                # "[WinError 127]" in the captured output regardless of
+                # the user's system locale (the number is always English
+                # even when the description is localized e.g. French
+                # "La procédure spécifiée est introuvable").
+                if ("$reverify" -match "WinError 127" -or "$reverify" -match "specified procedure could not be found" -or "$reverify" -match "proc.dure sp.cifi.e est introuvable") {
+                    $sawWinError127 = $true
+                    Log "WinError 127 detected — will force-uninstall before next retry"
+                }
             } else {
                 Log "Pytorch install attempt ${attempt}: pip exit $LASTEXITCODE"
             }
@@ -456,7 +541,14 @@ if (-not $torchInstalled) {
         }
     }
     if (-not $succeeded) {
-        EmitError "PyTorch install failed after $maxAttempts attempts" "Check %TEMP%\freqphull-setup.log for details. Common causes: flaky network, full disk, or antivirus blocking python.exe."
+        # Pick the right error message based on what we actually saw.
+        # WinError 127 = DLL issue → point at VC++ Redistributable.
+        # Otherwise → generic network/AV message.
+        if ($sawWinError127) {
+            EmitError "PyTorch can't load its native libraries (WinError 127)" "This usually means the Visual C++ 2015-2022 Redistributable (x64) is missing or outdated. Download and install it from: https://aka.ms/vs/17/release/vc_redist.x64.exe — then re-run Freq.Phull's setup. If it still fails after installing VC++ Redist, check %TEMP%\freqphull-setup.log and consider adding C:\Users\$($env:USERNAME)\AppData\Local\Programs\Python and ~\.cache to your antivirus exclusions."
+        } else {
+            EmitError "PyTorch install failed after $maxAttempts attempts" "Check %TEMP%\freqphull-setup.log for details. Common causes: flaky network, full disk, antivirus blocking python.exe, or missing Visual C++ Redistributable (https://aka.ms/vs/17/release/vc_redist.x64.exe)."
+        }
     }
 }
 
