@@ -37,12 +37,58 @@ The app bundles `yt-dlp.exe` and `ffmpeg.exe`. Windows Defender sometimes quaran
 
 ---
 
+## Build from source (developers)
+
+### Requirements
+
+- **Node.js 18.x** (project tested on 18.18.2)
+- **Python 3.11** on PATH (for the analysis/separation engines)
+- Windows x64 (the build targets NSIS + portable for Windows)
+
+### Steps
+
+```bash
+git clone https://github.com/CodePhull/FreqPhull-realease.git
+cd FreqPhull-realease
+npm install
+npm run build          # NSIS installer + portable, output in dist/
+```
+
+Other scripts:
+
+```bash
+npm start              # run in dev (electron .)
+npm run build-portable # portable .exe only
+npm run check          # run prebuild integrity checks
+```
+
+The bundled binaries (`bin/yt-dlp.exe`, `bin/ffmpeg.exe`) are not committed to the repo. Run `Download-Binaries.bat` to fetch them before building, or place your own copies in `bin/`.
+
 ---
 
 ## Auto-updates
 
 The app uses [electron-updater](https://www.electron.build/auto-update) pointed at this repo's GitHub Releases. On launch it checks for a newer published release and offers to download + install it.
 
+### Publishing a new release (maintainers)
+
+1. Bump `"version"` in `package.json`.
+2. Create a GitHub Personal Access Token with `repo` scope: https://github.com/settings/tokens
+3. Set it as an environment variable:
+   ```powershell
+   [Environment]::SetEnvironmentVariable("GH_TOKEN", "ghp_your_token", "User")
+   ```
+   Restart your terminal so the variable is picked up.
+4. Build + publish:
+   ```bash
+   npx electron-builder --win --x64 --publish always
+   ```
+
+This uploads the installer, its `.blockmap`, and `latest.yml` to a new GitHub release. `latest.yml` is the file electron-updater reads to detect updates — without it, auto-update won't work.
+
+> **Note:** the repo name keeps the original `FreqPhull-realease` spelling. The `publish` block in `package.json` must match it exactly.
+
+---
 
 ## Architecture
 

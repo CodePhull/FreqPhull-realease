@@ -7912,6 +7912,13 @@ function renderSettings() {
     </div>
     <div class="setting-row">
       <div class="setting-info">
+        <div class="setting-name">Check for updates</div>
+        <div class="setting-desc" id="update-check-desc">Manually check GitHub for a newer release. Updates download in the background and prompt to install when ready. The app also checks automatically every 4 hours.</div>
+      </div>
+      <button class="btn sm" id="btn-check-updates" onclick="manualCheckForUpdates()">🔄 Check now</button>
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
         <div class="setting-name">Force CPU-only for stem separation</div>
         <div class="setting-desc">Skip GPU acceleration even when a CUDA GPU is available. Use this on low-VRAM machines (under 4GB) or to keep the GPU free for DAW plugins / other apps. Slower but lower system load.</div>
       </div>
@@ -7957,10 +7964,26 @@ function renderSettings() {
     <div class="setting-row" style="border:none">
       <div class="setting-info">
         <div class="setting-name">Freq.Phull</div>
-        <div class="setting-desc">v0.0.1 — ${t('by')} Cynphull / Hood Knights</div>
+        <div class="setting-desc" id="about-version-desc">${t('by')} Cynphull / Hood Knights</div>
       </div>
     </div>
   `;
+  // Async-fetch current app version and patch the About row.
+  // window.api.updater.getStatus() returns {currentVersion, autoDownload} in
+  // packaged builds, or {status:'dev'} in unpackaged. We display the version
+  // dynamically instead of hardcoding so releases don't drift out of sync
+  // with the displayed string.
+  if (window.api && window.api.updater) {
+    window.api.updater.getStatus().then(s => {
+      const el = document.getElementById('about-version-desc');
+      if (!el) return;
+      if (s && s.currentVersion) {
+        el.textContent = 'v' + s.currentVersion + ' — ' + t('by') + ' Cynphull / Hood Knights';
+      } else {
+        el.textContent = 'Development build — ' + t('by') + ' Cynphull / Hood Knights';
+      }
+    }).catch(() => {});
+  }
   // Async-fetch the engines status to update the row
   fetch(API + '/engines-status').then(r => r.json()).then(j => {
     const el = document.getElementById('engines-status-desc');
@@ -8288,6 +8311,65 @@ async function cleanTempFiles() {
     showAppNotification('✕ ' + e.message, 'err');
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '🧹 Clean now'; }
+  }
+}
+
+// ── Manual update check (Settings button) ───────────────────────────────
+// Triggered by the "Check now" button. Calls into the main-process updater
+// which pings GitHub's latest.yml. The existing onAvailable/onNone/onError
+// event handlers wired in _setupUpdater() do the heavy lifting — they pop
+// the update banner if a new version is found, or log "up to date"
+// silently. This handler just adds an explicit foreground toast so the
+// user gets immediate feedback on a button they clicked (the silent
+// background check is too quiet to feel responsive).
+//
+// In dev / unpackaged builds, the updater bridge returns {ok:false,
+// reason:'dev'} and we surface that clearly instead of swallowing it.
+async function manualCheckForUpdates() {
+  const btn = document.getElementById('btn-check-updates');
+  const desc = document.getElementById('update-check-desc');
+  const origDesc = desc ? desc.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Checking…'; }
+  try {
+    if (!window.api || !window.api.updater) {
+      throw new Error('Update API unavailable in this build');
+    }
+    const result = await window.api.updater.check();
+    if (!result || result.ok === false) {
+      // dev mode, or genuine error
+      if (result && result.reason === 'dev') {
+        showAppNotification('Updates only work in packaged builds', 'warn');
+        if (desc) desc.textContent = 'Updates only work in the packaged (installed) build, not in dev mode.';
+      } else {
+        const errMsg = (result && result.error) || 'Update check failed';
+        showAppNotification('✕ ' + errMsg, 'err');
+        if (desc) desc.textContent = '✕ ' + errMsg;
+      }
+      return;
+    }
+    // result.version is set when an update IS available. If it matches the
+    // current version OR was not returned at all, we're up to date.
+    // The event handlers (onAvailable/onNone) already fired by this point;
+    // onAvailable pops the banner automatically. We just surface a toast.
+    const status = await window.api.updater.getStatus();
+    const current = (status && status.currentVersion) || 'current';
+    if (result.version && result.version !== current) {
+      const msg = '✓ Update available: v' + result.version + ' (you have v' + current + ')';
+      showAppNotification(msg, 'done');
+      if (desc) desc.textContent = msg + ' — see the banner at the top of the app.';
+    } else {
+      const msg = '✓ You\'re up to date (v' + current + ')';
+      showAppNotification(msg, 'ok');
+      if (desc) desc.textContent = msg + '. The app also checks automatically every 4 hours.';
+      // After 5 seconds restore the original explainer so future clicks
+      // don't show stale "up to date" text from a previous session.
+      setTimeout(() => { if (desc) desc.textContent = origDesc; }, 8000);
+    }
+  } catch (e) {
+    showAppNotification('✕ ' + e.message, 'err');
+    if (desc) desc.textContent = '✕ ' + e.message;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 Check now'; }
   }
 }
 
