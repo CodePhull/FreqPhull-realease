@@ -63,7 +63,11 @@ If the error still appears after installing VC++ Redist, add these folders to yo
 
 ---
 
+<<<<<<< HEAD
 ---
+=======
+
+>>>>>>> f17e013462aca8d86637b9d1fe8a8eeafcc994d0
 
 ## Auto-updates
 
