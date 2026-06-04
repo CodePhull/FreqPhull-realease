@@ -63,22 +63,12 @@ If the error still appears after installing VC++ Redist, add these folders to yo
 
 ---
 
-<<<<<<< HEAD
 ---
-=======
-
->>>>>>> f17e013462aca8d86637b9d1fe8a8eeafcc994d0
 
 ## Auto-updates
 
 The app uses [electron-updater](https://www.electron.build/auto-update) pointed at this repo's GitHub Releases. On launch it checks for a newer published release and offers to download + install it.
 
-<<<<<<< HEAD
-=======
-
-
----
->>>>>>> f17e013462aca8d86637b9d1fe8a8eeafcc994d0
 
 ## Architecture
 
