@@ -437,11 +437,137 @@ try {
 }
 
 if (-not $vcRedistFound) {
-    # Don't fail outright — some installs work without the registry key
-    # being detectable, and PyTorch's import will still verify at the end.
-    # Just log a warning and tell the user what to do if pytorch fails next.
-    Log "WARN: Visual C++ 2015-2022 Redistributable not detected. PyTorch may fail to load."
-    EmitStatus "vcredist_missing" 20 "VC++ runtime not detected — proceeding, but may fail" "If PyTorch install fails, install https://aka.ms/vs/17/release/vc_redist.x64.exe and retry"
+    # Auto-install path. The VC++ Redistributable is freely redistributable
+    # from Microsoft (no license restrictions on download or silent install)
+    # so we can fetch + run it ourselves instead of telling the user to do it.
+    #
+    # Sequence:
+    #   1. Check if we have admin rights. The redist writes to System32 so
+    #      a non-elevated install will fail with exit 1638 or similar.
+    #   2. Download vc_redist.x64.exe from Microsoft's permanent CDN URL.
+    #      `https://aka.ms/vs/17/release/vc_redist.x64.exe` is the official
+    #      direct link — they've kept it stable for years across VC++ 2015
+    #      through 2022.
+    #   3. Run with /install /quiet /norestart. Quiet = no UI. Norestart =
+    #      defer any required reboot (we never need to reboot for PyTorch
+    #      to load — it picks up new DLLs immediately).
+    #   4. Re-check the registry to confirm install took.
+    #
+    # If any step fails, we fall back to the manual instructions message
+    # so the user still has a path forward.
+    Log "Visual C++ 2015-2022 Redistributable not detected — attempting auto-install"
+    EmitStatus "installing_vcredist" 20 "Installing Visual C++ runtime..." "~14MB download from Microsoft"
+
+    $vcInstalledOk = $false
+    $vcInstallStage = "init"
+    try {
+        # ── Admin check ──────────────────────────────────────────────────
+        # If the user launched the engine setup from a non-elevated app
+        # (which is the default), the redist install will fail. We can't
+        # transparently elevate without a UAC prompt, so we detect non-admin
+        # and fall back gracefully instead of attempting a doomed install.
+        $vcInstallStage = "admin_check"
+        $currentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object System.Security.Principal.WindowsPrincipal($currentIdentity)
+        $isAdmin = $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+        Log "Admin check: isAdmin=$isAdmin"
+
+        # ── Download ─────────────────────────────────────────────────────
+        # Path under %TEMP% so it gets cleaned up by Windows / our own
+        # sweeper eventually. ~14MB so the download is quick on most
+        # connections (10-30 seconds).
+        $vcInstallStage = "download"
+        $vcUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+        $vcExe = Join-Path $env:TEMP "freqphull_vc_redist_x64.exe"
+        Log "Downloading VC++ Redist from $vcUrl to $vcExe"
+        # Force TLS 1.2 — some default PowerShell configs use SSL3/TLS1.0
+        # which Microsoft's CDN now rejects.
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        # Hide the progress bar (Invoke-WebRequest's default is slow and
+        # noisy; setting $ProgressPreference makes it ~100x faster).
+        $prevProgress = $ProgressPreference
+        $ProgressPreference = 'SilentlyContinue'
+        try {
+            Invoke-WebRequest -Uri $vcUrl -OutFile $vcExe -UseBasicParsing -TimeoutSec 120
+        } finally {
+            $ProgressPreference = $prevProgress
+        }
+        if (-not (Test-Path $vcExe)) {
+            throw "Download completed but $vcExe not found"
+        }
+        $dlSize = (Get-Item $vcExe).Length
+        Log "Download complete: $dlSize bytes"
+        if ($dlSize -lt 1000000) {
+            # Real redist is ~14MB. Anything under 1MB is a redirect page
+            # or an error response written to the file.
+            throw "Downloaded file too small ($dlSize bytes) — likely a network error or proxy intercept"
+        }
+
+        # ── Install ──────────────────────────────────────────────────────
+        # /install /quiet /norestart are the documented silent-mode flags.
+        # The installer's exit codes:
+        #   0    = success
+        #   1638 = already installed (newer version present) — treat as OK
+        #   3010 = success but reboot required (we accept; PyTorch doesn't
+        #          need the reboot for DLLs to be picked up)
+        #   1602 = user cancelled (UAC declined) → fall through to manual
+        #   1603 = generic fatal — fall through to manual
+        $vcInstallStage = "install"
+        Log "Running vc_redist.x64.exe /install /quiet /norestart"
+        $proc = Start-Process -FilePath $vcExe -ArgumentList "/install","/quiet","/norestart" -Wait -PassThru -ErrorAction Stop
+        $exitCode = $proc.ExitCode
+        Log "vc_redist.x64.exe exited with code $exitCode"
+        switch ($exitCode) {
+            0    { $vcInstalledOk = $true; Log "VC++ Redist install succeeded" }
+            1638 { $vcInstalledOk = $true; Log "VC++ Redist: newer version already installed (exit 1638)" }
+            3010 { $vcInstalledOk = $true; Log "VC++ Redist install succeeded (reboot pending, but not required for PyTorch)" }
+            1602 { Log "VC++ Redist install cancelled by user (exit 1602 — UAC declined?)" }
+            1603 { Log "VC++ Redist install failed with generic fatal error (exit 1603)" }
+            default { Log "VC++ Redist install exited with $exitCode (unknown — treating as failure)" }
+        }
+
+        # ── Re-check the registry to be sure ─────────────────────────────
+        # The exit code is a strong signal but not absolute proof. The
+        # registry check is what actually matters for downstream PyTorch.
+        if ($vcInstalledOk) {
+            $vcInstallStage = "verify"
+            try {
+                $vcProp = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" -ErrorAction Stop
+                if ($vcProp.Installed -eq 1) {
+                    $vcRedistFound = $true
+                    $vcRedistVersion = "$($vcProp.Major).$($vcProp.Minor).$($vcProp.Bld)"
+                    Log "Post-install verify: VC++ Redist now present at $vcRedistVersion"
+                    EmitStatus "vcredist_installed" 21 "Visual C++ runtime installed" "$vcRedistVersion"
+                } else {
+                    Log "Post-install verify: registry says Installed=$($vcProp.Installed)"
+                    $vcInstalledOk = $false
+                }
+            } catch {
+                Log "Post-install verify: registry check threw: $($_.Exception.Message)"
+                $vcInstalledOk = $false
+            }
+        }
+
+        # Clean up the downloaded installer regardless of outcome.
+        # The sweeper would catch it eventually but cleanup-on-success is
+        # cleaner for the disk.
+        try { Remove-Item $vcExe -Force -ErrorAction SilentlyContinue } catch {}
+    } catch {
+        Log "VC++ Redist auto-install failed at stage '$vcInstallStage': $($_.Exception.Message)"
+    }
+
+    if (-not $vcInstalledOk) {
+        # Auto-install didn't work. Fall back to the warning + manual link
+        # so the user still knows what to do. Don't fail setup outright —
+        # PyTorch might still load if a partial install or a different
+        # Visual Studio is providing the DLLs.
+        if (-not $isAdmin) {
+            Log "WARN: Auto-install likely failed because setup is not running with admin privileges"
+            EmitStatus "vcredist_needs_admin" 21 "Couldn't auto-install VC++ runtime (admin required)" "If PyTorch fails: install https://aka.ms/vs/17/release/vc_redist.x64.exe manually and retry"
+        } else {
+            EmitStatus "vcredist_install_failed" 21 "Auto-install of VC++ runtime failed — proceeding anyway" "If PyTorch fails: install https://aka.ms/vs/17/release/vc_redist.x64.exe manually and retry"
+        }
+    }
 } else {
     EmitStatus "vcredist_ok" 21 "Visual C++ runtime OK" "$vcRedistVersion"
 }

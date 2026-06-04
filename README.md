@@ -51,15 +51,13 @@ The app bundles `yt-dlp.exe` and `ffmpeg.exe`. Windows Defender sometimes quaran
 
 ### If AI engines setup fails with "PyTorch can't load its native libraries" or `WinError 127`
 
-This means Windows is missing a system component that PyTorch depends on. The fix is fast:
+PyTorch needs a Windows system component called Visual C++ Redistributable. **Freq.Phull now installs it automatically when missing** — so this should be rare. If you still hit it:
 
-1. Download the **Visual C++ 2015-2022 Redistributable (x64)** from Microsoft: https://aka.ms/vs/17/release/vc_redist.x64.exe
-2. Run the installer (takes ~30 seconds).
-3. Re-run Freq.Phull's engine setup.
-
-If the error still appears after installing VC++ Redist, add these folders to your antivirus exclusions and retry:
-- `%LOCALAPPDATA%\Programs\Python`
-- `%USERPROFILE%\.cache`
+1. **Most likely cause:** the auto-install needed admin rights and didn't have them. Right-click the Freq.Phull shortcut → **Run as administrator** → re-run engine setup.
+2. **Manual fallback:** download and install https://aka.ms/vs/17/release/vc_redist.x64.exe yourself (takes ~30 seconds), then re-run engine setup.
+3. **If it still fails:** add these folders to your antivirus exclusions and retry:
+   - `%LOCALAPPDATA%\Programs\Python`
+   - `%USERPROFILE%\.cache`
 
 ---
 
