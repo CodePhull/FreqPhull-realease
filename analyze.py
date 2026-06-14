@@ -1007,6 +1007,206 @@ def section_analysis(mono,sr):
                          'end_s':min(start_s+seg_dur,int(total_s)),'rms_db':round(rms_db,1)})
     return sections
 
+# ── Beat-switch detection (0.1.3) ────────────────────────────────────────────
+#
+# Type beats with a "beat switch" change instrumental mid-track: new BPM,
+# new key, new energy. One global BPM/key is misleading for those — the
+# producer needs per-section numbers.
+#
+# Pipeline:
+#   1. One STFT pass → per-second feature blocks: chroma12 (harmony),
+#      log-RMS (energy), spectral centroid (brightness), low-end ratio
+#      (808/bass weight), and flux density (rhythmic activity).
+#   2. "Checkerboard" novelty: at each block, cosine-distance the mean
+#      feature vector of the previous W seconds vs the next W seconds.
+#      A beat switch = both halves internally consistent but different
+#      from each other → sharp novelty peak. Gradual builds don't peak.
+#   3. Peak-pick with min 20s separation, edges excluded, adaptive
+#      threshold, max 4 switches (a 2-3 min type beat has 1, maybe 2).
+#   4. Run the EXISTING detect_bpm + detect_key on each section ≥ 12s.
+#   5. Validate: a boundary survives only if neighbors actually differ
+#      (BPM >5% apart half/double-aware, OR key change, OR harmony
+#      cosine < 0.80, OR energy jump > 5 dB). Pure-arrangement peaks
+#      (same beat, drums drop out) get merged away.
+#
+# Cost: the novelty pass is one STFT (~cheap). Per-section BPM/key only
+# runs when boundaries are actually found, so tracks without a switch
+# pay almost nothing extra.
+
+def _block_features(mono, sr):
+    """Per-1s feature blocks from a single STFT pass.
+    Returns (feat_matrix [n_blocks x 16], n_blocks)."""
+    n_fft = 4096
+    hop = 2048
+    f, t, Z = stft(mono, fs=sr, nperseg=n_fft, noverlap=n_fft - hop, padded=False)
+    mag = np.abs(Z)  # [bins x frames]
+    fps = sr / hop
+    blk = max(1, int(round(fps)))            # frames per 1s block
+    n_blocks = mag.shape[1] // blk
+    if n_blocks < 8:
+        return None, 0
+
+    # Chroma fold (80–5000 Hz)
+    freqs = f
+    chroma_map = np.zeros((12, len(freqs)), dtype=np.float32)
+    for i, fr in enumerate(freqs):
+        if fr < 80 or fr > 5000:
+            continue
+        pitch = 69 + 12 * np.log2(fr / 440.0)
+        chroma_map[int(round(pitch)) % 12, i] = 1.0
+
+    feats = np.zeros((n_blocks, 16), dtype=np.float32)
+    prev_frame = None
+    for b in range(n_blocks):
+        seg = mag[:, b * blk:(b + 1) * blk]                  # [bins x blk]
+        m = np.mean(seg, axis=1)                             # mean spectrum
+        tot = float(np.sum(m)) + 1e-10
+        chroma = chroma_map @ m
+        csum = float(np.sum(chroma)) + 1e-10
+        feats[b, 0:12] = chroma / csum                       # harmony
+        rms = float(np.sqrt(np.mean(seg ** 2)))
+        feats[b, 12] = np.log10(rms + 1e-10)                 # energy (log)
+        feats[b, 13] = float(np.sum(freqs * m) / tot) / (sr / 2)  # centroid 0..1
+        low = float(np.sum(m[freqs < 150])) / tot
+        feats[b, 14] = low                                   # 808/bass weight
+        flux = np.maximum(0, np.diff(seg, axis=1))           # rhythmic activity
+        feats[b, 15] = np.log10(float(np.mean(flux)) + 1e-10) if flux.size else 0.0
+    # Normalize non-chroma columns to comparable scale (z-score, clipped)
+    for c in (12, 13, 14, 15):
+        col = feats[:, c]
+        sd = float(np.std(col))
+        feats[:, c] = np.clip((col - float(np.mean(col))) / (sd + 1e-10), -3, 3) * 0.15
+    return feats, n_blocks
+
+
+def _novelty_curve(feats, W=8):
+    """Checkerboard novelty: cosine distance between mean(prev W blocks)
+    and mean(next W blocks) at every position."""
+    n = feats.shape[0]
+    nov = np.zeros(n, dtype=np.float32)
+    for i in range(W, n - W):
+        a = np.mean(feats[i - W:i], axis=0)
+        b = np.mean(feats[i:i + W], axis=0)
+        na, nb = np.linalg.norm(a), np.linalg.norm(b)
+        if na < 1e-9 or nb < 1e-9:
+            continue
+        nov[i] = 1.0 - float(np.dot(a, b) / (na * nb))
+    return nov
+
+
+def _bpm_really_differs(a, b):
+    """>5% apart, half/double-time aware (140 vs 70 is the SAME beat)."""
+    if not a or not b:
+        return False
+    ratios = (b / a, (b * 2) / a, b / (a * 2))
+    return min(abs(1.0 - r) for r in ratios) > 0.05
+
+
+def detect_beat_switches(mono, sr, force=False):
+    """Returns {detected, switches:[{time_s, confidence, changes}],
+    sections:[{start_s, end_s, bpm, key, mode, camelot, rms_db}]}."""
+    out = {'detected': False, 'switches': [], 'sections': []}
+    total_s = len(mono) / sr
+    if total_s < 50:           # nothing meaningful to switch between
+        return out
+    feats, n_blocks = _block_features(mono, sr)
+    if feats is None:
+        return out
+
+    nov = _novelty_curve(feats, W=8)
+    inner = nov[10:max(11, n_blocks - 10)]
+    if inner.size < 4:
+        return out
+    mu, sd = float(np.mean(inner)), float(np.std(inner))
+    # force=True (filename says "beat switch" / user clicked the button)
+    # lowers the bar — we EXPECT a switch, so surface the best candidate.
+    thresh = mu + (1.0 if force else 1.4) * sd
+    peaks, props = find_peaks(nov, height=thresh, distance=20)
+    peaks = [int(p) for p in peaks if 12 <= p <= total_s - 12]
+    if not peaks:
+        return out
+    # Strongest first, cap at 4, then back to chronological
+    peaks = sorted(sorted(peaks, key=lambda p: -nov[p])[:4])
+
+    # Sections between boundaries; merge fragments < 12s into neighbors
+    bounds = [0.0] + [float(p) for p in peaks] + [total_s]
+    spans = []
+    for i in range(len(bounds) - 1):
+        s0, s1 = bounds[i], bounds[i + 1]
+        if spans and (s1 - s0) < 12:
+            spans[-1] = (spans[-1][0], s1)
+        else:
+            spans.append((s0, s1))
+    if len(spans) < 2:
+        return out
+
+    def analyze_span(s0, s1):
+        seg = mono[int(s0 * sr):int(s1 * sr)]
+        rms_db = float(20 * np.log10(np.sqrt(np.mean(seg ** 2)) + 1e-10))
+        bpm = None
+        key = mode = None
+        try:
+            bpm = detect_bpm(seg, sr)
+        except Exception:
+            pass
+        try:
+            key, mode = detect_key(seg, sr)[0:2]
+        except Exception:
+            pass
+        # Mean chroma over the span — used for the harmony-change test
+        b0, b1 = int(s0), max(int(s0) + 1, int(s1))
+        ch = np.mean(feats[b0:min(b1, n_blocks), 0:12], axis=0)
+        return {'start_s': round(s0, 1), 'end_s': round(s1, 1), 'bpm': bpm,
+                'key': key, 'mode': mode,
+                'camelot': CAMELOT.get(f'{key} {mode}', '—') if key else '—',
+                'rms_db': round(rms_db, 1), '_chroma': ch}
+
+    sections = [analyze_span(s0, s1) for (s0, s1) in spans]
+
+    # Validate each boundary; merge neighbors that are actually the same beat
+    def differs(a, b):
+        changes = []
+        if _bpm_really_differs(a['bpm'], b['bpm']):
+            changes.append('bpm')
+        if a['key'] and b['key'] and (a['key'] != b['key'] or a['mode'] != b['mode']):
+            changes.append('key')
+        ca, cb = a['_chroma'], b['_chroma']
+        na, nb = np.linalg.norm(ca), np.linalg.norm(cb)
+        if na > 1e-9 and nb > 1e-9 and float(np.dot(ca, cb) / (na * nb)) < 0.80:
+            if 'key' not in changes:
+                changes.append('harmony')
+        if abs(a['rms_db'] - b['rms_db']) > 5:
+            changes.append('energy')
+        return changes
+
+    i = 0
+    while i < len(sections) - 1:
+        ch = differs(sections[i], sections[i + 1])
+        if not ch:
+            merged = analyze_span(sections[i]['start_s'], sections[i + 1]['end_s'])
+            sections[i:i + 2] = [merged]
+        else:
+            sections[i]['_changes_next'] = ch
+            i += 1
+    if len(sections) < 2:
+        return out
+
+    switches = []
+    for i in range(len(sections) - 1):
+        t_s = sections[i]['end_s']
+        blk_i = min(n_blocks - 1, max(0, int(t_s)))
+        conf = min(0.99, max(0.3, (float(nov[blk_i]) - mu) / (sd * 3 + 1e-10)))
+        switches.append({'time_s': t_s, 'confidence': round(conf, 2),
+                         'changes': sections[i].get('_changes_next', [])})
+    for sec in sections:
+        sec.pop('_chroma', None)
+        sec.pop('_changes_next', None)
+    out['detected'] = True
+    out['switches'] = switches
+    out['sections'] = sections
+    return out
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 def compute_mood_profile(lufs_i, lufs_st, crest, mode, bpm, sb):
     """Derive a 4-axis mood vector from existing analysis data.
@@ -1103,7 +1303,7 @@ def analyze_stem(wav_path):
         return {'bpm': None, 'key': None, 'error': str(e)}
 
 
-def analyze(wav_path):
+def analyze(wav_path, force_sections=False):
     channels,sr=read_wav(wav_path);mono=np.mean(channels,axis=0)
     lufs_i,lufs_st,lufs_mom,lra=compute_lufs(channels,sr)
     tp=true_peak_dbtp(channels,sr);bpm=detect_bpm(mono,sr)
@@ -1115,7 +1315,11 @@ def analyze(wav_path):
     rms=np.sqrt(np.mean(mono**2));ch_peak=max(np.max(np.abs(ch)) for ch in channels)
     crest=round(float(20*np.log10((ch_peak/rms)+1e-10)),1) if rms>1e-10 else 0.0
     mood=compute_mood_profile(lufs_i,lufs_st,crest,mode,bpm,sb)
-    return {'lufs_integrated':lufs_i,'lufs_short_term':lufs_st,'lufs_momentary':lufs_mom,
+    try:
+        beat_switch = detect_beat_switches(mono, sr, force=force_sections)
+    except Exception:
+        beat_switch = {'detected': False, 'switches': [], 'sections': []}
+    return {'beat_switch':beat_switch,'lufs_integrated':lufs_i,'lufs_short_term':lufs_st,'lufs_momentary':lufs_mom,
             'loudness_range':lra,'true_peak_dbtp':tp,'peak_dbfs':peak_dbfs,
             'crest_factor_db':crest,'bpm':bpm,'key':key,'mode':mode,
             'key_confidence':conf,'key_candidates':key_candidates,'key_sections':key_sections,
@@ -1130,14 +1334,20 @@ if __name__=='__main__':
     #   analyze.py --stem <wav>    — lightweight per-stem analysis (BPM + key only)
     args = sys.argv[1:]
     stem_mode = False
+    force_sections = False
     if args and args[0] == '--stem':
         stem_mode = True
+        args = args[1:]
+    if args and args[0] == '--sections':
+        # Lowers the beat-switch novelty threshold — used when the
+        # filename says "beat switch" or the user explicitly asks.
+        force_sections = True
         args = args[1:]
     if len(args)<1: print(json.dumps({'error':'Usage: analyze.py [--stem] <wav_path>'}));sys.exit(1)
     path=args[0]
     if not os.path.exists(path): print(json.dumps({'error':f'File not found: {path}'}));sys.exit(1)
     try:
-        result = analyze_stem(path) if stem_mode else analyze(path)
+        result = analyze_stem(path) if stem_mode else analyze(path, force_sections=force_sections)
         print(json.dumps(result))
     except ImportError as e:
         print(json.dumps({'error':f'Missing library: {e}','hint':'Run AI Transcribe Setup.exe'}));sys.exit(2)

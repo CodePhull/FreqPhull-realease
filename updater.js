@@ -25,6 +25,14 @@ const { ipcMain } = require('electron');
 let mainLog = console.log;     // overridden via setLog()
 let mainWin = null;            // overridden via setWindow()
 let manualCheckInProgress = false;
+// Last 'update-available' payload. IPC events fired before the renderer's
+// listeners attach are simply LOST — that's the "no update detected at
+// launch" bug: the 8s boot check could beat slow renderer boots (engine
+// setup, first-run, cold disk) and its event evaporated. We cache the
+// payload, replay it on every did-finish-load, and expose it via
+// updater:getPending so the renderer can also pull it on demand.
+let lastAvailableInfo = null;
+let bootCheckGotResult = false;
 
 function send(channel, payload) {
   // Renderer might not exist yet (tray-launched) or might be destroyed.
@@ -71,14 +79,18 @@ function setupUpdater(opts) {
   });
   autoUpdater.on('update-available', (info) => {
     mainLog('[updater] update available: ' + info.version);
-    send('update-available', {
+    bootCheckGotResult = true;
+    lastAvailableInfo = {
       version: info.version,
       releaseDate: info.releaseDate,
       releaseNotes: info.releaseNotes || '',
       releaseName: info.releaseName || ('Freq.Phull ' + info.version)
-    });
+    };
+    send('update-available', lastAvailableInfo);
   });
   autoUpdater.on('update-not-available', (info) => {
+    bootCheckGotResult = true;
+    lastAvailableInfo = null;
     mainLog('[updater] up to date: ' + (info && info.version));
     send('update-not-available', { version: info && info.version });
     manualCheckInProgress = false;
@@ -147,9 +159,25 @@ function setupUpdater(opts) {
   ipcMain.handle('updater:getStatus', () => {
     return {
       currentVersion: require('electron').app.getVersion(),
-      autoDownload: autoUpdater.autoDownload
+      autoDownload: autoUpdater.autoDownload,
+      pendingUpdate: lastAvailableInfo
     };
   });
+  // Pull-based fallback: the renderer asks "did a check already find
+  // something before my listeners attached?" — used right after
+  // _setupUpdater wires its event handlers.
+  ipcMain.handle('updater:getPending', () => lastAvailableInfo);
+
+  // Replay the cached event whenever the page (re)loads. Covers manual
+  // reloads, slow first paints, and any future multi-window setups.
+  if (mainWin && mainWin.webContents) {
+    mainWin.webContents.on('did-finish-load', () => {
+      if (lastAvailableInfo) {
+        mainLog('[updater] replaying cached update-available to renderer');
+        send('update-available', lastAvailableInfo);
+      }
+    });
+  }
 
   // ── Background checks ────────────────────────────────────────────────────
   // First check: 8s after app ready. Long enough for backend to start, the
@@ -171,6 +199,17 @@ function setupUpdater(opts) {
         mainLog('[updater] startup check failed: ' + e.message);
       }
     });
+    // One retry at 90s if the boot check never produced a result —
+    // machines that launch the app at login often don't have network
+    // for the first seconds, which used to mean no update prompt until
+    // the 4-hour interval.
+    setTimeout(() => {
+      if (bootCheckGotResult) return;
+      mainLog('[updater] boot check inconclusive — retrying once');
+      autoUpdater.checkForUpdates().catch(e => {
+        if (!isNoReleasesError(e)) mainLog('[updater] retry check failed: ' + e.message);
+      });
+    }, 90000);
   }, 8000);
 
   // Subsequent checks: every 4 hours while running. Long-running sessions

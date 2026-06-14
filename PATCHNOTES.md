@@ -9,6 +9,84 @@ along the way.
 
 ---
 
+## v0.2.1 (2026-06-13)
+
+**Desktop: Fetch auto-queues the download**
+- Pressing Fetch now adds the track to the download queue immediately, using the currently-selected format. The two-step (Fetch → pick format → Download) made sense back when Fetch was a preview, but in practice nearly every fetch ends in a download with the already-selected format — and the browser extension has been one-click since v4.1.0, so desktop now matches. Duplicate detection (queue + already-downloaded-this-session confirm) still runs.
+
+**Extension v4.1.5: UI no longer freezes while a track finishes loading**
+- When a single download completed, the panel blocked for several seconds decoding the audio + running in-browser BPM/key analysis inline — clicks on Grab during that window felt dead, which is what "impossible to load another track" felt like. The download slot is now released immediately when the file lands; the decode/analyze runs deferred (post-current-task), so a new Grab click registers and starts downloading instantly. Multi-track grabs no longer auto-load into the in-panel player at all (use the Open button on each row when you want one), matching how the desktop app behaves.
+
+**Beat-switch detection**
+- The analyzer now detects beat switches and reports per-section info. One STFT pass extracts per-second harmony (chroma), energy, brightness, bass weight, and rhythmic-activity features; a "checkerboard" novelty curve finds points where the track before and after genuinely differ (gradual builds don't trigger). Each detected section then gets its own full BPM + key/Camelot + energy analysis using the existing detectors.
+- Boundaries are validated: a switch only survives if neighbors actually differ — tempo >5% apart (half/double-time aware, 140≈70), key change, harmony shift, or >5 dB energy jump. Arrangement-only changes (same beat, drums drop out) get merged away. Max 4 switches, sections under 12s merge into neighbors.
+- Tracks whose filename contains "beat switch" / "beatswitch" / "beat-switch" automatically analyze in deep mode (lower detection threshold — we expect a switch, so the best candidate is surfaced).
+- New card on the Analyze tab: switch markers with timestamp, what changed, and confidence; a colored timeline; and per-section rows (time range, BPM, key + Camelot, dB). Clicking a section or timestamp seeks the Analyzer playback. When nothing is found at normal sensitivity, a "Scan harder" button re-runs the forced pass.
+- Tested end-to-end on synthetic two-beat audio: switch localized within 2s, per-section BPM/keys correct, clean negative on a uniform track. Notably, the single top-level BPM on the test file came out wrong (averaged across the switch) while section values were right — exactly the problem this fixes.
+- Cost: near-zero on tracks without a switch (per-section BPM/key only runs when boundaries are found).
+
+**Updater: launch detection fixed**
+- The startup update check fires 8s after boot, but IPC events sent before the renderer's listeners attach are silently lost — on slow boots (engine setup, cold disk) the "update available" event evaporated and no banner appeared until the 4-hour re-check. Three-layer fix: the main process now caches the last update-available payload, replays it on every page load, and exposes it via `updater:getPending` which the renderer pulls right after wiring its listeners.
+- Added a one-time retry 90s after an inconclusive boot check — apps launched at login often have no network for the first seconds.
+
+**Notifications no longer cover the update banner**
+- The update banner (top:48px, z-index 9000) and the toast stack (top:62px, z-index 9998) occupied the same corner — any toast drew on top of the banner and hid the Install button. The manual update check fires a toast immediately, so the collision was guaranteed. The toast stack now repositions itself below the banner whenever the banner is visible (animated slide), and the banner's z-index was raised above the stack as a final guarantee.
+
+## v0.1.1 (2026-06-12)
+
+**Watch folder** — new setting "Watch stockpile folder". A daemon monitors the stockpile root recursively; any audio file dropped in (Explorer, other apps, network) gets imported into the library, fingerprinted, and auto-matched. With Auto-send on, it's filed into the matched folder automatically. Files are adopted only after their size stabilizes (copy-in-progress safe); partials (.part/.ytdl), stem outputs, and already-known paths are ignored.
+
+**Server-side prefs** — new `prefs` table + `/prefs` endpoints. Stockpile root, auto-send, and watch-folder now live server-side, so the watcher works headlessly and **extension downloads honor Auto-send too** (previously desktop-only). Desktop mirrors its settings on boot and on change.
+
+**Separation queue** — queue any number of tracks for stem separation; jobs run serially with all current quality toggles. New queue card on the Separator tab (status per job, remove waiting items, clear finished). History batch-select gains a **🎛 Separate** action to queue every selected track at once.
+
+**yt-dlp self-update** — checks GitHub's latest release on boot + daily, swaps the bundled binary in place (old kept as .bak). New Settings row shows installed vs latest with a manual update button. System-wide installs are detected and left alone. Downloads stop silently dying when YouTube changes things.
+
+**Find similar (≈)** — new ≈ button on every History row. Blends audio-fingerprint similarity (45%), mood-vector cosine (30%), BPM proximity with half/double-time equivalence (15%), and key compatibility incl. relative major/minor (10%). Missing data redistributes weight, so partially-analyzed tracks still rank. Results modal with match %, reasons, preview, and open-in-Analyzer.
+
+**Auto-match refactor** — tag+commit logic extracted into one shared `autoMatchTrack()` used by the endpoint, the watcher, and auto-send; behavior identical, one code path.
+
+All new UI strings translated (EN/FR verified at 411/411 key parity); new `data-i18n` applier handles static HTML labels on language switch.
+
+
+## v0.1.0 (2026-06-11)
+
+**Traduction française complète / Full French translation pass**
+- Audited the entire UI for untranslated strings. The EN/FR dictionaries were in sync, but large parts of newer UI never went through the translation system at all — they were hardcoded English. Now translated (389 keys per language, verified 1:1 parity, every t() call resolves):
+  - Settings page: all 12 previously-hardcoded rows (Fix file locations, Clean temp files, Auto-send, Storage breakdown, Find duplicates, Check for updates, CPU-only, Write BPM & key, Auto-clear queue, AI Engines, Diagnose paths, View logs) including descriptions, buttons, and dropdown options.
+  - Storage Breakdown popup: title, subtitle, scan state, summary chips (total/tagged/free/missing/untagged-in-root), per-folder rows, and all four fix-action buttons + their confirm dialogs and notifications.
+  - Auto-organize popup: every state (scanning, no folders, no untagged, none matched, results summary), selection buttons, apply progress, result toast.
+  - Duplicate finder: backfill banner, group headers, KEEP/Delete labels, delete confirm, result toasts.
+  - Repair review popup title + "Apply all top matches".
+  - File-location repair and temp-clean confirm dialogs, progress button states, and result summaries.
+  - Update check messages, diagnose "Copy to clipboard", backend-offline notices, auto-send toggle notifications, "Sent to <folder>" toast.
+- Added three keys that were referenced in code but missing from both dictionaries (autoMatched, setupRequired, setupRun).
+- Fixed a latent crash: the duplicate finder's row renderer used a callback parameter named `t`, shadowing the translation function — any translation lookup inside it would have thrown. Renamed.
+- Language switch (Settings → EN/FR) applies to all of the above immediately; popups pick up the language when opened.
+
+
+## v0.0.9 (2026-06-11)
+
+**Mini player**
+- Fixed: clicking the mini player heart tagged the track into Favorites but the heart never turned red when the track was playing through the Analyzer (mirror mode). The UI update checked `globalPlayer.track`, which is empty in mirror mode — it now resolves the displayed track the same way the click handler does.
+- The heart also initializes correctly now: loading an already-favorited track into the mini player (either mode) shows a filled heart instead of an empty one until clicked.
+
+
+## v0.0.8 — patch 20 (2026-06-10)
+
+**Stem Separator**
+- Fixed crash on every Direct-mode run: `cannot access local variable 'stage1_5_time'`. Four pipeline variables were only initialized inside the vocal-isolation branch; Direct mode skipped it and crashed both the final timing report and — silently — the entire stem-bleed cleanup pass ("Stem-bleed cleanup skipped"). Direct-mode runs now get bleed cleanup again.
+
+**Stockpile / Storage**
+- Storage Breakdown is now actionable: "Locate missing files" (repair scan with review), "Remove dead entries" (dry-run count, then prunes DB rows whose file is gone — never touches files), "Import untagged files" (adopts orphan audio in the stockpile root into the library, skips stem outputs, then opens Auto-organize), and a direct "Auto-organize" shortcut.
+- New setting: **Auto-send to detected folder** — when a download matches a folder's artist seeds, the best match becomes the primary tag and the file is moved into `StockpileRoot/FolderName/` immediately.
+- New endpoints: `POST /stockpile/adopt-orphans`, `POST /history/prune-missing`; `POST /stockpile/tracks/:id/auto-match` accepts `{commit, stockpile_root}`.
+- Auto-organize now processes up to 1000 untagged tracks per pass (was 200).
+
+**UI**
+- Clicking the dimmed area outside any popup (Logs, Storage, Auto-organize, Duplicates, Diagnose, repair review, folder picker) now closes it; Esc works too. Root cause: the backdrop had `-webkit-app-region: drag`, which makes Electron swallow clicks entirely. First-run engine setup still requires explicit buttons.
+
+
 ## v0.0.1 — The Era of Patch 9 (current)
 
 ### Patch 13f — Improved BPM detector + stem waveforms

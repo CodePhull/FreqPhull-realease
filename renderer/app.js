@@ -27,6 +27,13 @@ let taps=[],volumeLevel=0.501,muted=false;
 
 // ── Stem separator state ──────────────────────────────────────────────────────
 let sepSourcePath = null;
+// Separator queue (0.1.1): jobs run serially through the existing
+// startSeparation() engine. Each entry: {id, path, name, status} with
+// status 'waiting'|'running'|'done'|'error'. Batch-select in History can
+// dump 10 tracks here and walk away.
+let sepQueue = [];
+let sepQueueRunning = false;
+let _sepQueueSeq = 1;
 let sepSourceName = null;
 let sepMode = '4';        // '4' or '6'
 let sepQuality = 'high';  // 'fast' | 'high' | 'ultra'
@@ -458,6 +465,18 @@ async function fetchInfo() {
     document.getElementById('vid-sub').textContent = [d.channel, d.duration ? fmt2time(d.duration) : ''].filter(Boolean).join(' · ');
     document.getElementById('vid-card').classList.remove('hidden');
     dlSt('Ready — choose a format and download', 'ok');
+
+    // ── Auto-queue (0.1.4) ────────────────────────────────────────
+    // Saves a second click: as soon as the info comes back, drop the
+    // track into the download queue using the currently-selected
+    // format. The user can still cancel from the queue if needed.
+    // We re-enable the Fetch button BEFORE calling startDownload so
+    // the input doesn't appear frozen if startDownload pops a confirm
+    // (e.g. duplicate-this-session dialog).
+    document.getElementById('btn-fetch').disabled = false;
+    // Fire-and-forget — startDownload handles its own UI feedback.
+    startDownload().catch(()=>{});
+    return;
   } catch(e) { dlSt('Error: ' + e.message, 'err'); }
   finally { document.getElementById('btn-fetch').disabled = false; }
 }
@@ -850,11 +869,25 @@ async function processDlQueue() {
     // about a feature they may not have set up yet).
     if (historyId) {
       try {
-        const am = await fetch(API + '/stockpile/tracks/' + historyId + '/auto-match', { method: 'POST' });
+        // "Auto-send to detected folder": when the setting is on, ask the
+        // server to also promote the best match to primary and move the
+        // file into place — one motion from download to organized.
+        const autoSend = localStorage.getItem('freqphull.autoSend') === '1';
+        const am = await fetch(API + '/stockpile/tracks/' + historyId + '/auto-match', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            commit: autoSend,
+            stockpile_root: (autoSend && stockpileFolder) ? stockpileFolder : undefined,
+          }),
+        });
         const amJ = await am.json();
-        if (amJ.tagged && amJ.tagged.length) {
+        if (amJ.committed && amJ.committed.moved) {
+          showAppNotification('📦 ' + t('sentTo') + ' ' + (amJ.committed.folder_name || ''), 'done');
+          refreshUIForAction('tag-changed', { historyId });
+        } else if (amJ.tagged && amJ.tagged.length) {
           const names = amJ.tagged.map(t => t.folder_name).join(', ');
-          showAppNotification('✓ ' + (t('autoMatched') || 'Auto-tagged into') + ': ' + names, 'ok');
+          showAppNotification('✓ ' + t('autoMatched') + ': ' + names, 'ok');
           // Refresh tag chips on the new history row
           refreshUIForAction('tag-changed', { historyId });
         }
@@ -938,8 +971,24 @@ let _notifStack = null;     // the container div
 let _notifPaused = false;   // hover-pause flag
 const _notifTimers = new WeakMap(); // toast el → { timeout, startedAt, remainingMs }
 
+// Keep the toast stack out of the update banner's face. Both live in the
+// top-right corner; the stack has the higher z-index, so without this it
+// covered the banner's Install/Later buttons whenever a toast fired (the
+// manual update check fires one immediately — guaranteed collision).
+function _repositionNotifStack() {
+  if (!_notifStack) return;
+  const banner = document.getElementById('update-banner');
+  const visible = banner && !banner.classList.contains('hidden') && !banner.classList.contains('out');
+  if (visible) {
+    const r = banner.getBoundingClientRect();
+    _notifStack.style.top = Math.round(r.bottom + 10) + 'px';
+  } else {
+    _notifStack.style.top = ''; // back to the CSS default (62px)
+  }
+}
+
 function _getNotifStack() {
-  if (_notifStack && _notifStack.isConnected) return _notifStack;
+  if (_notifStack && _notifStack.isConnected) { _repositionNotifStack(); return _notifStack; }
   _notifStack = document.createElement('div');
   _notifStack.id = 'app-notif-stack';
   _notifStack.className = 'app-notif-stack';
@@ -958,6 +1007,7 @@ function _getNotifStack() {
       _resumeNotifTimer(el);
     }
   });
+  _repositionNotifStack();
   return _notifStack;
 }
 
@@ -1561,12 +1611,42 @@ async function loadAudioBuffer(arrayBuf, name, histId) {
   }
 }
 
+let _lastAnalyzedPath = null;
+let _lastAnalyzedHistId = null;
+
 function setM(id, val, conf) { const el = document.getElementById(id); el.textContent = val; el.className = 'm-val'; document.getElementById(id+'-conf').style.width = conf||'80%'; }
 function setKeyM(note, mode, conf) { document.getElementById('key').textContent = note; document.getElementById('key').className = 'm-val'; document.getElementById('key-mode').textContent = mode; document.getElementById('key-conf').style.width = conf||'80%'; }
 
+// Seek the Analyzer playback to a section start. Two transports exist:
+// the Analyzer's own loaded element(s) and the mirroring global player —
+// nudge whichever is live.
+function seekAnalyzerTo(t_s) {
+  let done = false;
+  try {
+    if (typeof loaded !== 'undefined' && Array.isArray(loaded) && loaded.length) {
+      loaded.forEach(e => { try { e.audio.currentTime = t_s; done = true; } catch {} });
+    }
+  } catch {}
+  if (!done && typeof globalPlayer !== 'undefined' && globalPlayer && globalPlayer.audio) {
+    try { globalPlayer.audio.currentTime = t_s; done = true; } catch {}
+  }
+  if (!done) showAppNotification(t('bsLoadFirst'), 'info', null, 2500);
+}
+
+// Forced beat-switch pass (?deep=1 → lower novelty threshold). Used when
+// the normal pass found nothing but the user insists there's a switch.
+function reanalyzeDeepSections() {
+  if (!_lastAnalyzedPath) return;
+  showAppNotification('⚡ ' + t('bsForcing'), 'info', null, 3000);
+  runPythonAnalysis(_lastAnalyzedPath, _lastAnalyzedHistId, true);
+}
+
 // ── Python analysis engine ────────────────────────────────────────────────────
-function runPythonAnalysis(filePath, histId) {
+function runPythonAnalysis(filePath, histId, deep) {
   const params = new URLSearchParams({ path: filePath });
+  if (deep) params.set('deep', '1'); // beat-switch deep mode
+  _lastAnalyzedPath = filePath;      // for the manual re-detect button
+  _lastAnalyzedHistId = histId || null;
   const es = new EventSource(API + '/analyze?' + params);
 
   es.addEventListener('status', e => {
@@ -1691,7 +1771,8 @@ function applyAnalysisResult(result, histId) {
       </div>`;
     // Still save to history
     if (histId) {
-      fetch(API + '/history/' + histId + '/analysis', {
+      const notagsParam = (localStorage.getItem('freqphull.writeTags') === '0') ? '?notags=1' : '';
+      fetch(API + '/history/' + histId + '/analysis' + notagsParam, {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ bpm: currentBpm, key_note: currentKey, key_mode: currentMode })
       }).catch(()=>{});
@@ -1701,6 +1782,48 @@ function applyAnalysisResult(result, histId) {
   }
 
   const sb = result.spectral_balance || {};
+
+  // ── Beat switch card ─────────────────────────────────────────────
+  // Multi-section tracks get a timeline + per-section BPM/key/energy.
+  // One global BPM on a beat-switch track is a lie; this shows the truth.
+  let bsHTML = '';
+  const bs = result.beat_switch;
+  if (bs && bs.detected && bs.sections && bs.sections.length > 1) {
+    const dur = result.duration || bs.sections[bs.sections.length - 1].end_s || 1;
+    const COLORS = ['#6ab0ff', '#ffb84d', '#7ed982', '#d98bff', '#ff8585'];
+    const tl = bs.sections.map((sc, i) => {
+      const w = Math.max(2, ((sc.end_s - sc.start_s) / dur) * 100);
+      return `<div class="bs-tl-seg" style="width:${w}%;background:${COLORS[i % COLORS.length]}22;border-top:2px solid ${COLORS[i % COLORS.length]}" onclick="seekAnalyzerTo(${sc.start_s})" title="${fmt2time(sc.start_s)} – ${fmt2time(sc.end_s)}"></div>`;
+    }).join('');
+    const rows = bs.sections.map((sc, i) => `
+      <div class="bs-row" onclick="seekAnalyzerTo(${sc.start_s})">
+        <span class="bs-dot" style="background:${COLORS[i % COLORS.length]}"></span>
+        <span class="bs-name">${t('bsSection')} ${i + 1}</span>
+        <span class="bs-time">${fmt2time(sc.start_s)} – ${fmt2time(sc.end_s)}</span>
+        <span class="bs-chip">${sc.bpm ? Math.round(sc.bpm) + ' BPM' : '—'}</span>
+        <span class="bs-chip">${sc.key ? sc.key + ' ' + (sc.mode || '') + ' · ' + sc.camelot : '—'}</span>
+        <span class="bs-db">${sc.rms_db} dB</span>
+      </div>`).join('');
+    const marks = (bs.switches || []).map(sw => {
+      const ch = (sw.changes || []).map(c => t('bsChange_' + c)).join(' + ');
+      return `<div class="bs-switch-note">⚡ ${t('bsSwitchAt')} <b onclick="seekAnalyzerTo(${sw.time_s})" style="cursor:pointer;text-decoration:underline">${fmt2time(sw.time_s)}</b>${ch ? ' — ' + ch : ''} <span style="opacity:.6">(${Math.round(sw.confidence * 100)}%)</span></div>`;
+    }).join('');
+    bsHTML = `
+      <div class="bs-card">
+        <div class="bs-head">⚡ ${t('bsTitle')}</div>
+        ${marks}
+        <div class="bs-timeline">${tl}</div>
+        ${rows}
+      </div>`;
+  } else if (bs && !bs.detected && _lastAnalyzedPath) {
+    // Nothing found at the normal threshold — offer the forced pass.
+    bsHTML = `
+      <div class="bs-card" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+        <span style="font-size:12px;color:var(--hint)">${t('bsNone')}</span>
+        <button class="btn xs" onclick="reanalyzeDeepSections()">⚡ ${t('bsForceBtn')}</button>
+      </div>`;
+  }
+
   const sec = (result.sections || []).map(s =>
     `<div class="section-row">
       <span class="sec-lbl">${s.label}</span>
@@ -1718,6 +1841,7 @@ function applyAnalysisResult(result, histId) {
   };
 
   panel.innerHTML = `
+    ${bsHTML}
     <div class="pro-grid">
 
       <div class="pro-section">
@@ -1791,7 +1915,8 @@ function applyAnalysisResult(result, histId) {
 
   // Save to history
   if (histId) {
-    fetch(API + '/history/' + histId + '/analysis', {
+    const notagsParam = (localStorage.getItem('freqphull.writeTags') === '0') ? '?notags=1' : '';
+    fetch(API + '/history/' + histId + '/analysis' + notagsParam, {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ bpm: currentBpm, key_note: currentKey, key_mode: currentMode })
     }).catch(() => {});
@@ -2703,6 +2828,9 @@ function showAnalyzeMirror() {
   // Refresh on/off classes from current state (button might have been
   // re-rendered between sessions)
   if (typeof applyModeButtonStates === 'function') applyModeButtonStates();
+  // Heart reflects the displayed track's favorite state immediately —
+  // covers playing a track that was already favorited from History.
+  syncMiniFavHeart();
   // Wire seek handlers in mirror mode
   spFvSeekDragSetup();
   spFvVolumeDragSetup();
@@ -3617,6 +3745,60 @@ async function pickStockpileFolder() {
     localStorage.setItem('fp_stockpile', folder);
     const el = document.getElementById('stockpile-path');
     if (el) el.textContent = folder;
+    syncPrefsToServer();
+  }
+}
+
+// Push the prefs the SERVER needs to know about (watch-folder daemon,
+// auto-send for extension downloads). Fire-and-forget; server restarts
+// its watcher on every prefs POST.
+function syncPrefsToServer() {
+  try {
+    fetch(API + '/prefs', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        stockpile_root: stockpileFolder || '',
+        auto_send: localStorage.getItem('freqphull.autoSend') === '1' ? '1' : '0',
+        watch_folder: localStorage.getItem('freqphull.watchFolder') === '1' ? '1' : '0',
+      }),
+    }).catch(() => {});
+  } catch {}
+}
+
+function toggleWatchFolder(checked) {
+  localStorage.setItem('freqphull.watchFolder', checked ? '1' : '0');
+  syncPrefsToServer();
+  showAppNotification(checked ? t('watchOnNotif') : t('watchOffNotif'), 'info', null, 3000);
+}
+
+// yt-dlp self-update — settings row actions
+async function refreshYtdlpStatus() {
+  const el = document.getElementById('ytdlp-status-desc');
+  if (!el) return;
+  try {
+    const j = await fetch(API + '/ytdlp/status').then(r => r.json());
+    const inst = j.installed || '?';
+    const latest = j.latest;
+    if (latest && inst !== latest) el.textContent = 'v' + inst + ' → v' + latest + ' ' + t('ytdlpAvail');
+    else if (latest) el.textContent = 'v' + inst + ' — ' + t('ytdlpUpToDate');
+    else el.textContent = 'v' + inst;
+  } catch { el.textContent = t('backendOffline'); }
+}
+
+async function manualUpdateYtdlp() {
+  const btn = document.getElementById('btn-ytdlp-update');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ ' + t('checkingBtn'); }
+  try {
+    const j = await fetch(API + '/ytdlp/update', { method: 'POST' }).then(r => r.json());
+    if (j.lastResult === 'updated') showAppNotification('✓ yt-dlp → v' + j.installed, 'done');
+    else if (j.lastResult === 'up-to-date') showAppNotification('✓ ' + t('ytdlpUpToDate'), 'info');
+    else if (j.lastResult === 'system-install') showAppNotification(t('ytdlpSystem'), 'warn');
+    else showAppNotification('yt-dlp: ' + (j.lastResult || '?'), 'warn');
+  } catch (e) {
+    showAppNotification('✕ ' + e.message, 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '⬆ ' + t('btnCheckNow'); }
+    refreshYtdlpStatus();
   }
 }
 
@@ -3787,6 +3969,671 @@ async function bulkMoveSelected(mode) {
   }, 3000);
 }
 
+// ── Bulk operations on selected history rows ────────────────────────────
+// Each bulk handler walks selectedIds and dispatches one request per item
+// rather than building a single batch endpoint. Reasoning: the per-item
+// endpoints already handle every edge case (file-not-found, primary-tag
+// promotion, on-disk move on commit), and a batch endpoint would have to
+// re-implement all of that. The cost is N HTTP requests instead of 1, but
+// for typical selections (10-50 tracks) the total wall time is under a
+// second and we get the right behavior for free.
+//
+// All handlers do the same dance: snapshot selectedIds, show progress,
+// run sequentially (so we can show "x of y" without races), reload the
+// affected views at the end, exit select mode.
+
+// Batch action: queue every selected track for stem separation. Tracks
+// without a file on disk are skipped with a count in the toast.
+function bulkSendToSeparator() {
+  if (!selectedIds.size) return;
+  let added = 0, skipped = 0;
+  for (const id of selectedIds) {
+    const h = histData.find(x => x.id === id);
+    if (h && h.file_path) { if (enqueueSeparation(h.file_path, h.title)) added++; else skipped++; }
+    else skipped++;
+  }
+  showAppNotification('🎛 ' + t('sepqAdded').replace('{n}', added) + (skipped ? ' · ' + skipped + ' ' + t('sepqSkipped') : ''), 'done');
+  toggleSelectMode();
+  showTab(document.querySelector('[data-tab="stems"]'));
+}
+
+async function bulkTagSelected() {
+  if (!selectedIds.size) return;
+  // Need a folder to tag into. Prompt with the existing folder list.
+  let folders;
+  try {
+    const r = await fetch(API + '/stockpile/folders');
+    const j = await r.json();
+    folders = j.folders || [];
+  } catch (e) {
+    showAppNotification('Failed to load folders: ' + e.message, 'err');
+    return;
+  }
+  if (!folders.length) {
+    showAppNotification('Create a Stockpile folder first', 'warn');
+    return;
+  }
+  // Modal to pick a folder. Built ad-hoc since this is a rare path.
+  const pickedFolderId = await new Promise(resolve => {
+    let modal = document.getElementById('bulk-tag-modal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'bulk-tag-modal';
+      modal.className = 'setup-modal';
+      modal.style.display = 'none';
+      document.body.appendChild(modal);
+    }
+    const optsHTML = folders.map(f => `
+      <button class="btn" style="width:100%;justify-content:flex-start;margin-bottom:6px;text-align:left"
+              onclick="window._bulkTagResolve(${f.id})">
+        <span class="sp-fc-color" ${f.color ? `style="background:${escapeHtml(f.color)};display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px"` : 'style="display:none"'}></span>
+        ${escapeHtml(f.name)} <span style="opacity:.6;font-size:11px;margin-left:auto">${f.track_count || 0} tracks</span>
+      </button>`).join('');
+    modal.innerHTML = `
+      <div class="setup-card" style="max-width:480px;max-height:80vh;display:flex;flex-direction:column;padding:24px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <div>
+            <div class="setup-title" style="font-size:22px;text-align:left;margin-bottom:2px">🏷️ Tag ${selectedIds.size} track${selectedIds.size === 1 ? '' : 's'}</div>
+            <div style="font-size:12px;color:var(--muted)">Pick a folder — selected tracks will be tagged into it</div>
+          </div>
+          <button class="btn xs" onclick="window._bulkTagResolve(null)">✕</button>
+        </div>
+        <div style="flex:1;overflow-y:auto;padding-right:4px">
+          ${optsHTML}
+        </div>
+      </div>`;
+    modal.style.display = 'flex';
+    window._bulkTagResolve = (id) => {
+      modal.style.display = 'none';
+      delete window._bulkTagResolve;
+      resolve(id);
+    };
+  });
+  if (!pickedFolderId) return;
+
+  const ids = Array.from(selectedIds);
+  let ok = 0, fail = 0;
+  const prog = document.getElementById('move-progress');
+  const fill = document.getElementById('move-fill');
+  const status = document.getElementById('move-status');
+  const count = document.getElementById('move-count');
+  if (prog) prog.classList.remove('hidden');
+  if (status) status.textContent = 'Tagging…';
+
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
+    try {
+      const r = await fetch(API + '/stockpile/tracks/' + id + '/tags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folder_id: pickedFolderId,
+          source: 'bulk-manual',
+          stockpile_root: stockpileFolder || undefined,
+        }),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      ok++;
+    } catch {
+      fail++;
+    }
+    if (fill) fill.style.width = Math.round(((i + 1) / ids.length) * 100) + '%';
+    if (count) count.textContent = (i + 1) + '/' + ids.length;
+  }
+
+  showAppNotification(`✓ ${t('aoTaggedOk')} ${ok}${fail ? ' · ' + fail + ' ' + t('failedWord') : ''}`, fail ? 'warn' : 'done');
+  setTimeout(() => { if (prog) prog.classList.add('hidden'); if (fill) fill.style.width = '0%'; }, 1500);
+  // Refresh views and exit select mode
+  selectedIds.clear();
+  if (typeof loadHistory === 'function') await loadHistory();
+  if (typeof window.histTagsByHistoryId !== 'undefined') window.histTagsByHistoryId = {};
+  toggleSelectMode();
+}
+
+async function bulkFavoriteSelected(makeFav) {
+  if (!selectedIds.size) return;
+  const ids = Array.from(selectedIds);
+  let ok = 0, fail = 0;
+  for (const id of ids) {
+    try {
+      const cur = histData.find(h => h.id === id);
+      const alreadyMatches = cur && !!cur.is_favorite === !!makeFav;
+      if (alreadyMatches) { ok++; continue; }
+      // /history/:id/favorite toggles. To force a desired state we only
+      // hit it when current state differs.
+      const r = await fetch(API + '/history/' + id + '/favorite', { method: 'POST' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      ok++;
+    } catch {
+      fail++;
+    }
+  }
+  showAppNotification(
+    `✓ ${makeFav ? 'Favorited' : 'Unfavorited'} ${ok}${fail ? ' · ' + fail + ' failed' : ''}`,
+    fail ? 'warn' : 'done'
+  );
+  selectedIds.clear();
+  await loadHistory();
+  toggleSelectMode();
+}
+
+async function bulkDeleteSelected() {
+  if (!selectedIds.size) return;
+  const n = selectedIds.size;
+  const ok = await confirmModal({
+    title: `Delete ${n} track${n === 1 ? '' : 's'} from history?`,
+    message: `This removes ${n === 1 ? 'the entry' : 'these entries'} from your history list. The actual audio file${n === 1 ? '' : 's'} on disk ${n === 1 ? 'is' : 'are'} NOT deleted — only the history record. To delete files on disk, use your file manager.`,
+    okLabel: 'Delete',
+    cancelLabel: 'Cancel',
+  });
+  if (!ok) return;
+
+  const ids = Array.from(selectedIds);
+  let okN = 0, fail = 0;
+  for (const id of ids) {
+    try {
+      const r = await fetch(API + '/history/' + id, { method: 'DELETE' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      okN++;
+    } catch {
+      fail++;
+    }
+  }
+  showAppNotification(`✓ Deleted ${okN} from history${fail ? ' · ' + fail + ' failed' : ''}`, fail ? 'warn' : 'done');
+  selectedIds.clear();
+  await loadHistory();
+  toggleSelectMode();
+}
+
+async function bulkReanalyzeSelected() {
+  if (!selectedIds.size) return;
+  const ids = Array.from(selectedIds);
+  const ok = await confirmModal({
+    title: `Re-analyze ${ids.length} track${ids.length === 1 ? '' : 's'}?`,
+    message: 'Runs BPM/key/loudness analysis on each track. May take 5-15 seconds per track depending on length. Existing analysis values will be overwritten with the new results.',
+    okLabel: 'Re-analyze',
+    cancelLabel: 'Cancel',
+  });
+  if (!ok) return;
+
+  let done = 0, fail = 0;
+  const prog = document.getElementById('move-progress');
+  const fill = document.getElementById('move-fill');
+  const status = document.getElementById('move-status');
+  const count = document.getElementById('move-count');
+  const curEl = document.getElementById('move-current');
+  if (prog) prog.classList.remove('hidden');
+  if (status) status.textContent = 'Analyzing…';
+
+  // Sequential — analyze.py uses CPU and parallelizing would just thrash.
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
+    const track = histData.find(h => h.id === id);
+    if (!track || !track.file_path) { fail++; continue; }
+    if (curEl) curEl.textContent = track.title || '(untitled)';
+
+    try {
+      // /analyze is SSE — we just need the final "done" event with bpm/key
+      const result = await new Promise((resolve, reject) => {
+        const es = new EventSource(API + '/analyze?path=' + encodeURIComponent(track.file_path));
+        let final = null;
+        es.addEventListener('result', e => { try { final = JSON.parse(e.data); } catch {} });
+        es.addEventListener('done', () => { es.close(); resolve(final); });
+        es.addEventListener('error', e => { es.close(); reject(new Error('SSE error')); });
+        // Hard timeout — 60s per track is generous
+        setTimeout(() => { try { es.close(); } catch {}; reject(new Error('timeout')); }, 60000);
+      });
+
+      if (result && (result.bpm || result.key_note)) {
+        // Save back to history (this triggers ID3 tag write too if enabled)
+        const notagsParam = (localStorage.getItem('freqphull.writeTags') === '0') ? '?notags=1' : '';
+        await fetch(API + '/history/' + id + '/analysis' + notagsParam, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            bpm: result.bpm || null,
+            key_note: result.key_note || null,
+            key_mode: result.key_mode || null,
+          }),
+        });
+        done++;
+      } else {
+        fail++;
+      }
+    } catch {
+      fail++;
+    }
+    if (fill) fill.style.width = Math.round(((i + 1) / ids.length) * 100) + '%';
+    if (count) count.textContent = (i + 1) + '/' + ids.length;
+  }
+
+  showAppNotification(`✓ Re-analyzed ${done}${fail ? ' · ' + fail + ' failed' : ''}`, fail ? 'warn' : 'done');
+  setTimeout(() => { if (prog) prog.classList.add('hidden'); if (fill) fill.style.width = '0%'; if (curEl) curEl.textContent = ''; }, 1500);
+  selectedIds.clear();
+  await loadHistory();
+  toggleSelectMode();
+}
+
+// ── Auto-organize untagged tracks ───────────────────────────────────────
+// Calls the backend's /stockpile/auto-organize-suggestions endpoint to
+// get a folder suggestion per untagged track, then shows a modal where
+// the user can confirm/reject each suggestion before applying.
+//
+// Design choice: rather than auto-applying suggestions silently (which
+// would feel magic-but-scary), we always require explicit confirmation.
+// Users keep control; they accept the high-confidence ones with one
+// click and reject the bad ones.
+async function openAutoOrganize() {
+  if (!backendOnline) {
+    showAppNotification('Backend offline', 'err');
+    return;
+  }
+  // Show loading modal
+  let modal = document.getElementById('auto-organize-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'auto-organize-modal';
+    modal.className = 'setup-modal';
+    modal.style.display = 'none';
+    document.body.appendChild(modal);
+  }
+  modal.innerHTML = `
+    <div class="setup-card" style="max-width:720px;max-height:80vh;display:flex;flex-direction:column;padding:24px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div>
+          <div class="setup-title" style="font-size:22px;text-align:left;margin-bottom:2px">✨ ${t('aoTitle')}</div>
+          <div style="font-size:12px;color:var(--muted)">${t('aoScanningSub')}</div>
+        </div>
+        <button class="btn xs" onclick="closeAutoOrganize()">✕</button>
+      </div>
+      <div id="auto-organize-body" style="flex:1;overflow-y:auto;padding-right:4px;text-align:center;padding-top:40px;color:var(--hint)">
+        ${t('aoLooking')}
+      </div>
+    </div>`;
+  modal.style.display = 'flex';
+
+  try {
+    const r = await fetch(API + '/stockpile/auto-organize-suggestions?min_confidence=0.35&limit=1000');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    renderAutoOrganize(data);
+  } catch (e) {
+    const body = document.getElementById('auto-organize-body');
+    if (body) body.innerHTML = `<div style="color:var(--err);padding:24px">Failed: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function closeAutoOrganize() {
+  const modal = document.getElementById('auto-organize-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+function renderAutoOrganize(data) {
+  const body = document.getElementById('auto-organize-body');
+  if (!body) return;
+  const suggestions = data.suggestions || [];
+
+  if (data.folders_count === 0) {
+    body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--hint)">' + t('aoNoFolders') + '</div>';
+    return;
+  }
+  if (data.untagged_count === 0) {
+    body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--hint)">' + t('aoNoUntagged') + '</div>';
+    return;
+  }
+  if (!suggestions.length) {
+    body.innerHTML = `<div style="text-align:center;padding:40px;color:var(--hint)">${t('aoNoneMatched').replace('{n}', data.untagged_count)}</div>`;
+    return;
+  }
+
+  const rowsHTML = suggestions.map((s, i) => {
+    const confPct = Math.round(s.confidence * 100);
+    const confColor = confPct >= 70 ? '#7ed982' : (confPct >= 50 ? '#f59e0b' : '#999');
+    const meta = [
+      s.bpm ? `${Math.round(s.bpm)} BPM` : '',
+      s.key_note ? `${s.key_note} ${s.key_mode || ''}` : '',
+    ].filter(Boolean).join(' · ');
+    return `
+      <div class="auto-org-row" data-i="${i}" style="display:grid;grid-template-columns:1fr auto auto;gap:10px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-bottom:6px;align-items:center">
+        <div style="min-width:0">
+          <div style="font-size:13px;color:var(--white);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(s.title || '(untitled)')}</div>
+          <div style="font-size:11px;color:var(--hint);margin-top:2px">${meta} ${s.reason ? '· ' + escapeHtml(s.reason) : ''}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--white)">
+          <span style="opacity:.6">→</span>
+          <span class="sp-fc-color" ${s.suggested_folder_color ? `style="background:${escapeHtml(s.suggested_folder_color)};display:inline-block;width:8px;height:8px;border-radius:50%;flex-shrink:0"` : 'style="display:none"'}></span>
+          ${escapeHtml(s.suggested_folder_name)}
+          <span style="color:${confColor};font-size:11px;margin-left:4px">${confPct}%</span>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="auto-org-cb-${i}" checked style="cursor:pointer"/>
+          <span style="font-size:11px;color:var(--hint)">Apply</span>
+        </label>
+      </div>`;
+  }).join('');
+
+  body.innerHTML = `
+    <div style="margin-bottom:12px;padding:10px 12px;background:var(--bg);border-radius:6px;border:1px solid var(--border);font-size:12px;color:var(--muted)">
+      ${t('aoFound').replace('{x}', suggestions.length).replace('{y}', data.untagged_count)}
+    </div>
+    <div style="margin-bottom:10px;display:flex;gap:8px">
+      <button class="btn xs" onclick="autoOrganizeCheckAll(true)">${t('aoSelectAll')}</button>
+      <button class="btn xs" onclick="autoOrganizeCheckAll(false)">${t('aoClearSel')}</button>
+      <button class="btn xs" onclick="autoOrganizeCheckByConfidence(0.70)">${t('aoConf70')}</button>
+      <button class="btn pri sm" style="margin-left:auto" onclick="applyAutoOrganize()">${t('aoApply')}</button>
+    </div>
+    ${rowsHTML}`;
+  // Cache the suggestions so the apply step can read them by index
+  window._autoOrgSuggestions = suggestions;
+}
+
+function autoOrganizeCheckAll(state) {
+  (window._autoOrgSuggestions || []).forEach((_, i) => {
+    const cb = document.getElementById('auto-org-cb-' + i);
+    if (cb) cb.checked = state;
+  });
+}
+
+function autoOrganizeCheckByConfidence(threshold) {
+  (window._autoOrgSuggestions || []).forEach((s, i) => {
+    const cb = document.getElementById('auto-org-cb-' + i);
+    if (cb) cb.checked = s.confidence >= threshold;
+  });
+}
+
+async function applyAutoOrganize() {
+  const suggestions = window._autoOrgSuggestions || [];
+  const picked = suggestions
+    .map((s, i) => ({ s, i, on: document.getElementById('auto-org-cb-' + i)?.checked }))
+    .filter(x => x.on);
+  if (!picked.length) {
+    showAppNotification(t('aoNothing'), 'warn');
+    return;
+  }
+
+  let ok = 0, fail = 0;
+  // Show a small progress overlay inside the modal
+  const body = document.getElementById('auto-organize-body');
+  if (body) body.innerHTML = `<div style="text-align:center;padding:40px;color:var(--hint)" id="auto-org-prog">${t('aoApplying')} 0/${picked.length}…</div>`;
+
+  for (let i = 0; i < picked.length; i++) {
+    const { s } = picked[i];
+    try {
+      const r = await fetch(API + '/stockpile/tracks/' + s.history_id + '/tags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folder_id: s.suggested_folder_id,
+          source: 'auto-organize',
+          confidence: s.confidence,
+          stockpile_root: stockpileFolder || undefined,
+        }),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      ok++;
+    } catch {
+      fail++;
+    }
+    const prog = document.getElementById('auto-org-prog');
+    if (prog) prog.textContent = `${t('aoApplying')} ${i + 1}/${picked.length}…`;
+  }
+
+  showAppNotification(`✓ ${t('aoTaggedOk')} ${ok}${fail ? ' · ' + fail + ' ' + t('failedWord') : ''}`, fail ? 'warn' : 'done');
+  closeAutoOrganize();
+  // Refresh stockpile + history views
+  if (typeof loadFolders === 'function') await loadFolders();
+  if (typeof loadHistory === 'function') await loadHistory();
+  if (typeof renderStockpileUntagged === 'function') renderStockpileUntagged();
+}
+
+// ── Duplicate finder ────────────────────────────────────────────────────
+// Opens a modal that fetches /history/duplicates and presents groups of
+// near-identical tracks. The user can preview each, see which is oldest
+// (the "original"), and bulk-delete the rest with one click per group.
+//
+// If many tracks lack fingerprints (existing library predating this
+// feature), shows a "Backfill" button that kicks off background hashing.
+async function openDuplicateFinder() {
+  if (!backendOnline) {
+    showAppNotification('Backend offline', 'err');
+    return;
+  }
+  let modal = document.getElementById('duplicate-finder-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'duplicate-finder-modal';
+    modal.className = 'setup-modal';
+    modal.style.display = 'none';
+    document.body.appendChild(modal);
+  }
+  modal.innerHTML = `
+    <div class="setup-card" style="max-width:760px;max-height:84vh;display:flex;flex-direction:column;padding:24px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div>
+          <div class="setup-title" style="font-size:22px;text-align:left;margin-bottom:2px">🔁 ${t('dupName')}</div>
+          <div style="font-size:12px;color:var(--muted)">${t('dupSub')}</div>
+        </div>
+        <button class="btn xs" onclick="closeDuplicateFinder()">✕</button>
+      </div>
+      <div id="duplicate-finder-body" style="flex:1;overflow-y:auto;padding-right:4px;text-align:center;padding-top:40px;color:var(--hint)">
+        Scanning…
+      </div>
+    </div>`;
+  modal.style.display = 'flex';
+
+  try {
+    const r = await fetch(API + '/history/duplicates?threshold=50');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    renderDuplicateFinder(data);
+  } catch (e) {
+    const body = document.getElementById('duplicate-finder-body');
+    if (body) body.innerHTML = `<div style="color:var(--err);padding:24px">Failed: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function closeDuplicateFinder() {
+  const modal = document.getElementById('duplicate-finder-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+function renderDuplicateFinder(data) {
+  const body = document.getElementById('duplicate-finder-body');
+  if (!body) return;
+  const totalTracks = histData.length;
+  const hashed = data.total_hashed || 0;
+  const missing = totalTracks - hashed;
+
+  // If most of the library is unhashed, offer to backfill before showing
+  // anything else — the duplicate detection is useless without coverage.
+  const backfillBanner = (missing > 5) ? `
+    <div style="margin-bottom:14px;padding:12px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--white)">
+      <div style="margin-bottom:6px"><strong>${t('dupBackfillHead').replace('{n}', missing)}</strong></div>
+      <div style="color:var(--hint);margin-bottom:8px">${t('dupBackfillDesc')}</div>
+      <button class="btn pri xs" onclick="startFingerprintBackfill()">⚡ ${t('dupBackfillBtn').replace('{n}', missing)}</button>
+      <span id="dup-backfill-progress" style="margin-left:10px;font-size:11px;color:var(--hint)"></span>
+    </div>` : '';
+
+  const groups = data.groups || [];
+  if (groups.length === 0) {
+    body.innerHTML = backfillBanner + `<div style="text-align:center;padding:40px;color:var(--hint)">${t('dupNoneFound').replace('{n}', hashed)} ${missing > 0 ? t('dupNotScanned').replace('{n}', missing) : ''}</div>`;
+    return;
+  }
+
+  // NOTE: the inner map's track parameter used to be named `t`, which
+  // shadowed the t() translation function — any t('key') inside the row
+  // template would have crashed. Renamed to `tr` and translations are
+  // captured before the loop.
+  const keepLbl = t('dupKeep');
+  const delLbl = t('delete');
+  const groupsHTML = groups.map((g, gi) => {
+    // Oldest track in the group is shown first; user-facing this is the
+    // "original" they probably want to keep.
+    const rowsHTML = g.tracks.map((tr, ti) => {
+      const meta = [
+        tr.format ? tr.format.toUpperCase() : '',
+        tr.duration ? Math.round(tr.duration) + 's' : '',
+        tr.created_at ? tr.created_at.slice(0, 10) : '',
+      ].filter(Boolean).join(' · ');
+      const tagLabel = ti === 0
+        ? '<span style="color:#7ed982;font-size:10px;font-weight:600">' + keepLbl + '</span>'
+        : `<label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:10px;color:var(--hint)">
+             <input type="checkbox" class="dup-cb-g${gi}" data-id="${tr.id}" checked style="cursor:pointer"/>
+             ${delLbl}
+           </label>`;
+      return `
+        <div style="display:grid;grid-template-columns:1fr auto;gap:10px;padding:8px 10px;background:var(--bg);border-radius:4px;align-items:center;margin-bottom:4px">
+          <div style="min-width:0">
+            <div style="font-size:12px;color:var(--white);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(tr.title || '(untitled)')}</div>
+            <div style="font-size:10px;color:var(--hint)">${meta}${tr.channel ? ' · ' + escapeHtml(tr.channel) : ''}</div>
+          </div>
+          ${tagLabel}
+        </div>`;
+    }).join('');
+    return `
+      <div style="margin-bottom:14px;padding:12px;background:var(--bg2);border:1px solid var(--border);border-radius:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div style="font-size:12px;color:var(--muted)">${t('dupGroupWord')} ${gi + 1} — ${g.count} ${g.count === 1 ? t('dupOne') : t('dupMany')}</div>
+          <button class="btn xs danger" onclick="deleteDuplicateGroup(${gi})">🗑️ ${t('dupDeleteChecked')}</button>
+        </div>
+        ${rowsHTML}
+      </div>`;
+  }).join('');
+
+  body.innerHTML = `
+    ${backfillBanner}
+    <div style="margin-bottom:14px;padding:10px 12px;background:var(--bg);border-radius:6px;border:1px solid var(--border);font-size:12px;color:var(--muted)">
+      ${t('dupFoundSummary').replace('{x}', groups.length).replace('{g}', groups.length === 1 ? t('dupGroupOne') : t('dupGroupMany')).replace('{n}', hashed)}
+    </div>
+    ${groupsHTML}`;
+
+  window._dupGroups = groups;
+}
+
+async function deleteDuplicateGroup(gi) {
+  const groups = window._dupGroups || [];
+  const g = groups[gi];
+  if (!g) return;
+  const cbs = Array.from(document.querySelectorAll('.dup-cb-g' + gi));
+  const idsToDelete = cbs.filter(cb => cb.checked).map(cb => parseInt(cb.dataset.id, 10));
+  if (!idsToDelete.length) {
+    showAppNotification(t('dupNothingChecked'), 'warn');
+    return;
+  }
+  const ok = await confirmModal({
+    title: t('dupDeleteTitle').replace('{n}', idsToDelete.length).replace('{w}', idsToDelete.length === 1 ? t('dupOne') : t('dupMany')),
+    message: t('dupDeleteMsg'),
+    okLabel: t('delete'),
+    cancelLabel: t('spCancel'),
+  });
+  if (!ok) return;
+  let okN = 0, fail = 0;
+  for (const id of idsToDelete) {
+    try {
+      const r = await fetch(API + '/history/' + id, { method: 'DELETE' });
+      if (r.ok) okN++; else fail++;
+    } catch { fail++; }
+  }
+  showAppNotification(`✓ ${t('deletedWord')} ${okN}${fail ? ' · ' + fail + ' ' + t('failedWord') : ''}`, fail ? 'warn' : 'done');
+  // Refresh and re-render duplicates
+  await loadHistory();
+  openDuplicateFinder();
+}
+
+// ── Find similar (0.1.1) ────────────────────────────────────────────
+// "More like this" from the ≈ button on any history row. Server blends
+// fingerprint, mood, BPM (half/double aware) and key compatibility.
+async function openSimilarTracks(historyId) {
+  let modal = document.getElementById('similar-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'similar-modal';
+    modal.className = 'setup-modal';
+    document.body.appendChild(modal);
+  }
+  const base = histData.find(h => h.id === historyId);
+  modal.style.display = 'flex';
+  modal.innerHTML = `
+    <div class="setup-card" style="max-width:620px;max-height:80vh;display:flex;flex-direction:column;padding:24px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div>
+          <div class="setup-title" style="font-size:22px;text-align:left;margin-bottom:2px">≈ ${t('simTitle')}</div>
+          <div style="font-size:12px;color:var(--muted);max-width:480px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(base ? base.title : '')}</div>
+        </div>
+        <button class="btn xs" onclick="document.getElementById('similar-modal').style.display='none'">✕</button>
+      </div>
+      <div id="similar-body" style="flex:1;overflow-y:auto;padding-right:4px;text-align:center;padding-top:30px;color:var(--hint)">${t('simLooking')}</div>
+    </div>`;
+  try {
+    const r = await fetch(API + '/tracks/' + historyId + '/similar?limit=15');
+    const j = await r.json();
+    const body = document.getElementById('similar-body');
+    if (!body) return;
+    if (!j.results || !j.results.length) {
+      body.innerHTML = '<div style="padding:30px">' + t('simNone') + '</div>';
+      return;
+    }
+    body.style.textAlign = 'left';
+    body.style.paddingTop = '0';
+    body.innerHTML = j.results.map(rr => {
+      const pct = Math.round(rr.similarity * 100);
+      const reasons = (rr.reasons || []).map(x => t('simReason_' + x)).join(' · ');
+      const badges = [rr.bpm ? Math.round(rr.bpm) + ' BPM' : '', rr.key_note ? rr.key_note + ' ' + (rr.key_mode || '') : ''].filter(Boolean).join(' · ');
+      return `
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg);border-radius:6px;margin-bottom:5px">
+        <img src="${rr.thumbnail || ''}" onerror="this.style.display='none'" style="width:42px;height:30px;object-fit:cover;border-radius:4px" alt=""/>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;color:var(--white);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(rr.title || '(untitled)')}</div>
+          <div style="font-size:10px;color:var(--hint)">${badges}${reasons ? ' · ' + reasons : ''}</div>
+        </div>
+        <span style="font-size:12px;font-weight:600;color:${pct >= 70 ? '#7ed982' : 'var(--muted)'}">${pct}%</span>
+        <button class="btn xs" onclick="playFromHistory(${rr.id})" title="${t('histFavorite') ? '' : ''}▶">▶</button>
+        <button class="btn xs" onclick="document.getElementById('similar-modal').style.display='none';loadFromHistory(${rr.id})">${t('simOpen')}</button>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    const body = document.getElementById('similar-body');
+    if (body) body.innerHTML = '<div style="padding:30px">✕ ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+async function startFingerprintBackfill() {
+  try {
+    const r = await fetch(API + '/history/fingerprint-backfill', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit: 1000 }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    const prog = document.getElementById('dup-backfill-progress');
+    if (prog) prog.textContent = `Started — ${j.queued} queued`;
+    showAppNotification(`Fingerprint backfill started — ${j.queued} tracks queued`, 'info');
+    // Subscribe to SSE progress events. The /events channel already exists
+    // from patch 15s for history updates.
+    if (window._backfillES) { try { window._backfillES.close(); } catch {} }
+    const es = new EventSource(API + '/events');
+    window._backfillES = es;
+    es.addEventListener('fingerprint-backfill', e => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.state === 'progress' || data.state === 'start') {
+          if (prog) prog.textContent = `${data.done}/${data.total} hashed…`;
+        } else if (data.state === 'complete') {
+          if (prog) prog.textContent = `✓ Complete — ${data.done}/${data.total}`;
+          showAppNotification(`Fingerprint backfill complete — ${data.done} tracks hashed`, 'done');
+          es.close();
+          window._backfillES = null;
+          // Auto-refresh the duplicate finder to show new matches
+          setTimeout(() => openDuplicateFinder(), 800);
+        }
+      } catch {}
+    });
+  } catch (e) {
+    showAppNotification('✕ ' + e.message, 'err');
+  }
+}
+
 function renderHistory(){
   const q=(document.getElementById('hist-search')?.value||'').toLowerCase(),list=document.getElementById('hist-list');
   // Category filter — drives a virtual subset of histData based on the
@@ -3889,7 +4736,7 @@ function renderHistory(){
     // by the cleanup pass below so subsequent re-renders don't re-flash.
     const isNew = prevSeenHistId > 0 && (h.id || 0) > prevSeenHistId;
     const pulseClass = isNew ? ' row-pulse' : '';
-    return `<div class="${rowClass}${pulseClass}" data-id="${h.id}"${rowTitle} ${onclick}>${checkbox}${playBtn}<img class="hist-thumb" loading="lazy" decoding="async" src="${h.thumbnail||''}" onerror="this.style.display='none'" alt=""/>${favBtn}<div class="hist-info"><div class="hist-title">${h.title||'(untitled)'}</div><div class="hist-meta">${[h.channel,h.created_at?.slice(0,16),fmtSec(h.duration)].filter(Boolean).join(' · ')}</div>${tagStrip}</div><div class="hist-badges">${h.bpm?`<span class="badge bpm">${Math.round(h.bpm)} BPM</span>`:''}${h.key_note?`<span class="badge key">${h.key_note} ${h.key_mode||''}</span>`:''}${h.format?`<span class="badge">${h.format.toUpperCase()}</span>`:''}</div>${selectMode?'':`<button class="btn xs danger" onclick="event.stopPropagation();deleteHistory(${h.id})">Remove</button>`}</div>`;
+    return `<div class="${rowClass}${pulseClass}" data-id="${h.id}"${rowTitle} ${onclick} draggable="true" ondragstart="dragHistoryRowToExternal(event, ${h.id})">${checkbox}${playBtn}<img class="hist-thumb" loading="lazy" decoding="async" src="${h.thumbnail||''}" onerror="this.style.display='none'" alt=""/>${favBtn}<div class="hist-info"><div class="hist-title">${h.title||'(untitled)'}</div><div class="hist-meta">${[h.channel,h.created_at?.slice(0,16),fmtSec(h.duration)].filter(Boolean).join(' · ')}</div>${tagStrip}</div><div class="hist-badges">${h.bpm?`<span class="badge bpm">${Math.round(h.bpm)} BPM</span>`:''}${h.key_note?`<span class="badge key">${h.key_note} ${h.key_mode||''}</span>`:''}${h.format?`<span class="badge">${h.format.toUpperCase()}</span>`:''}</div>${selectMode?'':`<button class="btn xs" tabindex="-1" onmousedown="this.blur()" onclick="event.stopPropagation();openSimilarTracks(${h.id});this.blur()" title="${t('simBtn')}">≈</button><button class="btn xs danger" onclick="event.stopPropagation();deleteHistory(${h.id})">Remove</button>`}</div>`;
   }).join('');
   // Update the pulse baseline + clean up the pulse class after it plays
   window._lastSeenHistId = maxHistId;
@@ -4129,12 +4976,30 @@ function updateFavoriteUI(historyId, on) {
     row.classList.toggle('on', on);
     row.innerHTML = on ? heartIconFilled : heartIconEmpty;
   }
-  // Mini player heart
+  // Mini player heart. IMPORTANT: resolve the displayed track through
+  // getMiniPlayerTrack() — NOT globalPlayer.track directly. In mirror mode
+  // (track playing inside the Analyzer, mini player just reflecting it)
+  // globalPlayer.track is null and the old check silently skipped the
+  // update: the tag applied but the heart never turned red.
   const miniHeart = document.getElementById('sp-fv-mini-fav');
-  if (miniHeart && globalPlayer.track && globalPlayer.track.id === historyId) {
+  const miniTr = (typeof getMiniPlayerTrack === 'function') ? getMiniPlayerTrack() : null;
+  if (miniHeart && miniTr && miniTr.id === historyId) {
     miniHeart.classList.toggle('on', on);
     miniHeart.innerHTML = on ? heartIconFilled : heartIconEmpty;
   }
+}
+
+// Sync the mini player heart from current data — called whenever a track
+// is (re)loaded into the mini player, in EITHER mode. Without this, playing
+// an already-favorited track showed an empty heart until you clicked it.
+function syncMiniFavHeart() {
+  const tr = (typeof getMiniPlayerTrack === 'function') ? getMiniPlayerTrack() : null;
+  if (!tr || !tr.id) return;
+  // Freshest favorite state lives in histData; the legacy track object is
+  // a snapshot that can go stale if the user toggled from the History row.
+  const row = Array.isArray(histData) ? histData.find(h => h.id === tr.id) : null;
+  const on = !!((row || tr).is_favorite);
+  updateFavoriteUI(tr.id, on);
 }
 
 async function hydrateHistoryTags(historyId) {
@@ -4479,6 +5344,71 @@ function fmtSec(s){if(!s)return'—';return s>60?Math.floor(s/60)+'m '+Math.floo
 // ── Stem separator ────────────────────────────────────────────────────────────
 
 // Called from the Analyze tab — ships the currently loaded track to the separator
+// ── Separator queue engine ──────────────────────────────────────────
+function enqueueSeparation(filePath, name) {
+  if (!filePath) return false;
+  if (sepQueue.some(q => q.path === filePath && (q.status === 'waiting' || q.status === 'running'))) return false;
+  sepQueue.push({ id: _sepQueueSeq++, path: filePath, name: name || filePath.split(/[/\\]/).pop(), status: 'waiting' });
+  renderSepQueue();
+  processSepQueue();
+  return true;
+}
+
+function processSepQueue() {
+  if (sepQueueRunning) return;
+  const next = sepQueue.find(q => q.status === 'waiting');
+  if (!next) { renderSepQueue(); return; }
+  sepQueueRunning = true;
+  next.status = 'running';
+  renderSepQueue();
+  // Load it as the active source and reuse the normal start path — all
+  // quality toggles apply exactly as if the user clicked Separate.
+  sepSourcePath = next.path;
+  sepSourceName = next.name;
+  showSeparatorSource();
+  startSeparation();
+}
+
+// Called from the separation done/error handlers. Marks the running job
+// and pulls the next one in after a short breather (lets the GPU drain).
+function sepQueueAdvance(ok) {
+  const running = sepQueue.find(q => q.status === 'running');
+  if (running) running.status = ok ? 'done' : 'error';
+  sepQueueRunning = false;
+  renderSepQueue();
+  if (sepQueue.some(q => q.status === 'waiting')) setTimeout(processSepQueue, 1500);
+}
+
+function removeFromSepQueue(id) {
+  const item = sepQueue.find(q => q.id === id);
+  if (!item || item.status === 'running') return; // can't remove the active job
+  sepQueue = sepQueue.filter(q => q.id !== id);
+  renderSepQueue();
+}
+
+function clearSepQueueFinished() {
+  sepQueue = sepQueue.filter(q => q.status === 'waiting' || q.status === 'running');
+  renderSepQueue();
+}
+
+function renderSepQueue() {
+  const wrap = document.getElementById('sep-queue');
+  const list = document.getElementById('sep-queue-list');
+  if (!wrap || !list) return;
+  if (!sepQueue.length) { wrap.classList.add('hidden'); return; }
+  wrap.classList.remove('hidden');
+  const lbl = document.getElementById('sep-queue-count');
+  const waiting = sepQueue.filter(q => q.status === 'waiting').length;
+  if (lbl) lbl.textContent = sepQueue.length + (waiting ? ' · ' + waiting + ' ' + t('sepqWaiting') : '');
+  const icon = { waiting: '◌', running: '⏳', done: '✓', error: '✕' };
+  list.innerHTML = sepQueue.map(q => `
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg);border-radius:6px;margin-bottom:4px;font-size:12px">
+      <span style="width:16px;text-align:center;color:${q.status === 'error' ? '#ff6b6b' : q.status === 'done' ? '#7ed982' : 'var(--hint)'}">${icon[q.status]}</span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--white)">${escapeHtml(q.name)}</span>
+      ${q.status === 'waiting' ? `<button class="btn xs" onclick="removeFromSepQueue(${q.id})">✕</button>` : ''}
+    </div>`).join('');
+}
+
 function sendToSeparator() {
   if (!lastFilePath) {
     showAppNotification('✕ Load a track first', 'err');
@@ -4708,12 +5638,39 @@ function resetFullnessOverrides() {
   setFullnessPreset(name);
 }
 
+// "Auto-send to detected folder" — when enabled, the post-download
+// auto-match call passes commit:true so the server promotes the best
+// match to primary AND physically moves the file into the folder.
+function toggleAutoSend(checked) {
+  localStorage.setItem('freqphull.autoSend', checked ? '1' : '0');
+  syncPrefsToServer(); // extension downloads + watch folder honor it too
+  if (typeof showAppNotification === 'function') {
+    showAppNotification(checked ? t('autoSendOnNotif') : t('autoSendOffNotif'), 'info', null, 3000);
+  }
+}
+
 function toggleCpuOnly(checked) {
   // Persisted in localStorage so the setting survives app restarts.
   // Read by startSeparation to add ?cpuOnly=1 to the /stems request.
   localStorage.setItem('freqphull.cpuOnly', checked ? '1' : '0');
   if (typeof showAppNotification === 'function') {
     showAppNotification(checked ? 'Stem separator will use CPU only' : 'Stem separator will use GPU if available', 'info', null, 2500);
+  }
+}
+
+// Toggle whether to stamp BPM/key into audio file metadata after analysis.
+// Default ON — the value '0' means OFF; any other value (including absent)
+// means ON. This way new users get the feature by default and only people
+// who explicitly disabled it stay disabled.
+function toggleWriteTags(checked) {
+  localStorage.setItem('freqphull.writeTags', checked ? '1' : '0');
+  if (typeof showAppNotification === 'function') {
+    showAppNotification(
+      checked
+        ? 'Analysis will write BPM/key into audio file tags'
+        : 'Analysis will NOT modify audio file tags',
+      'info', null, 2500
+    );
   }
 }
 
@@ -4836,6 +5793,7 @@ async function startSeparation() {
     } catch {}
     btn.disabled = false;
     if (sepEvtSource) { sepEvtSource.close(); sepEvtSource = null; }
+    sepQueueAdvance(true);
   });
 
   sepEvtSource.addEventListener('error', e => {
@@ -4856,6 +5814,7 @@ async function startSeparation() {
     }
     btn.disabled = false;
     if (sepEvtSource) { sepEvtSource.close(); sepEvtSource = null; }
+    sepQueueAdvance(false);
   });
 }
 
@@ -6732,6 +7691,65 @@ function renderStemDragGhost(label) {
   return canvas.toDataURL('image/png');
 }
 
+// ── Drag history/stockpile rows out to the OS (DAWs, Explorer, etc.) ──────
+// Reuses the same `api.startDrag` IPC that stem rows already use. From the
+// renderer's perspective we just hand over a file path and a ghost preview;
+// main.js calls Electron's webContents.startDrag, which announces a native
+// drag operation. Receiving apps (FL Studio, Ableton, Logic, Reaper, Studio
+// One, even File Explorer) see a real file drop and import normally.
+//
+// Why this matters: previously, getting a track into a DAW required
+// (1) finding the right Stockpile folder in Explorer, (2) dragging from
+// there. Now you can drag straight from the history list or any folder
+// view. Saves 4-5 seconds per drag and feels like a real desktop app.
+//
+// Edge cases handled:
+//   • Track has no file_path (deleted on disk, or download failed) →
+//     showAppNotification with the reason, no drag fires.
+//   • Track file_path points at a missing file → we still attempt the
+//     drag; Electron returns silently and the receiving app shows
+//     nothing. We can't easily fs.existsSync from the renderer without
+//     an IPC round-trip, and the latency would kill the drag's
+//     responsiveness. Better to fire and fail silently than block.
+//   • Browser fallback path (no api.startDrag) sets DownloadURL — works
+//     in browsers but unlikely to ever fire in Electron.
+
+function dragHistoryRowToExternal(ev, histId) {
+  const h = (histData || []).find(x => x.id === histId);
+  if (!h) return;
+  if (!h.file_path) {
+    showAppNotification('No file on disk for this track', 'warn');
+    ev.preventDefault();
+    return;
+  }
+  _performExternalDrag(ev, h.file_path, h.title || (h.file_path.split(/[/\\]/).pop() || 'Track'));
+}
+
+function dragStockpileRowToExternal(ev, trackId) {
+  const tr = (spFvTracks || []).find(x => x.id === trackId);
+  if (!tr) return;
+  if (!tr.file_path) {
+    showAppNotification('No file on disk for this track', 'warn');
+    ev.preventDefault();
+    return;
+  }
+  _performExternalDrag(ev, tr.file_path, tr.title || (tr.file_path.split(/[/\\]/).pop() || 'Track'));
+}
+
+function _performExternalDrag(ev, filePath, label) {
+  ev.stopPropagation();
+  ev.dataTransfer.effectAllowed = 'copy';
+  if (window.api && window.api.startDrag) {
+    ev.preventDefault();
+    const ghost = renderStemDragGhost(label);
+    window.api.startDrag(filePath, ghost);
+    return;
+  }
+  // Browser fallback — unlikely path in Electron, included for safety
+  const filename = filePath.split(/[/\\]/).pop();
+  ev.dataTransfer.setData('DownloadURL', 'audio/wav:' + filename + ':file://' + filePath);
+}
+
 function stopAllStems() {
   Object.values(sepAudioMap).forEach(e => {
     try { e.audio.pause(); } catch {}
@@ -7293,6 +8311,160 @@ function stepToHuman(step) {
 
 const T = {
   en: {
+    // ── Beat switch (0.1.3) ──
+    bsTitle:'Beat switch detected',
+    bsSection:'Beat',
+    bsSwitchAt:'Switch at',
+    bsChange_bpm:'tempo change', bsChange_key:'key change', bsChange_harmony:'new melody', bsChange_energy:'energy jump',
+    bsNone:'No beat switch detected at normal sensitivity.',
+    bsForceBtn:'Scan harder',
+    bsForcing:'Re-scanning with lower threshold…',
+    bsLoadFirst:'Load the track in the Analyzer to seek',
+
+    // ── 0.1.1 features ──
+    watchName:'Watch stockpile folder',
+    watchDesc:"Monitor the stockpile root for new audio files dropped in from anywhere (Explorer, other apps, network drives). New files are imported into the library, fingerprinted, and auto-matched automatically — combined with Auto-send they get filed into the right folder without you touching anything.",
+    watchOnNotif:'Watching stockpile folder — new audio gets imported automatically',
+    watchOffNotif:'Watch folder off',
+    ytdlpAvail:'update available — click to install',
+    ytdlpUpToDate:'up to date',
+    ytdlpSystem:'yt-dlp is system-installed — update it via your package manager',
+    sepqTitle:'Separation queue',
+    sepqWaiting:'waiting',
+    sepqAdded:'{n} added to separation queue',
+    sepqSkipped:'skipped (no file)',
+    sepqClear:'Clear finished',
+    sepSendSelected:'Separate',
+    simBtn:'Find similar tracks',
+    simTitle:'Similar tracks',
+    simLooking:'Comparing fingerprints, mood, BPM and key…',
+    simNone:'No similar tracks found. More tracks need fingerprints or analysis — run the backfill in Find duplicates, or analyze more of your library.',
+    simOpen:'Open',
+    simReason_sound:'sound', simReason_mood:'mood', simReason_bpm:'BPM', simReason_key:'key',
+
+    // ── i18n sweep batch 2 (0.1.0) ──
+    backendOfflineRetry:'Backend offline — try again in a moment',
+    dupBackfillHead:'{n} tracks aren\'t fingerprinted yet.',
+    dupBackfillDesc:'New downloads are fingerprinted automatically. Existing tracks need a one-time scan. Each takes a few seconds; runs in the background.',
+    dupBackfillBtn:'Backfill {n} tracks',
+    dupNoneFound:'No duplicates found across <strong>{n}</strong> fingerprinted tracks.',
+    dupNotScanned:'({n} tracks not yet scanned)',
+    dupKeep:'KEEP',
+    dupGroupWord:'Group',
+    dupOne:'duplicate', dupMany:'duplicates',
+    dupDeleteChecked:'Delete checked',
+    dupFoundSummary:'Found <strong>{x}</strong> duplicate {g} across <strong>{n}</strong> fingerprinted tracks. The oldest track in each group is marked "KEEP" by default. Uncheck any duplicate you want to keep.',
+    dupGroupOne:'group', dupGroupMany:'groups',
+    dupNothingChecked:'Nothing checked',
+    dupDeleteTitle:'Delete {n} {w}?',
+    dupDeleteMsg:'Removes the selected entries from your history. The actual audio files on disk are NOT deleted — only the history records. To free disk space, delete the files in your file manager afterward.',
+    deletedWord:'Deleted',
+    fixFilesConfirmTitle:'Fix file locations?',
+    fixFilesConfirmMsg:"Scans every tagged track and moves any whose files aren't in their primary folder on disk. Files are never deleted — only moved into place.",
+    stockRootLbl:'Stockpile root:',
+    scanningBtn:'Scanning…',
+    movedWord:'Moved',
+    alreadyInPlace:'already in place',
+    missingOnDisk:'missing on disk',
+    errorsWord:'errors',
+    checkedNothing:'Checked {n} — nothing to do',
+    cleanConfirmTitle:'Clean Freq.Phull temp files?',
+    cleanConfirmMsg:'Removes WAV files older than 1 hour from Windows Temp that Freq.Phull left behind from analysis, stem separation, and conversion. Anything currently being processed is safe.',
+    cleaningBtn:'Cleaning…',
+    cleanedResult:'Cleaned {n} {w} ({mb} MB freed)',
+    cleanNothing:'Nothing to clean — temp folder is tidy',
+    updDevOnly:'Updates only work in packaged builds',
+    updDevOnlyLong:'Updates only work in the packaged (installed) build, not in dev mode.',
+    updApiUnavailable:'Update API unavailable in this build',
+    checkingBtn:'Checking…',
+
+    // ── Settings page (patch 0.1.0 i18n) ──
+    fixFilesName:'Fix file locations',
+    fixFilesDesc:"Scan every tagged track and move any whose files aren't in their primary folder. Files that should be in <code>Cali Type beat/</code> but ended up elsewhere get moved into place. Safe to re-run.",
+    btnFixFiles:'Fix files',
+    cleanTempName:'Clean temp files',
+    cleanTempDesc:"Removes Freq.Phull's leftover WAV files from Windows Temp (older than 1 hour). Only touches files starting with <code>freqphull_</code> — never the app's own runtime folders. Runs automatically every 6 hours; use this for a manual sweep.<br><strong>Do NOT use <code>del Temp\\*</code> manually</strong> — it will delete the portable build's ffmpeg/yt-dlp binaries and break downloads until you relaunch.",
+    btnCleanNow:'Clean now',
+    autoSendName:'Auto-send to detected folder',
+    autoSendDesc:"When a new download matches a Stockpile folder's artist seeds, don't just tag it — automatically make that folder the track's primary and move the file into <code>StockpileRoot/FolderName/</code> right away. Tracks with no confident match stay where they land and can be sorted later with Auto-organize.",
+    autoSendOnNotif:'New downloads will be moved into their detected folder',
+    autoSendOffNotif:'Auto-send off — downloads stay put, tags only',
+    sentTo:'Sent to',
+    storName:'Storage breakdown',
+    storDesc:'See how much disk space each Stockpile folder uses, find missing files, spot orphaned audio in your stockpile root.',
+    btnViewStorage:'View storage',
+    dupName:'Find duplicate tracks',
+    dupDesc:'Detect tracks with identical audio (same song re-uploaded under different YouTube URLs, different bitrates, etc.). Uses a perceptual fingerprint of the audio itself, not filenames. New downloads are fingerprinted automatically; existing tracks need a one-time backfill.',
+    btnFindDupes:'Find duplicates',
+    updName:'Check for updates',
+    updDesc:'Manually check GitHub for a newer release. Updates download in the background and prompt to install when ready. The app also checks automatically every 4 hours.',
+    btnCheckNow:'Check now',
+    cpuOnlyName:'Force CPU-only for stem separation',
+    cpuOnlyDesc:'Skip GPU acceleration even when a CUDA GPU is available. Use this on low-VRAM machines (under 4GB) or to keep the GPU free for DAW plugins / other apps. Slower but lower system load.',
+    writeTagsName:'Write BPM &amp; key into audio files',
+    writeTagsDesc:"After analysis, stamp the detected BPM and musical key into the audio file's standard metadata tags (ID3 for MP3/WAV, Vorbis for FLAC/OGG, MP4 atoms for M4A). FL Studio, Mixed In Key, Rekordbox, foobar2000, and Apple Music all read these tags — so your analysis follows the file anywhere it goes. Default on. Disable if you want files to remain bit-identical to the original download.",
+    dlClearName:'Auto-clear download queue',
+    dlClearDesc:'Completed and failed downloads disappear from the Downloads list after this much time. Active downloads are never auto-cleared. Set to "Off" to keep them visible until you manually clear.',
+    optOff:'Off', optHour1:'1 hour', optHours12:'12 hours', optHours24:'24 hours', optHours72:'72 hours',
+    enginesName:'AI Engines',
+    runSetupBtn:'Run setup',
+    diagName:'Diagnose paths',
+    diagDesc:"Check which binaries the app can find — useful when ffmpeg, yt-dlp etc. aren't working",
+    btnDiagnose:'Diagnose',
+    logsName:'View logs',
+    logsDesc:'Server + setup logs, useful for debugging',
+    devBuild:'Development build',
+    checking:'Checking…',
+    // ── Storage breakdown modal ──
+    storSub:'Per-folder disk usage and orphan detection',
+    storScanning:'Scanning your stockpile…',
+    storTotalIn:'total in stockpile',
+    storTagged:'tagged',
+    storFreeOnDrive:'free on this drive',
+    storMissingOne:'missing file', storMissingMany:'missing files',
+    storOrphanOne:'untagged audio file in root', storOrphanMany:'untagged audio files in root',
+    storMissingNote:'missing',
+    storNoFolders:'No folders yet — create one in Stockpile to start organizing',
+    fileWord:'file', filesWord:'files',
+    storLocate:'Locate missing files',
+    storPrune:'Remove dead entries',
+    storImportBtn:'Import untagged files',
+    storImporting:'Importing files…',
+    notifImported:'Imported', notifStemsSkipped:'stem files skipped',
+    importFailed:'Import failed:',
+    pruneNoDead:'No dead entries found',
+    pruneConfirm:'Remove {n} history entries whose audio file no longer exists?\n\nThis only deletes the database rows (and their folder tags) — no files are touched.\nTip: run "Locate missing files" first if the files might just have moved.',
+    pruneRemoved:'Removed', deadEntriesWord:'dead entries',
+    pruneFailed:'Prune failed:',
+    scanRelocatable:'Scanning for relocatable files…',
+    setStockpileFirst:'Set a stockpile folder in Settings first',
+    backendOffline:'Backend offline',
+    // ── Auto-organize modal ──
+    aoTitle:'Auto-organize',
+    aoScanningSub:'Scanning untagged tracks for folder matches…',
+    aoLooking:'Looking for matches…',
+    aoNoFolders:'No folders to suggest from. Create at least one folder (with artist seeds or some tagged tracks) first.',
+    aoNoUntagged:'No untagged tracks. Nice and clean!',
+    aoNoneMatched:'{n} untagged tracks found, but none matched any folder above the confidence threshold. Try adding artist seeds to your folders, or tag a few manually so the mood model has more to learn from.',
+    aoFound:"Found <strong>{x}</strong> matches out of <strong>{y}</strong> untagged tracks. Uncheck any you don't want. Each track gets the picked folder as its primary tag — files get moved into place automatically.",
+    aoSelectAll:'✓ Select all', aoClearSel:'○ Clear', aoConf70:'≥ 70% only',
+    aoApply:'Apply selected',
+    aoNothing:'Nothing selected',
+    aoApplying:'Applying',
+    aoTaggedOk:'Tagged', failedWord:'failed',
+    // ── Duplicate finder / repair / logs / diag ──
+    dupSub:'Tracks with near-identical audio content',
+    rrTitle:'Review Matches',
+    rrApplyAll:'Apply all top matches',
+    logsTitle:'Logs',
+    diagTitle:'Diagnose Paths',
+    copyClip:'Copy to clipboard',
+    cancelWord:'Cancel', deleteWord:'Delete', previewWord:'Preview',
+    // ── Previously missing keys (had inline fallbacks) ──
+    autoMatched:'Auto-tagged into',
+    setupRequired:'Setup required',
+    setupRun:'Run setup',
+
     // Nav
     download:'Download', analyze:'Analyze', transcribe:'Transcribe',
     tools:'Tools', history:'History', settings:'Settings',
@@ -7495,6 +8667,160 @@ const T = {
     close:'Close', by:'by', save:'Save', delete:'Delete',
   },
   fr: {
+    // ── Beat switch (0.1.3) ──
+    bsTitle:'Beat switch détecté',
+    bsSection:'Beat',
+    bsSwitchAt:'Switch à',
+    bsChange_bpm:'changement de tempo', bsChange_key:'changement de tonalité', bsChange_harmony:'nouvelle mélodie', bsChange_energy:'saut d\'énergie',
+    bsNone:'Aucun beat switch détecté à la sensibilité normale.',
+    bsForceBtn:'Scanner plus fort',
+    bsForcing:'Nouvelle analyse avec un seuil plus bas…',
+    bsLoadFirst:'Chargez la piste dans l\'Analyseur pour naviguer',
+
+    // ── Fonctionnalités 0.1.1 ──
+    watchName:'Surveiller le dossier stockpile',
+    watchDesc:"Surveille la racine du stockpile pour tout nouveau fichier audio déposé depuis n'importe où (Explorateur, autres applications, disques réseau). Les nouveaux fichiers sont importés dans la bibliothèque, indexés et associés automatiquement — combiné avec l'Envoi auto, ils sont classés dans le bon dossier sans que vous touchiez à rien.",
+    watchOnNotif:'Dossier stockpile surveillé — le nouvel audio est importé automatiquement',
+    watchOffNotif:'Surveillance du dossier désactivée',
+    ytdlpAvail:'mise à jour disponible — cliquez pour installer',
+    ytdlpUpToDate:'à jour',
+    ytdlpSystem:'yt-dlp est installé au niveau système — mettez-le à jour via votre gestionnaire de paquets',
+    sepqTitle:'File de séparation',
+    sepqWaiting:'en attente',
+    sepqAdded:'{n} ajoutée(s) à la file de séparation',
+    sepqSkipped:'ignorée(s) (pas de fichier)',
+    sepqClear:'Effacer les terminées',
+    sepSendSelected:'Séparer',
+    simBtn:'Trouver des pistes similaires',
+    simTitle:'Pistes similaires',
+    simLooking:'Comparaison des empreintes, du mood, du BPM et de la tonalité…',
+    simNone:'Aucune piste similaire trouvée. Plus de pistes doivent être indexées ou analysées — lancez l\'indexation dans Trouver les doublons, ou analysez davantage votre bibliothèque.',
+    simOpen:'Ouvrir',
+    simReason_sound:'son', simReason_mood:'mood', simReason_bpm:'BPM', simReason_key:'tonalité',
+
+    // ── i18n balayage lot 2 (0.1.0) ──
+    backendOfflineRetry:'Moteur hors ligne — réessayez dans un instant',
+    dupBackfillHead:'{n} pistes ne sont pas encore indexées.',
+    dupBackfillDesc:'Les nouveaux téléchargements sont indexés automatiquement. Les pistes existantes nécessitent une analyse unique. Quelques secondes chacune ; s\'exécute en arrière-plan.',
+    dupBackfillBtn:'Indexer {n} pistes',
+    dupNoneFound:'Aucun doublon trouvé parmi <strong>{n}</strong> pistes indexées.',
+    dupNotScanned:'({n} pistes pas encore analysées)',
+    dupKeep:'GARDER',
+    dupGroupWord:'Groupe',
+    dupOne:'doublon', dupMany:'doublons',
+    dupDeleteChecked:'Supprimer la sélection',
+    dupFoundSummary:'<strong>{x}</strong> {g} de doublons trouvés parmi <strong>{n}</strong> pistes indexées. La piste la plus ancienne de chaque groupe est marquée « GARDER » par défaut. Décochez les doublons que vous voulez conserver.',
+    dupGroupOne:'groupe', dupGroupMany:'groupes',
+    dupNothingChecked:'Rien de coché',
+    dupDeleteTitle:'Supprimer {n} {w} ?',
+    dupDeleteMsg:'Retire les entrées sélectionnées de votre historique. Les fichiers audio sur le disque ne sont PAS supprimés — seulement les entrées. Pour libérer de l\'espace, supprimez ensuite les fichiers dans votre explorateur.',
+    deletedWord:'Supprimé(s)',
+    fixFilesConfirmTitle:'Corriger l\'emplacement des fichiers ?',
+    fixFilesConfirmMsg:'Analyse chaque piste étiquetée et déplace celles dont le fichier n\'est pas dans son dossier principal sur le disque. Aucun fichier n\'est supprimé — seulement déplacé à sa place.',
+    stockRootLbl:'Racine du stockpile :',
+    scanningBtn:'Analyse…',
+    movedWord:'Déplacé(s)',
+    alreadyInPlace:'déjà en place',
+    missingOnDisk:'manquant(s) sur le disque',
+    errorsWord:'erreurs',
+    checkedNothing:'{n} vérifiées — rien à faire',
+    cleanConfirmTitle:'Nettoyer les fichiers temporaires de Freq.Phull ?',
+    cleanConfirmMsg:'Supprime les fichiers WAV de plus d\'une heure laissés par Freq.Phull dans le Temp de Windows (analyse, séparation de stems, conversion). Tout ce qui est en cours de traitement est protégé.',
+    cleaningBtn:'Nettoyage…',
+    cleanedResult:'{n} {w} nettoyé(s) ({mb} Mo libérés)',
+    cleanNothing:'Rien à nettoyer — le dossier temporaire est propre',
+    updDevOnly:'Les mises à jour ne fonctionnent que dans les versions installées',
+    updDevOnlyLong:'Les mises à jour ne fonctionnent que dans la version installée (packagée), pas en mode développement.',
+    updApiUnavailable:'API de mise à jour indisponible dans cette version',
+    checkingBtn:'Vérification…',
+
+    // ── Page Paramètres (patch 0.1.0 i18n) ──
+    fixFilesName:'Corriger l\'emplacement des fichiers',
+    fixFilesDesc:"Analyse chaque piste étiquetée et déplace celles dont le fichier n'est pas dans son dossier principal. Les fichiers qui devraient être dans <code>Cali Type beat/</code> mais qui ont atterri ailleurs sont remis à leur place. Réutilisable sans risque.",
+    btnFixFiles:'Corriger',
+    cleanTempName:'Nettoyer les fichiers temporaires',
+    cleanTempDesc:"Supprime les fichiers WAV résiduels de Freq.Phull dans le dossier Temp de Windows (plus d'une heure). Ne touche que les fichiers commençant par <code>freqphull_</code> — jamais les dossiers d'exécution de l'application. S'exécute automatiquement toutes les 6 heures ; utilisez ceci pour un nettoyage manuel.<br><strong>N'utilisez PAS <code>del Temp\\*</code> manuellement</strong> — cela supprimerait les binaires ffmpeg/yt-dlp de la version portable et casserait les téléchargements jusqu'au redémarrage.",
+    btnCleanNow:'Nettoyer',
+    autoSendName:'Envoi auto vers le dossier détecté',
+    autoSendDesc:"Quand un nouveau téléchargement correspond aux artistes d'un dossier Stockpile, ne pas seulement l'étiqueter — faire de ce dossier le principal et déplacer le fichier dans <code>RacineStockpile/NomDossier/</code> immédiatement. Les pistes sans correspondance fiable restent en place et pourront être triées plus tard avec Auto-organiser.",
+    autoSendOnNotif:'Les nouveaux téléchargements seront déplacés vers leur dossier détecté',
+    autoSendOffNotif:'Envoi auto désactivé — les fichiers restent en place, étiquettes seulement',
+    sentTo:'Envoyé vers',
+    storName:'Répartition du stockage',
+    storDesc:'Voyez l\'espace disque utilisé par chaque dossier Stockpile, trouvez les fichiers manquants, repérez l\'audio orphelin à la racine de votre stockpile.',
+    btnViewStorage:'Voir le stockage',
+    dupName:'Trouver les pistes en double',
+    dupDesc:'Détecte les pistes au contenu audio identique (même morceau re-uploadé sous différents liens YouTube, bitrates différents, etc.). Utilise une empreinte perceptuelle de l\'audio lui-même, pas les noms de fichiers. Les nouveaux téléchargements sont automatiquement indexés ; les pistes existantes nécessitent une indexation unique.',
+    btnFindDupes:'Trouver les doublons',
+    updName:'Vérifier les mises à jour',
+    updDesc:'Vérifie manuellement sur GitHub si une nouvelle version est disponible. Les mises à jour se téléchargent en arrière-plan et proposent l\'installation une fois prêtes. L\'application vérifie aussi automatiquement toutes les 4 heures.',
+    btnCheckNow:'Vérifier',
+    cpuOnlyName:'Forcer le CPU pour la séparation de stems',
+    cpuOnlyDesc:'Ignore l\'accélération GPU même quand un GPU CUDA est disponible. Utile sur les machines avec peu de VRAM (moins de 4 Go) ou pour garder le GPU libre pour les plugins DAW / autres applications. Plus lent mais charge système réduite.',
+    writeTagsName:'Écrire le BPM et la tonalité dans les fichiers audio',
+    writeTagsDesc:"Après l'analyse, inscrit le BPM et la tonalité détectés dans les métadonnées standard du fichier (ID3 pour MP3/WAV, Vorbis pour FLAC/OGG, atomes MP4 pour M4A). FL Studio, Mixed In Key, Rekordbox, foobar2000 et Apple Music lisent tous ces tags — votre analyse suit le fichier partout. Activé par défaut. Désactivez si vous voulez des fichiers identiques au téléchargement d'origine.",
+    dlClearName:'Effacement auto de la file de téléchargement',
+    dlClearDesc:'Les téléchargements terminés ou échoués disparaissent de la liste après ce délai. Les téléchargements actifs ne sont jamais effacés automatiquement. Choisissez « Désactivé » pour les garder visibles jusqu\'à un effacement manuel.',
+    optOff:'Désactivé', optHour1:'1 heure', optHours12:'12 heures', optHours24:'24 heures', optHours72:'72 heures',
+    enginesName:'Moteurs IA',
+    runSetupBtn:'Lancer l\'installation',
+    diagName:'Diagnostiquer les chemins',
+    diagDesc:'Vérifie quels binaires l\'application trouve — utile quand ffmpeg, yt-dlp etc. ne fonctionnent pas',
+    btnDiagnose:'Diagnostiquer',
+    logsName:'Voir les journaux',
+    logsDesc:'Journaux du serveur et de l\'installation, utiles pour le débogage',
+    devBuild:'Version de développement',
+    checking:'Vérification…',
+    // ── Fenêtre Répartition du stockage ──
+    storSub:'Utilisation disque par dossier et détection des orphelins',
+    storScanning:'Analyse de votre stockpile…',
+    storTotalIn:'au total dans le stockpile',
+    storTagged:'étiquetés',
+    storFreeOnDrive:'libres sur ce disque',
+    storMissingOne:'fichier manquant', storMissingMany:'fichiers manquants',
+    storOrphanOne:'fichier audio non étiqueté à la racine', storOrphanMany:'fichiers audio non étiquetés à la racine',
+    storMissingNote:'manquant(s)',
+    storNoFolders:'Aucun dossier pour l\'instant — créez-en un dans Stockpile pour commencer à organiser',
+    fileWord:'fichier', filesWord:'fichiers',
+    storLocate:'Localiser les fichiers manquants',
+    storPrune:'Supprimer les entrées mortes',
+    storImportBtn:'Importer les fichiers non étiquetés',
+    storImporting:'Importation des fichiers…',
+    notifImported:'Importé(s)', notifStemsSkipped:'fichiers de stems ignorés',
+    importFailed:'Échec de l\'importation :',
+    pruneNoDead:'Aucune entrée morte trouvée',
+    pruneConfirm:'Supprimer {n} entrées de l\'historique dont le fichier audio n\'existe plus ?\n\nSeules les lignes de la base de données (et leurs étiquettes) sont supprimées — aucun fichier n\'est touché.\nAstuce : lancez d\'abord « Localiser les fichiers manquants » si les fichiers ont peut-être juste été déplacés.',
+    pruneRemoved:'Supprimé', deadEntriesWord:'entrées mortes',
+    pruneFailed:'Échec de la suppression :',
+    scanRelocatable:'Recherche de fichiers déplaçables…',
+    setStockpileFirst:'Définissez d\'abord un dossier stockpile dans les Paramètres',
+    backendOffline:'Moteur hors ligne',
+    // ── Fenêtre Auto-organiser ──
+    aoTitle:'Auto-organiser',
+    aoScanningSub:'Analyse des pistes non étiquetées pour trouver des correspondances…',
+    aoLooking:'Recherche de correspondances…',
+    aoNoFolders:'Aucun dossier disponible pour les suggestions. Créez d\'abord au moins un dossier (avec des artistes de référence ou quelques pistes étiquetées).',
+    aoNoUntagged:'Aucune piste non étiquetée. Tout est propre !',
+    aoNoneMatched:'{n} pistes non étiquetées trouvées, mais aucune ne correspond à un dossier au-dessus du seuil de confiance. Essayez d\'ajouter des artistes de référence à vos dossiers, ou étiquetez-en quelques-unes manuellement pour entraîner le modèle.',
+    aoFound:"<strong>{x}</strong> correspondances trouvées sur <strong>{y}</strong> pistes non étiquetées. Décochez celles que vous ne voulez pas. Chaque piste reçoit le dossier choisi comme étiquette principale — les fichiers sont déplacés automatiquement.",
+    aoSelectAll:'✓ Tout sélectionner', aoClearSel:'○ Effacer', aoConf70:'≥ 70 % seulement',
+    aoApply:'Appliquer la sélection',
+    aoNothing:'Aucune sélection',
+    aoApplying:'Application',
+    aoTaggedOk:'Étiquetées', failedWord:'échecs',
+    // ── Doublons / réparation / journaux / diagnostic ──
+    dupSub:'Pistes au contenu audio quasi identique',
+    rrTitle:'Vérifier les correspondances',
+    rrApplyAll:'Appliquer toutes les meilleures correspondances',
+    logsTitle:'Journaux',
+    diagTitle:'Diagnostiquer les chemins',
+    copyClip:'Copier dans le presse-papiers',
+    cancelWord:'Annuler', deleteWord:'Supprimer', previewWord:'Aperçu',
+    // ── Clés manquantes auparavant (repli en dur) ──
+    autoMatched:'Étiqueté automatiquement dans',
+    setupRequired:'Installation requise',
+    setupRun:'Lancer l\'installation',
+
     // Nav
     download:'Télécharger', analyze:'Analyser', transcribe:'Transcrire',
     tools:'Outils', history:'Historique', settings:'Paramètres',
@@ -7853,6 +9179,14 @@ function applyLang() {
   const urlIn = document.getElementById('url-in');
   if (urlIn) urlIn.placeholder = 'https://www.youtube.com/watch?v=…';
 
+  // Generic data-i18n applier (0.1.1): static index.html elements tagged
+  // with data-i18n="key" get their text swapped on language change. Tiny
+  // alternative to converting every static label to a JS render.
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const k = el.getAttribute('data-i18n');
+    if (k) el.textContent = t(k);
+  });
+
   // Render settings page if visible
   renderSettings();
 }
@@ -7898,29 +9232,70 @@ function renderSettings() {
     </div>
     <div class="setting-row">
       <div class="setting-info">
-        <div class="setting-name">Fix file locations</div>
-        <div class="setting-desc" id="fix-files-desc">Scan every tagged track and move any whose files aren't in their primary folder. Files that should be in <code>Cali Type beat/</code> but ended up elsewhere get moved into place. Safe to re-run.</div>
+        <div class="setting-name">${t('fixFilesName')}</div>
+        <div class="setting-desc" id="fix-files-desc">${t('fixFilesDesc')}</div>
       </div>
-      <button class="btn sm" id="btn-fix-files" onclick="repairFileLocations()">📁 Fix files</button>
+      <button class="btn sm" id="btn-fix-files" onclick="repairFileLocations()">📁 ${t('btnFixFiles')}</button>
     </div>
     <div class="setting-row">
       <div class="setting-info">
-        <div class="setting-name">Clean temp files</div>
-        <div class="setting-desc" id="clean-temp-desc">Removes Freq.Phull's leftover WAV files from Windows Temp (older than 1 hour). Only touches files starting with <code>freqphull_</code> — never the app's own runtime folders. Runs automatically every 6 hours; use this for a manual sweep.<br><strong>Do NOT use <code>del Temp\\*</code> manually</strong> — it will delete the portable build's ffmpeg/yt-dlp binaries and break downloads until you relaunch.</div>
+        <div class="setting-name">${t('cleanTempName')}</div>
+        <div class="setting-desc" id="clean-temp-desc">${t('cleanTempDesc')}</div>
       </div>
-      <button class="btn sm" id="btn-clean-temp" onclick="cleanTempFiles()">🧹 Clean now</button>
+      <button class="btn sm" id="btn-clean-temp" onclick="cleanTempFiles()">🧹 ${t('btnCleanNow')}</button>
     </div>
     <div class="setting-row">
       <div class="setting-info">
-        <div class="setting-name">Check for updates</div>
-        <div class="setting-desc" id="update-check-desc">Manually check GitHub for a newer release. Updates download in the background and prompt to install when ready. The app also checks automatically every 4 hours.</div>
+        <div class="setting-name">${t('autoSendName')}</div>
+        <div class="setting-desc">${t('autoSendDesc')}</div>
       </div>
-      <button class="btn sm" id="btn-check-updates" onclick="manualCheckForUpdates()">🔄 Check now</button>
+      <label class="switch">
+        <input type="checkbox" ${(localStorage.getItem('freqphull.autoSend')==='1')?'checked':''} onchange="toggleAutoSend(this.checked)"/>
+        <span class="slider"></span>
+      </label>
     </div>
     <div class="setting-row">
       <div class="setting-info">
-        <div class="setting-name">Force CPU-only for stem separation</div>
-        <div class="setting-desc">Skip GPU acceleration even when a CUDA GPU is available. Use this on low-VRAM machines (under 4GB) or to keep the GPU free for DAW plugins / other apps. Slower but lower system load.</div>
+        <div class="setting-name">${t('watchName')}</div>
+        <div class="setting-desc">${t('watchDesc')}</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" ${(localStorage.getItem('freqphull.watchFolder')==='1')?'checked':''} onchange="toggleWatchFolder(this.checked)"/>
+        <span class="slider"></span>
+      </label>
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-name">${t('storName')}</div>
+        <div class="setting-desc" id="storage-breakdown-desc">${t('storDesc')}</div>
+      </div>
+      <button class="btn sm" onclick="openStorageBreakdown()">💾 ${t('btnViewStorage')}</button>
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-name">${t('dupName')}</div>
+        <div class="setting-desc">${t('dupDesc')}</div>
+      </div>
+      <button class="btn sm" onclick="openDuplicateFinder()">🔁 ${t('btnFindDupes')}</button>
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-name">${t('updName')}</div>
+        <div class="setting-desc" id="update-check-desc">${t('updDesc')}</div>
+      </div>
+      <button class="btn sm" id="btn-check-updates" onclick="manualCheckForUpdates()">🔄 ${t('btnCheckNow')}</button>
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-name">yt-dlp</div>
+        <div class="setting-desc" id="ytdlp-status-desc">${t('checking')}</div>
+      </div>
+      <button class="btn sm" id="btn-ytdlp-update" onclick="manualUpdateYtdlp()">⬆ ${t('btnCheckNow')}</button>
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-name">${t('cpuOnlyName')}</div>
+        <div class="setting-desc">${t('cpuOnlyDesc')}</div>
       </div>
       <label class="switch">
         <input type="checkbox" ${(localStorage.getItem('freqphull.cpuOnly')==='1')?'checked':''} onchange="toggleCpuOnly(this.checked)"/>
@@ -7929,37 +9304,47 @@ function renderSettings() {
     </div>
     <div class="setting-row">
       <div class="setting-info">
-        <div class="setting-name">Auto-clear download queue</div>
-        <div class="setting-desc">Completed and failed downloads disappear from the Downloads list after this much time. Active downloads are never auto-cleared. Set to "Off" to keep them visible until you manually clear.</div>
+        <div class="setting-name">${t('writeTagsName')}</div>
+        <div class="setting-desc">${t('writeTagsDesc')}</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" ${(localStorage.getItem('freqphull.writeTags')!=='0')?'checked':''} onchange="toggleWriteTags(this.checked)"/>
+        <span class="slider"></span>
+      </label>
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-name">${t('dlClearName')}</div>
+        <div class="setting-desc">${t('dlClearDesc')}</div>
       </div>
       <select class="setting-select" id="dl-autoclear-sel" onchange="setDlAutoclear(this.value)">
-        <option value="0">Off</option>
-        <option value="1">1 hour</option>
-        <option value="12">12 hours</option>
-        <option value="24">24 hours</option>
-        <option value="72">72 hours</option>
+        <option value="0">${t('optOff')}</option>
+        <option value="1">${t('optHour1')}</option>
+        <option value="12">${t('optHours12')}</option>
+        <option value="24">${t('optHours24')}</option>
+        <option value="72">${t('optHours72')}</option>
       </select>
     </div>
     <div class="setting-row">
       <div class="setting-info">
-        <div class="setting-name">AI Engines</div>
-        <div class="setting-desc" id="engines-status-desc">Checking…</div>
+        <div class="setting-name">${t('enginesName')}</div>
+        <div class="setting-desc" id="engines-status-desc">${t('checking')}</div>
       </div>
-      <button class="btn sm" id="btn-run-setup" onclick="showSetupModal()">Run setup</button>
+      <button class="btn sm" id="btn-run-setup" onclick="showSetupModal()">${t('runSetupBtn')}</button>
     </div>
     <div class="setting-row">
       <div class="setting-info">
-        <div class="setting-name">Diagnose paths</div>
-        <div class="setting-desc" id="diag-paths-desc">Check which binaries the app can find — useful when ffmpeg, yt-dlp etc. aren't working</div>
+        <div class="setting-name">${t('diagName')}</div>
+        <div class="setting-desc" id="diag-paths-desc">${t('diagDesc')}</div>
       </div>
-      <button class="btn sm" onclick="diagnosePaths()">Diagnose</button>
+      <button class="btn sm" onclick="diagnosePaths()">${t('btnDiagnose')}</button>
     </div>
     <div class="setting-row">
       <div class="setting-info">
-        <div class="setting-name">View logs</div>
-        <div class="setting-desc">Server + setup logs, useful for debugging</div>
+        <div class="setting-name">${t('logsName')}</div>
+        <div class="setting-desc">${t('logsDesc')}</div>
       </div>
-      <button class="btn sm" onclick="viewLogs()">View logs</button>
+      <button class="btn sm" onclick="viewLogs()">${t('logsName')}</button>
     </div>
     <div class="setting-row" style="border:none">
       <div class="setting-info">
@@ -7973,6 +9358,7 @@ function renderSettings() {
   // packaged builds, or {status:'dev'} in unpackaged. We display the version
   // dynamically instead of hardcoding so releases don't drift out of sync
   // with the displayed string.
+  refreshYtdlpStatus();
   if (window.api && window.api.updater) {
     window.api.updater.getStatus().then(s => {
       const el = document.getElementById('about-version-desc');
@@ -7980,7 +9366,7 @@ function renderSettings() {
       if (s && s.currentVersion) {
         el.textContent = 'v' + s.currentVersion + ' — ' + t('by') + ' Cynphull / Hood Knights';
       } else {
-        el.textContent = 'Development build — ' + t('by') + ' Cynphull / Hood Knights';
+        el.textContent = t('devBuild') + ' — ' + t('by') + ' Cynphull / Hood Knights';
       }
     }).catch(() => {});
   }
@@ -8060,12 +9446,12 @@ async function diagnosePaths() {
     modal.innerHTML = `
       <div class="setup-card" style="max-width:720px;max-height:80vh;display:flex;flex-direction:column">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-          <div class="setup-title" style="font-size:22px;text-align:left;margin:0">Diagnose Paths</div>
+          <div class="setup-title" style="font-size:22px;text-align:left;margin:0">${t('diagTitle')}</div>
           <button class="btn xs" onclick="document.getElementById('diag-modal').style.display='none'">✕</button>
         </div>
         <pre id="diag-output" style="flex:1;overflow:auto;background:var(--bg3);padding:14px;border-radius:8px;font-size:11px;font-family:'Menlo',monospace;color:var(--white);white-space:pre-wrap;word-break:break-all;border:1px solid var(--border);line-height:1.55">${escapeHtml(text)}</pre>
         <div style="display:flex;gap:6px;margin-top:12px">
-          <button class="btn pri" onclick="copyDiagOutput()" style="flex:1">Copy to clipboard</button>
+          <button class="btn pri" onclick="copyDiagOutput()" style="flex:1">${t('copyToClipboard')}</button>
         </div>
       </div>
     `;
@@ -8103,7 +9489,7 @@ async function viewLogs() {
     modal.innerHTML = `
       <div class="setup-card" style="max-width:820px;max-height:85vh;display:flex;flex-direction:column">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-          <div class="setup-title" style="font-size:22px;text-align:left;margin:0">Logs</div>
+          <div class="setup-title" style="font-size:22px;text-align:left;margin:0">${t('logsTitle')}</div>
           <button class="btn xs" onclick="document.getElementById('logs-modal').style.display='none'">✕</button>
         </div>
         <div style="display:flex;gap:6px;margin-bottom:10px">
@@ -8224,19 +9610,19 @@ async function repairHistory(silent) {
 // so impatient clicks don't kick off a second pass.
 async function repairFileLocations() {
   if (!backendOnline) {
-    showAppNotification('Backend offline — try again in a moment', 'err');
+    showAppNotification(t('backendOfflineRetry'), 'err');
     return;
   }
   if (!stockpileFolder) {
-    showAppNotification('Set a stockpile folder in Settings first', 'err');
+    showAppNotification(t('setStockpileFirst'), 'err');
     return;
   }
   const ok = await confirmModal({
-    title: 'Fix file locations?',
-    message: 'Scans every tagged track and moves any whose files aren\'t in their primary folder on disk. Files are never deleted — only moved into place.',
-    detail: 'Stockpile root: ' + stockpileFolder,
-    okLabel: 'Fix files',
-    cancelLabel: 'Cancel',
+    title: t('fixFilesConfirmTitle'),
+    message: t('fixFilesConfirmMsg'),
+    detail: t('stockRootLbl') + ' ' + stockpileFolder,
+    okLabel: t('btnFixFiles'),
+    cancelLabel: t('spCancel'),
   });
   if (!ok) return;
 
@@ -8244,7 +9630,7 @@ async function repairFileLocations() {
   const desc = document.getElementById('fix-files-desc');
   // Disable + show a spinner so the user knows something is happening.
   // Reuse the existing pri styling so it matches the rest of the buttons.
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Scanning…'; }
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ ' + t('scanningBtn'); }
   try {
     const r = await fetch(API + '/stockpile/repair-files', {
       method: 'POST',
@@ -8255,13 +9641,13 @@ async function repairFileLocations() {
     if (!r.ok) throw new Error(j.error || 'Repair failed');
     // Build a human summary. We want the most important number first.
     const parts = [];
-    if (j.moved)      parts.push('Moved ' + j.moved + ' file' + (j.moved === 1 ? '' : 's'));
-    if (j.alreadyOk)  parts.push(j.alreadyOk + ' already in place');
-    if (j.missing)    parts.push(j.missing + ' missing on disk');
-    if (j.errors)     parts.push(j.errors + ' errors');
+    if (j.moved)      parts.push(t('movedWord') + ' ' + j.moved + ' ' + (j.moved === 1 ? t('fileWord') : t('filesWord')));
+    if (j.alreadyOk)  parts.push(j.alreadyOk + ' ' + t('alreadyInPlace'));
+    if (j.missing)    parts.push(j.missing + ' ' + t('missingOnDisk'));
+    if (j.errors)     parts.push(j.errors + ' ' + t('errorsWord'));
     const summary = parts.length
       ? parts.join(' · ')
-      : 'Checked ' + j.checked + ' — nothing to do';
+      : t('checkedNothing').replace('{n}', j.checked);
     showAppNotification('✓ ' + summary, 'done');
     if (desc) desc.textContent = summary;
     // Refresh history so the renderer reflects the new file_paths
@@ -8269,7 +9655,7 @@ async function repairFileLocations() {
   } catch (e) {
     showAppNotification('✕ ' + e.message, 'err');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '📁 Fix files'; }
+    if (btn) { btn.disabled = false; btn.textContent = '📁 ' + t('btnFixFiles'); }
   }
 }
 
@@ -8281,19 +9667,19 @@ async function repairFileLocations() {
 // conversions is bad — maxAge=1h ensures we don't touch anything fresh.
 async function cleanTempFiles() {
   if (!backendOnline) {
-    showAppNotification('Backend offline', 'err');
+    showAppNotification(t('backendOffline'), 'err');
     return;
   }
   const ok = await confirmModal({
-    title: 'Clean Freq.Phull temp files?',
-    message: 'Removes WAV files older than 1 hour from Windows Temp that Freq.Phull left behind from analysis, stem separation, and conversion. Anything currently being processed is safe.',
-    okLabel: 'Clean now',
-    cancelLabel: 'Cancel',
+    title: t('cleanConfirmTitle'),
+    message: t('cleanConfirmMsg'),
+    okLabel: t('btnCleanNow'),
+    cancelLabel: t('spCancel'),
   });
   if (!ok) return;
   const btn = document.getElementById('btn-clean-temp');
   const desc = document.getElementById('clean-temp-desc');
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Cleaning…'; }
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ ' + t('cleaningBtn'); }
   try {
     const r = await fetch(API + '/clean-temp-files', {
       method: 'POST',
@@ -8303,14 +9689,14 @@ async function cleanTempFiles() {
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'Cleanup failed');
     const msg = j.deleted > 0
-      ? '✓ Cleaned ' + j.deleted + ' file' + (j.deleted === 1 ? '' : 's') + ' (' + j.mbFreed + ' MB freed)'
-      : '✓ Nothing to clean — temp folder is tidy';
+      ? '✓ ' + t('cleanedResult').replace('{n}', j.deleted).replace('{w}', j.deleted === 1 ? t('fileWord') : t('filesWord')).replace('{mb}', j.mbFreed)
+      : '✓ ' + t('cleanNothing');
     showAppNotification(msg, 'done');
     if (desc) desc.textContent = msg;
   } catch (e) {
     showAppNotification('✕ ' + e.message, 'err');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '🧹 Clean now'; }
+    if (btn) { btn.disabled = false; btn.textContent = '🧹 ' + t('btnCleanNow'); }
   }
 }
 
@@ -8329,17 +9715,17 @@ async function manualCheckForUpdates() {
   const btn = document.getElementById('btn-check-updates');
   const desc = document.getElementById('update-check-desc');
   const origDesc = desc ? desc.textContent : '';
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Checking…'; }
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ ' + t('checkingBtn'); }
   try {
     if (!window.api || !window.api.updater) {
-      throw new Error('Update API unavailable in this build');
+      throw new Error(t('updApiUnavailable'));
     }
     const result = await window.api.updater.check();
     if (!result || result.ok === false) {
       // dev mode, or genuine error
       if (result && result.reason === 'dev') {
-        showAppNotification('Updates only work in packaged builds', 'warn');
-        if (desc) desc.textContent = 'Updates only work in the packaged (installed) build, not in dev mode.';
+        showAppNotification(t('updDevOnly'), 'warn');
+        if (desc) desc.textContent = t('updDevOnlyLong');
       } else {
         const errMsg = (result && result.error) || 'Update check failed';
         showAppNotification('✕ ' + errMsg, 'err');
@@ -8371,6 +9757,207 @@ async function manualCheckForUpdates() {
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '🔄 Check now'; }
   }
+}
+
+// ── Storage breakdown modal ─────────────────────────────────────────────
+// Opens a panel showing per-folder disk usage from /stockpile/disk-usage.
+// Three things the user wants to know:
+//   1. Which folder is biggest? (visual bar chart helps spot bloat)
+//   2. How much total space is the library using?
+//   3. Are there orphans? (audio files in the stockpile root that aren't
+//      tagged into any folder — easy to forget about)
+//
+// The modal is built ad-hoc on open since this is rarely accessed and
+// keeping it out of the static HTML keeps app.js leaner.
+async function openStorageBreakdown() {
+  if (!backendOnline) {
+    showAppNotification('Backend offline', 'err');
+    return;
+  }
+  const root = (typeof stockpileFolder !== 'undefined' && stockpileFolder) ? stockpileFolder : '';
+  if (!root) {
+    showAppNotification('Set a stockpile folder in Settings first', 'warn');
+    return;
+  }
+
+  // Build modal shell first so the user sees a loading state immediately —
+  // the disk walk can take ~500ms on a big library and a frozen settings
+  // page in the meantime feels broken.
+  let modal = document.getElementById('storage-breakdown-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'storage-breakdown-modal';
+    modal.className = 'setup-modal';
+    modal.style.display = 'none';
+    document.body.appendChild(modal);
+  }
+  modal.innerHTML = `
+    <div class="setup-card" style="max-width:720px;max-height:80vh;display:flex;flex-direction:column;padding:24px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div>
+          <div class="setup-title" style="font-size:24px;text-align:left;margin-bottom:2px">💾 ${t('storName')}</div>
+          <div style="font-size:12px;color:var(--muted)">${t('storSub')}</div>
+        </div>
+        <button class="btn xs" onclick="closeStorageBreakdown()">✕</button>
+      </div>
+      <div id="storage-breakdown-body" style="flex:1;overflow-y:auto;padding-right:4px">
+        <div style="text-align:center;padding:40px;color:var(--hint)">${t('storScanning')}</div>
+      </div>
+    </div>`;
+  modal.style.display = 'flex';
+
+  try {
+    const r = await fetch(API + '/stockpile/disk-usage?root=' + encodeURIComponent(root));
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || ('HTTP ' + r.status));
+    }
+    const data = await r.json();
+    renderStorageBreakdown(data);
+  } catch (e) {
+    const body = document.getElementById('storage-breakdown-body');
+    if (body) body.innerHTML = `<div style="color:var(--err);padding:24px">Failed: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function closeStorageBreakdown() {
+  const modal = document.getElementById('storage-breakdown-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+// ── Storage Breakdown fix actions ───────────────────────────────────────
+// These give the warnings chips actual teeth. Each one re-opens the
+// breakdown afterwards so the user immediately sees the updated numbers.
+
+// "Locate missing files" — run the existing repair scan in review mode.
+// Anything fuzzy-matchable gets surfaced in the repair review modal where
+// the user approves each relocation. We close the storage modal first so
+// the two modals don't stack.
+async function storageFixMissing() {
+  closeStorageBreakdown();
+  showAppNotification(t('scanRelocatable'), 'info');
+  await repairHistory(false);
+}
+
+// "Remove dead entries" — prune history rows whose file no longer exists.
+// Dry-run first to show an exact count in the confirm prompt; the server
+// only deletes on confirm=true.
+async function storagePruneMissing() {
+  try {
+    const dry = await fetch(API + '/history/prune-missing', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: false }),
+    }).then(r => r.json());
+    const n = dry.missing || 0;
+    if (!n) { showAppNotification(t('pruneNoDead'), 'info'); openStorageBreakdown(); return; }
+    const ok = confirm(t('pruneConfirm').replace('{n}', n));
+    if (!ok) return;
+    const r = await fetch(API + '/history/prune-missing', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: true }),
+    }).then(x => x.json());
+    showAppNotification('🗑 ' + t('pruneRemoved') + ' ' + (r.removed || 0) + ' ' + t('deadEntriesWord'), 'done');
+    if (typeof loadHistory === 'function') await loadHistory();
+    openStorageBreakdown();
+  } catch (e) {
+    showAppNotification(t('pruneFailed') + ' ' + e.message, 'err');
+  }
+}
+
+// "Import N untagged files" — adopt orphan audio files in the stockpile
+// root into the library, then jump straight into Auto-organize so they
+// get folder suggestions in the same motion.
+async function storageAdoptOrphans() {
+  const root = (typeof stockpileFolder !== 'undefined' && stockpileFolder) ? stockpileFolder : '';
+  if (!root) { showAppNotification(t('setStockpileFirst'), 'warn'); return; }
+  const btnRow = document.getElementById('storage-fix-actions');
+  if (btnRow) btnRow.innerHTML = '<span style="font-size:12px;color:var(--hint)">' + t('storImporting') + '</span>';
+  try {
+    const r = await fetch(API + '/stockpile/adopt-orphans', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root }),
+    }).then(x => x.json());
+    if (r.error) throw new Error(r.error);
+    showAppNotification('📥 ' + t('notifImported') + ' ' + r.adopted + ' ' + (r.adopted === 1 ? t('fileWord') : t('filesWord')) +
+      (r.skipped_stems ? ' (' + r.skipped_stems + ' ' + t('notifStemsSkipped') + ')' : ''), 'done');
+    if (typeof loadHistory === 'function') await loadHistory();
+    closeStorageBreakdown();
+    if (r.adopted > 0) openAutoOrganize();
+  } catch (e) {
+    showAppNotification(t('importFailed') + ' ' + e.message, 'err');
+    openStorageBreakdown();
+  }
+}
+
+function renderStorageBreakdown(data) {
+  const body = document.getElementById('storage-breakdown-body');
+  if (!body) return;
+  // Sort folders by size descending — biggest first is what people actually
+  // want to see (find the bloat, decide what to thin out).
+  const folders = (data.folders || []).slice().sort((a, b) => b.bytes - a.bytes);
+  const maxBytes = folders.reduce((m, f) => Math.max(m, f.bytes), 0) || 1;
+
+  // Top-line summary chips
+  const trackedMB = formatBytes(data.tracked ? data.tracked.bytes : 0);
+  const orphanMB = formatBytes(data.untracked ? data.untracked.bytes : 0);
+  const totalMB = formatBytes(data.root_total_bytes || 0);
+  const freeStr = data.drive && data.drive.free_bytes
+    ? formatBytes(data.drive.free_bytes) + ' ' + t('storFreeOnDrive')
+    : '';
+  const missingChip = data.missing_files > 0
+    ? `<span class="storage-chip warn">⚠ ${data.missing_files} ${data.missing_files === 1 ? t('storMissingOne') : t('storMissingMany')}</span>`
+    : '';
+  const orphanChip = (data.untracked && data.untracked.files > 0)
+    ? `<span class="storage-chip warn">${data.untracked.files} ${data.untracked.files === 1 ? t('storOrphanOne') : t('storOrphanMany')} (${orphanMB})</span>`
+    : '';
+
+  // Action buttons — the whole point of surfacing problems is letting the
+  // user fix them right here instead of hunting through Settings.
+  const fixActions = [];
+  if (data.missing_files > 0) {
+    fixActions.push(`<button class="btn xs" onclick="storageFixMissing()">🔍 ${t('storLocate')}</button>`);
+    fixActions.push(`<button class="btn xs" onclick="storagePruneMissing()">🗑 ${t('storPrune')}</button>`);
+  }
+  if (data.untracked && data.untracked.files > 0) {
+    fixActions.push(`<button class="btn xs" onclick="storageAdoptOrphans()">📥 ${t('storImportBtn')} (${data.untracked.files})</button>`);
+  }
+  fixActions.push(`<button class="btn xs" onclick="closeStorageBreakdown();openAutoOrganize()">✨ ${t('aoTitle')}</button>`);
+  const actionsHTML = `<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap" id="storage-fix-actions">${fixActions.join('')}</div>`;
+
+  const summaryHTML = `
+    <div style="margin-bottom:16px;padding:12px 14px;background:var(--bg);border-radius:8px;border:1px solid var(--border)">
+      <div style="font-size:12px;color:var(--hint);margin-bottom:4px">${escapeHtml(data.stockpile_root)}</div>
+      <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13px">
+        <div><strong>${totalMB}</strong> ${t('storTotalIn')}</div>
+        <div><strong>${trackedMB}</strong> ${t('storTagged')} (${data.tracked ? data.tracked.files : 0} ${t('filesWord')})</div>
+        ${freeStr ? `<div style="color:var(--hint)">${freeStr}</div>` : ''}
+      </div>
+      ${(missingChip || orphanChip) ? `<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">${missingChip}${orphanChip}</div>` : ''}
+      ${actionsHTML}
+    </div>`;
+
+  // Per-folder bars
+  const folderRowsHTML = folders.length === 0
+    ? '<div style="text-align:center;color:var(--hint);padding:24px">' + t('storNoFolders') + '</div>'
+    : folders.map(f => {
+        const pct = Math.max(2, Math.round((f.bytes / maxBytes) * 100));
+        const colorStyle = f.color ? `background:${escapeHtml(f.color)}` : 'background:var(--accent)';
+        const missingNote = f.missing_count > 0
+          ? `<span style="color:#f59e0b;margin-left:8px;font-size:11px">⚠ ${f.missing_count} ${t('storMissingNote')}</span>`
+          : '';
+        return `
+          <div class="storage-folder-row" style="margin-bottom:10px">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
+              <div style="font-size:13px;font-weight:500">${escapeHtml(f.name)}</div>
+              <div style="font-size:12px;color:var(--hint)">${formatBytes(f.bytes)} · ${f.file_count} ${f.file_count === 1 ? t('fileWord') : t('filesWord')}${missingNote}</div>
+            </div>
+            <div style="height:6px;background:var(--bg);border-radius:3px;overflow:hidden;border:1px solid var(--border)">
+              <div style="height:100%;width:${pct}%;${colorStyle};transition:width 240ms ease"></div>
+            </div>
+          </div>`;
+      }).join('');
+
+  body.innerHTML = summaryHTML + folderRowsHTML;
 }
 
 // Repair review modal — shows broken history entries with the top candidate(s)
@@ -8407,7 +9994,7 @@ function showRepairReviewModal(items) {
     <div class="setup-card" style="max-width:640px;max-height:80vh;display:flex;flex-direction:column;padding:24px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
         <div>
-          <div class="setup-title" style="font-size:24px;text-align:left;margin-bottom:2px">Review Matches</div>
+          <div class="setup-title" style="font-size:24px;text-align:left;margin-bottom:2px">${t('rrTitle')}</div>
           <div style="font-size:12px;color:var(--muted)">${items.length} track${items.length === 1 ? '' : 's'} need confirmation — pick the right file or skip</div>
         </div>
         <button class="btn xs" onclick="closeRepairReview()">✕</button>
@@ -8442,7 +10029,7 @@ function showRepairReviewModal(items) {
         `).join('')}
       </div>
       <div style="display:flex;gap:6px;margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
-        <button class="btn pri" onclick="applyAllReviewMatches()" style="flex:1">Apply all top matches</button>
+        <button class="btn pri" onclick="applyAllReviewMatches()" style="flex:1">${t('repairApplyAll')}</button>
         <button class="btn xs" onclick="closeRepairReview()">Done</button>
       </div>
     </div>
@@ -8610,12 +10197,44 @@ function renderStockpileFolders() {
         <button title="Delete" onclick="deleteFolder(${f.id})">×</button>
       </div>
       <div class="sp-fc-name"><span class="sp-fc-color" ${f.color ? `style="background:${escapeHtml(f.color)}"` : ''}></span>${escapeHtml(f.name)}</div>
-      <div class="sp-fc-count">${f.track_count} ${f.track_count === 1 ? t('spTrack') : t('spTracks')}</div>
+      <div class="sp-fc-count">${f.track_count} ${f.track_count === 1 ? t('spTrack') : t('spTracks')} <span class="sp-fc-size" id="sp-fc-size-${f.id}" style="opacity:.6;margin-left:6px"></span></div>
       ${f.description ? `<div class="sp-fc-desc">${escapeHtml(f.description)}</div>` : ''}
       ${seedsTxt ? `<div class="sp-fc-seeds">${escapeHtml(seedsTxt)}${f.artist_seeds.split(',').length > 3 ? ' …' : ''}</div>` : ''}
     `;
     grid.appendChild(card);
   }
+  // Lazy-fill disk usage badges on each folder card. Single endpoint hit
+  // populates all of them in one round trip — cheaper than per-card requests
+  // and avoids the cards flickering in one by one.
+  hydrateFolderCardSizes();
+}
+
+// Fetches disk usage for all folders in one call and writes the formatted
+// byte count into each card's size span. Failures are silent — the cards
+// just don't get a size annotation, which is no worse than before.
+async function hydrateFolderCardSizes() {
+  try {
+    const root = (typeof stockpileFolder !== 'undefined' && stockpileFolder) ? stockpileFolder : '';
+    if (!root) return;
+    const r = await fetch(API + '/stockpile/disk-usage?root=' + encodeURIComponent(root));
+    if (!r.ok) return;
+    const j = await r.json();
+    if (!j.ok || !Array.isArray(j.folders)) return;
+    for (const f of j.folders) {
+      const el = document.getElementById('sp-fc-size-' + f.id);
+      if (el && f.bytes > 0) el.textContent = '· ' + formatBytes(f.bytes);
+    }
+  } catch {}
+}
+
+// Bytes → human string. Uses 1024 (binary) which is what Windows shows.
+function formatBytes(n) {
+  if (!n || n < 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let u = 0;
+  let v = n;
+  while (v >= 1024 && u < units.length - 1) { v /= 1024; u++; }
+  return (v < 10 ? v.toFixed(1) : Math.round(v)) + ' ' + units[u];
 }
 
 async function renderStockpileUntagged() {
@@ -8971,7 +10590,7 @@ function renderFolderTracks() {
     // chord progression, LUFS, dynamic range, etc.). The title is the
     // primary surface so it gets a hover affordance.
     return `
-      <div class="sp-fv-row" data-id="${tr.id}">
+      <div class="sp-fv-row" data-id="${tr.id}" draggable="true" ondragstart="dragStockpileRowToExternal(event, ${tr.id})">
         <button class="sp-fv-play ${isPlaying}" tabindex="-1" onmousedown="this.blur()" onclick="folderViewPlayTrack(${tr.id});this.blur()" title="${t('spPreview') || 'Preview'}">${playGlyph}</button>
         ${thumb}
         <div class="sp-fv-info sp-fv-info-clickable" onclick="folderViewOpenAnalysis(${tr.id})" title="${t('spOpenAnalysis') || 'Open full analysis'}">
@@ -9149,6 +10768,9 @@ function playTrack(track, context) {
   globalPlayer.track = track;
   globalPlayer.context = context || null;
   globalPlayer._currentLoad = myLoad;
+  // New track in the mini player → heart must reflect ITS favorite state,
+  // not whatever the previous track left behind.
+  syncMiniFavHeart();
   globalPlayer.audio.src = API + '/file?path=' + encodeURIComponent(track.file_path);
   applyVolumeToAudio();
   globalPlayer.audio.play().catch(err => {
@@ -10581,6 +12203,21 @@ function _setupUpdater() {
   window.api.updater.onNone(() => {
     if (typeof diagLog === 'function') diagLog('Updater: up to date', 'info');
   });
+
+  // Pull-based catch-up: if the main process already found an update
+  // BEFORE these listeners attached (boot check beating a slow renderer),
+  // that IPC event is gone — fetch the cached payload instead. Belt and
+  // suspenders with the main-side did-finish-load replay.
+  if (typeof window.api.updater.getPending === 'function') {
+    window.api.updater.getPending().then(info => {
+      if (info && info.version && _updateState === null) {
+        _updateInfo = info;
+        _updateState = 'AVAILABLE';
+        if (!_updateDismissedSession) _showUpdateBanner();
+        _renderUpdateBanner();
+      }
+    }).catch(() => {});
+  }
 }
 
 function _showUpdateBanner() {
@@ -10595,6 +12232,7 @@ function _showUpdateBanner() {
   void _updateBannerEl.offsetWidth;
   requestAnimationFrame(() => {
     _updateBannerEl.classList.remove('out');
+    _repositionNotifStack();
   });
 }
 
@@ -10606,6 +12244,7 @@ function _hideUpdateBanner() {
     if (_updateBannerEl.classList.contains('out')) {
       _updateBannerEl.classList.add('hidden');
     }
+    _repositionNotifStack();
   }, 340);
 }
 
@@ -10707,3 +12346,56 @@ function onUpdateBannerLater() {
   _updateDismissedSession = true;
   _hideUpdateBanner();
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// CLICK-OUTSIDE-TO-CLOSE FOR POPUP MODALS (patch 20)
+// ══════════════════════════════════════════════════════════════════════
+// Every popup (Logs, Storage breakdown, Auto-organize, Duplicate finder,
+// Diagnose paths, Repair review, bulk-tag picker…) shares the
+// `.setup-modal` backdrop class. Clicking the dimmed area around the card
+// now closes the popup — no need to hunt for the ✕.
+//
+// Exclusions:
+//   • #setup-modal — the first-run engine setup. Dismissing that
+//     mid-install by a stray click would be destructive, so it keeps
+//     requiring an explicit button.
+// Special cases:
+//   • #bulk-tag-modal awaits a Promise; we resolve(null) so the awaiting
+//     code unwinds instead of hanging forever.
+// We listen on mousedown+up pairs (not bare click) so that selecting text
+// inside the card and releasing over the backdrop doesn't nuke the popup.
+(function initModalOutsideClose() {
+  let downTarget = null;
+  document.addEventListener('mousedown', (e) => { downTarget = e.target; }, true);
+  document.addEventListener('click', (e) => {
+    const el = e.target;
+    if (!el || !el.classList || !el.classList.contains('setup-modal')) return;
+    if (downTarget !== el) return;            // press started inside the card
+    if (el.id === 'setup-modal') return;      // first-run setup stays explicit
+    if (el.style.display === 'none') return;
+    if (el.id === 'bulk-tag-modal' && typeof window._bulkTagResolve === 'function') {
+      window._bulkTagResolve(null);           // also hides + cleans up
+      return;
+    }
+    el.style.display = 'none';
+  }, true);
+  // Esc closes the top-most visible popup too — same exclusions.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const open = Array.from(document.querySelectorAll('.setup-modal'))
+      .filter(m => m.style.display !== 'none' && m.id !== 'setup-modal');
+    if (!open.length) return;
+    const top = open[open.length - 1];
+    if (top.id === 'bulk-tag-modal' && typeof window._bulkTagResolve === 'function') {
+      window._bulkTagResolve(null);
+      return;
+    }
+    top.style.display = 'none';
+  });
+})();
+
+
+// ── 0.1.1 boot: push client prefs to the server once it's reachable ────
+// (stockpile root + auto-send + watch-folder live in localStorage; the
+// server-side watcher and extension-path auto-send need them mirrored.)
+setTimeout(() => { try { syncPrefsToServer(); } catch {} }, 5000);

@@ -1,6 +1,6 @@
 {
   "name": "freqphull",
-  "version": "0.0.5",
+  "version": "0.2.1",
   "description": "Freq.Phull",
   "main": "main.js",
   "scripts": {
@@ -67,6 +67,9 @@
       "bin/**",
       "stems.py",
       "analyze.py",
+      "write_tags.py",
+      "fingerprint.py",
+      "mastering.py",
       "_phull_internal.py",
       "key_model.pkl",
       "installer/**",

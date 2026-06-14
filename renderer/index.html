@@ -977,7 +977,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
  * Uses transform + opacity for GPU-accelerated entrance — same easing as
  * the mini player compact transition (Material's decelerate curve). */
 .update-banner{
-  position:fixed;top:48px;right:14px;z-index:9000;
+  position:fixed;top:48px;right:14px;z-index:9999; /* above the toast stack (9998) — Install must never be covered */
   background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);
   padding:12px 14px;display:flex;align-items:center;gap:12px;
   box-shadow:0 12px 36px rgba(0,0,0,.55);
@@ -1525,7 +1525,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .sep-hist-meta{font-size:12px;color:var(--muted)}
 
 /* ── First-launch engines setup modal ── */
-.setup-modal{position:fixed;inset:0;background:rgba(8,8,8,0.96);backdrop-filter:blur(6px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px;-webkit-app-region:drag}
+.setup-modal{position:fixed;inset:0;background:rgba(8,8,8,0.96);backdrop-filter:blur(6px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px;-webkit-app-region:no-drag;cursor:default}
 .setup-card{background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:32px 30px;width:100%;max-width:480px;box-shadow:0 20px 60px rgba(0,0,0,0.5);-webkit-app-region:no-drag}
 .setup-logo{display:flex;justify-content:center;margin-bottom:18px}
 .setup-logo img{width:56px;height:56px;border-radius:10px;opacity:0.92}
@@ -1583,11 +1583,26 @@ input[type=range]{flex:1;accent-color:var(--white)}
  * auto-dismiss. Hovering the stack pauses every timer (Apple-style). The
  * container itself is pointer-events:none so the empty area never blocks
  * clicks on the app underneath — only the actual toasts intercept input. */
+.bs-card{background:var(--bg3,#161616);border:1px solid var(--border2,#2a2a2a);border-radius:8px;padding:12px 14px;margin-bottom:12px}
+.bs-head{font-size:13px;font-weight:700;color:var(--white);margin-bottom:6px;letter-spacing:.3px}
+.bs-switch-note{font-size:12px;color:var(--muted);margin-bottom:8px}
+.bs-timeline{display:flex;width:100%;height:18px;border-radius:5px;overflow:hidden;margin:6px 0 10px;background:var(--bg)}
+.bs-tl-seg{height:100%;cursor:pointer;transition:filter .12s}
+.bs-tl-seg:hover{filter:brightness(1.6)}
+.bs-row{display:flex;align-items:center;gap:9px;padding:5px 6px;border-radius:5px;cursor:pointer;font-size:12px}
+.bs-row:hover{background:var(--bg)}
+.bs-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+.bs-name{font-weight:600;color:var(--white);width:54px}
+.bs-time{color:var(--hint);width:96px;font-variant-numeric:tabular-nums}
+.bs-chip{background:var(--bg);border:1px solid var(--border2,#2a2a2a);border-radius:4px;padding:1px 7px;font-size:11px;color:var(--off,#ddd);white-space:nowrap}
+.bs-db{margin-left:auto;color:var(--hint);font-size:11px;font-variant-numeric:tabular-nums}
+
 .app-notif-stack{
   position:fixed;top:62px;right:14px;z-index:9998;
   display:flex;flex-direction:column;gap:10px;
   max-width:380px;width:calc(100vw - 28px);
   pointer-events:none;
+  transition:top 240ms cubic-bezier(.4,0,.2,1); /* slides down/up as the update banner appears/leaves */
 }
 .app-notif{
   position:relative;
@@ -2221,6 +2236,14 @@ input[type=range]{flex:1;accent-color:var(--white)}
       </div>
 
       <!-- Progress -->
+      <div class="card hidden" id="sep-queue" style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div style="font-size:13px;font-weight:600;color:var(--white)">🎛 <span data-i18n="sepqTitle">Separation queue</span> · <span id="sep-queue-count"></span></div>
+          <button class="btn xs" onclick="clearSepQueueFinished()" data-i18n="sepqClear">Clear finished</button>
+        </div>
+        <div id="sep-queue-list"></div>
+      </div>
+
       <div class="card hidden" id="stems-progress">
         <div class="sh"><div class="sh-title" id="stems-prog-title">Separating…</div><span style="font-size:14px;color:var(--muted);font-variant-numeric:tabular-nums" id="stems-prog-pct">0%</span></div>
         <div class="prog-track"><div class="prog-fill" id="stems-prog-fill" style="width:0%"></div></div>
@@ -2404,8 +2427,14 @@ input[type=range]{flex:1;accent-color:var(--white)}
           <span class="hb-count" id="hist-sel-count">0 selected</span>
         </div>
         <div class="hb-right hidden" id="batch-move-actions">
+          <button class="btn sm" onclick="bulkTagSelected()" title="Apply a Stockpile tag to all selected tracks">🏷️ Tag…</button>
+          <button class="btn sm" onclick="bulkFavoriteSelected(true)" title="Add to Favorites">♥ Favorite</button>
+          <button class="btn sm" onclick="bulkFavoriteSelected(false)" title="Remove from Favorites">♡ Unfavorite</button>
+          <button class="btn sm" onclick="bulkReanalyzeSelected()" title="Re-run BPM/key analysis on all selected">🔍 Re-analyze</button>
+          <button class="btn sm" onclick="bulkSendToSeparator()" title="Queue selected tracks for stem separation">🎛 Separate</button>
           <button class="btn sm" id="btn-stockpile" onclick="bulkMoveSelected('stockpile')" title="Move selected to Stockpile folder">📦 To Stockpile</button>
           <button class="btn sm" id="btn-moveto" onclick="bulkMoveSelected('pick')" title="Choose folder">📁 Move to…</button>
+          <button class="btn sm danger" onclick="bulkDeleteSelected()" title="Delete from history (files remain on disk)">🗑️ Delete</button>
         </div>
       </div>
 
@@ -2487,6 +2516,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
         <div class="sh">
           <div class="sh-title" id="sp-untagged-title">Untagged</div>
           <span class="sh-meta" id="sp-untagged-count">0 tracks</span>
+          <button class="btn xs" style="margin-left:auto" onclick="openAutoOrganize()" title="Suggest a folder for each untagged track based on artist, mood, BPM, and key similarity">✨ Auto-organize</button>
         </div>
         <div id="sp-untagged-list" class="sp-untagged-list">
           <div class="sp-empty" id="sp-untagged-empty" style="font-size:12px;color:var(--hint)">All tracks tagged.</div>

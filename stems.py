@@ -46,8 +46,30 @@ logging.getLogger("audio_separator.separator").setLevel(logging.WARNING)
 
 
 def emit(obj):
-    sys.stdout.write(json.dumps(obj) + "\n")
-    sys.stdout.flush()
+    # Wrap stdout writes in try/except: if the parent process has closed
+    # the read end of our pipe (e.g. renderer's EventSource was closed by
+    # the user, server ended the response stream), every subsequent emit
+    # would raise BrokenPipeError. Without this guard, a single broken
+    # pipe cascades into the outer exception handler trying to emit an
+    # error message, which ALSO fails, leaving Python to die with an
+    # unhandled exception and exit=null on the parent side.
+    #
+    # The right behavior when nobody's listening anymore is: silently
+    # finish what we were doing (the stems are already on disk by this
+    # point), exit 0. The parent will see a clean exit code and treat it
+    # as success based on the artifacts on disk.
+    try:
+        sys.stdout.write(json.dumps(obj) + "\n")
+        sys.stdout.flush()
+    except (BrokenPipeError, OSError):
+        # Pipe is gone. Stop trying to write to stdout for the rest of
+        # the process — replace stdout with /dev/null so future emits
+        # are no-ops instead of repeatedly raising.
+        try:
+            devnull = open(os.devnull, "w")
+            sys.stdout = devnull
+        except Exception:
+            pass
 
 
 def emit_error(message, hint=""):
@@ -1336,6 +1358,17 @@ def main():
         direct_mode = args.no_vocal_isolation
         stage1_time = 0.0
         vocals_path = None
+        # These four are produced by the Stage 1.5 / 1.7 blocks which only
+        # run when vocal isolation is on. They MUST be initialized here —
+        # in direct mode the blocks are skipped entirely, and downstream
+        # code (bleed cleanup, elapsed-time math) reads them regardless.
+        # Leaving them inside the branch caused UnboundLocalError crashes
+        # on every direct-mode run ("cannot access local variable
+        # 'stage1_5_time'") and silently disabled the bleed cleanup.
+        lead_vocal_path = None
+        back_vocal_path = None
+        stage1_5_time = 0.0
+        dereverb_time = 0.0
 
         if not direct_mode:
             progress_msg("loading_engine", 3, model=VOCAL_CODENAME, device=device_name,
@@ -1532,10 +1565,9 @@ def main():
             # Uses a separate karaoke-trained roformer model. The result quality
             # is honest "best effort" — works well on clean pop/R&B and varies
             # by track on rap (ad-libs blur into lead, this is acoustically hard).
-            lead_vocal_path = None
-            back_vocal_path = None
-            stage1_5_time = 0.0
-            dereverb_time = 0.0
+            # (lead_vocal_path / back_vocal_path / stage1_5_time /
+            # dereverb_time are initialized before the direct_mode branch —
+            # see above — so direct-mode runs never hit UnboundLocalError.)
             if args.split_lead_vocal:
                 progress_msg("loading_lead_vocal_model", 39, model=LEAD_VOCAL_CODENAME)
                 # Free Stage 1 from memory before loading the lead-vocal model.
@@ -2085,7 +2117,14 @@ def main():
             except ImportError:
                 _analyzer = None
             if _analyzer is not None:
-                for stem_name, stem_path in final_stems.items():
+                # final_stems is a list of dicts like {"name":..., "path":...}.
+                # Iterate over those dicts instead of calling .items() (which
+                # is a dict method — calling it on a list raised AttributeError
+                # and silently cascaded through the broken-pipe protection
+                # above into process death with exit=null).
+                for stem_entry in final_stems:
+                    stem_name = stem_entry.get("name") or stem_entry.get("label") or ""
+                    stem_path = stem_entry.get("path")
                     if not stem_path or not os.path.isfile(stem_path):
                         continue
                     try:

@@ -135,6 +135,17 @@ async function initDB() {
       updated_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now'))
     )`);
 
+    // Server-side preferences shared by ALL clients (desktop renderer +
+    // browser extension). Until 0.1.1 settings lived in the desktop's
+    // localStorage, which the extension and the server itself couldn't
+    // see — so features like auto-send only worked for desktop-initiated
+    // downloads, and the watch-folder daemon had no way to know the
+    // stockpile root. Key-value, strings only.
+    db.run(`CREATE TABLE IF NOT EXISTS prefs (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    )`);
+
     // Migration: add stockpile_committed column to history if missing.
     // Tracks whether a file has been moved into the stockpile folder structure.
     try {
@@ -160,6 +171,15 @@ async function initDB() {
     try {
       db.run(`ALTER TABLE history ADD COLUMN user_notes TEXT`);
       slog('DB migration: added history.user_notes');
+    } catch (e) { /* already exists */ }
+    // Perceptual audio fingerprint — 512-bit hex hash. Used for duplicate
+    // detection: two tracks with identical or near-identical hashes are
+    // the same audio in different files (re-uploads, format conversions,
+    // different bitrates). Computed asynchronously after download; the
+    // /history/duplicates endpoint groups rows by hamming distance.
+    try {
+      db.run(`ALTER TABLE history ADD COLUMN audio_hash TEXT`);
+      slog('DB migration: added history.audio_hash');
     } catch (e) { /* already exists */ }
     saveDB();
     slog('DB ready');
@@ -240,7 +260,162 @@ function getResourcePath(rel) {
   return null;
 }
 
-// Read a UTF-8 file, transparently stripping any byte-order mark (BOM).
+// ── Audio-file tag writing (BPM + key into ID3 / Vorbis / MP4 atoms) ─────
+// After analysis completes and we save BPM/key into our SQLite DB, we ALSO
+// stamp them into the audio file's standard metadata tags. This lets every
+// other tool in the producer's workflow (FL Studio, Mixed In Key, Rekordbox,
+// foobar2000, Spotify metadata, Apple Music, Beatport tools) see the
+// analysis without depending on Freq.Phull being installed.
+//
+// Implementation: a small Python helper (write_tags.py) using mutagen,
+// which is already a transitive dependency of audio-separator. We invoke
+// it after the response is sent (setImmediate) so analyze flow is not
+// blocked.
+//
+// The user can opt out via a Settings toggle stored in
+// %APPDATA%\freqphull\settings.json under "write_tags_enabled". Default
+// on — it's a net-positive feature for the vast majority of users.
+
+function writeTagsToFileEnabled() {
+  try {
+    const settingsPath = path.join(os.homedir(), 'AppData', 'Roaming', 'freqphull', 'settings.json');
+    if (!fs.existsSync(settingsPath)) return true;  // default on
+    const raw = readUtf8(settingsPath);
+    const s = JSON.parse(raw);
+    // If the key is unset, default to enabled. Only an explicit false
+    // disables it.
+    if (typeof s.write_tags_enabled === 'boolean') return s.write_tags_enabled;
+    return true;
+  } catch {
+    return true;  // any error → default on (matches feature being opt-out)
+  }
+}
+
+function writeTagsToFile(historyId, { bpm, key_note, key_mode }) {
+  try {
+    // Look up the file path from the DB. We don't trust the client to send
+    // it — file_path is an authoritative path that history endpoints have
+    // already validated and managed.
+    const row = dbAll('SELECT file_path FROM history WHERE id=?', [historyId])[0];
+    if (!row || !row.file_path) {
+      slog('writeTagsToFile: no file_path for id ' + historyId);
+      return;
+    }
+    const filePath = row.file_path;
+    if (!fs.existsSync(filePath)) {
+      slog('writeTagsToFile: file missing on disk: ' + filePath);
+      return;
+    }
+
+    const scriptPath = getResourcePath('write_tags.py');
+    if (!scriptPath) {
+      slog('writeTagsToFile: write_tags.py not bundled — skipping');
+      return;
+    }
+    const pythonCmd = getPythonCmd();
+    const cmdJson = JSON.stringify({
+      path: filePath,
+      bpm: typeof bpm === 'number' ? bpm : null,
+      key_note: key_note || null,
+      key_mode: key_mode || null,
+    });
+
+    // Hand off to Python. We don't await the result — fire-and-forget,
+    // but log the outcome so issues are observable in the server log.
+    // Pass the JSON command as a single argv to dodge shell quoting issues
+    // with non-ASCII paths.
+    const proc = spawn(pythonCmd, [scriptPath, cmdJson], { windowsHide: true });
+    let stdout = '', stderr = '';
+    proc.stdout.on('data', d => { stdout += d; });
+    proc.stderr.on('data', d => { stderr += d; });
+    proc.on('close', code => {
+      if (code !== 0) {
+        slog('writeTagsToFile: python exited ' + code + ' stderr=' + (stderr || '').slice(0, 300));
+        return;
+      }
+      try {
+        const result = JSON.parse((stdout || '').trim().split('\n').pop() || '{}');
+        if (result.ok) {
+          slog('writeTagsToFile: stamped ' + result.fmt + ' bpm=' + result.bpm + ' key=' + result.key + ' (id=' + historyId + ')');
+        } else {
+          slog('writeTagsToFile: helper reported failure: ' + (result.error || 'unknown'));
+        }
+      } catch (e) {
+        slog('writeTagsToFile: bad JSON from helper: ' + e.message + ' raw=' + stdout.slice(0, 200));
+      }
+    });
+    proc.on('error', e => slog('writeTagsToFile: spawn error: ' + e.message));
+  } catch (e) {
+    slog('writeTagsToFile: ' + e.message);
+  }
+}
+
+// ── Audio fingerprinting (for duplicate detection) ───────────────────────
+// Computes a 512-bit perceptual hash and stores it on the history row.
+// Runs asynchronously after download so it never blocks the user.
+// Fingerprints are compared by hamming distance in the /history/duplicates
+// endpoint — same audio in different files produces near-identical hashes.
+//
+// This helper is fire-and-forget: failures are logged but never surfaced
+// to the user. The fingerprint is purely a nice-to-have that powers
+// duplicate detection. Tracks without fingerprints just don't get
+// detected as duplicates, which is fine.
+function computeFingerprint(historyId, filePath) {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) {
+      slog('computeFingerprint: file missing for id ' + historyId);
+      return;
+    }
+    const scriptPath = getResourcePath('fingerprint.py');
+    if (!scriptPath) {
+      slog('computeFingerprint: fingerprint.py not bundled — skipping');
+      return;
+    }
+    const pythonCmd = getPythonCmd();
+    const proc = spawn(pythonCmd, [scriptPath, filePath], { windowsHide: true });
+    let stdout = '', stderr = '';
+    proc.stdout.on('data', d => { stdout += d; });
+    proc.stderr.on('data', d => { stderr += d; });
+    proc.on('close', code => {
+      if (code !== 0) {
+        slog('computeFingerprint: python exited ' + code + ' stderr=' + (stderr || '').slice(0, 300));
+        return;
+      }
+      try {
+        const result = JSON.parse((stdout || '').trim().split('\n').pop() || '{}');
+        if (result.ok && result.hash) {
+          dbRun('UPDATE history SET audio_hash=? WHERE id=?', [result.hash, historyId]);
+          saveDB();
+          slog('computeFingerprint: hashed id=' + historyId + ' duration=' + result.duration);
+        } else {
+          slog('computeFingerprint: helper reported failure: ' + (result.error || 'unknown'));
+        }
+      } catch (e) {
+        slog('computeFingerprint: bad JSON: ' + e.message);
+      }
+    });
+    proc.on('error', e => slog('computeFingerprint: spawn error: ' + e.message));
+  } catch (e) {
+    slog('computeFingerprint: ' + e.message);
+  }
+}
+
+// Compare two hex hashes by hamming distance. Returns the number of
+// differing bits, or null if hashes are missing/malformed.
+function hammingDistanceHex(a, b) {
+  if (!a || !b || a.length !== b.length) return null;
+  let dist = 0;
+  for (let i = 0; i < a.length; i++) {
+    const x = parseInt(a[i], 16) ^ parseInt(b[i], 16);
+    // Count bits set in x (which is 0-15, so unrolled is fast enough)
+    for (let bit = 0; bit < 4; bit++) {
+      if ((x >> bit) & 1) dist++;
+    }
+  }
+  return dist;
+}
+
+
 // PowerShell's Out-File -Encoding utf8 writes UTF-8-BOM by default, and
 // JSON.parse rejects BOM, so any marker we wrote from PowerShell needs this.
 function readUtf8(filePath) {
@@ -580,6 +755,8 @@ app.get('/diag-bin', (_, res) => {
     'stems.py':            { paths: [path.join(RES, 'stems.py'), path.join(__dirname, 'stems.py'), path.join(asarUnpacked, 'stems.py')] },
     'analyze.py':          { paths: [path.join(RES, 'analyze.py'), path.join(__dirname, 'analyze.py'), path.join(asarUnpacked, 'analyze.py')] },
     'mastering.py':        { paths: [path.join(RES, 'mastering.py'), path.join(__dirname, 'mastering.py'), path.join(asarUnpacked, 'mastering.py')] },
+    'write_tags.py':       { paths: [path.join(RES, 'write_tags.py'), path.join(__dirname, 'write_tags.py'), path.join(asarUnpacked, 'write_tags.py')] },
+    'fingerprint.py':      { paths: [path.join(RES, 'fingerprint.py'), path.join(__dirname, 'fingerprint.py'), path.join(asarUnpacked, 'fingerprint.py')] },
     'setup-engines.ps1':   { paths: [path.join(RES, 'installer', 'setup-engines.ps1'), path.join(__dirname, 'installer', 'setup-engines.ps1'), path.join(asarUnpacked, 'installer', 'setup-engines.ps1')] },
   };
   for (const k of Object.keys(result.scripts)) {
@@ -683,6 +860,13 @@ app.get('/download', async (req, res) => {
       historyId = dbRun(`INSERT INTO history (title,channel,youtube_url,file_path,format,duration,thumbnail) VALUES (?,?,?,?,?,?,?)`,
         [meta.title||filename, meta.channel||meta.uploader||'', url, fullPath, fmt, meta.duration||null, meta.thumbnail||'']);
       slog('Saved to history, id=' + historyId);
+      // Kick off a background fingerprint job. Doesn't block the download
+      // response — the fingerprint is a nice-to-have used only by the
+      // duplicate-detection feature. Failures are silent (logged) so a
+      // missing fingerprint never breaks anything else.
+      if (historyId) {
+        setImmediate(() => computeFingerprint(historyId, fullPath));
+      }
     }
     sse('done', { filename, fullPath, outDir, historyId });
     // Tell every connected renderer (this app, other windows, the Chrome
@@ -710,7 +894,20 @@ app.get('/download', async (req, res) => {
   });
 });
 
-app.post('/history/:id/analysis', (req, res) => { const { bpm, key_note, key_mode } = req.body; dbRun('UPDATE history SET bpm=?,key_note=?,key_mode=? WHERE id=?', [bpm, key_note, key_mode, req.params.id]); res.json({ ok: true }); });
+app.post('/history/:id/analysis', (req, res) => {
+  const { bpm, key_note, key_mode } = req.body;
+  const id = req.params.id;
+  dbRun('UPDATE history SET bpm=?,key_note=?,key_mode=? WHERE id=?', [bpm, key_note, key_mode, id]);
+  res.json({ ok: true });
+  // Best-effort: stamp BPM/key into the audio file's metadata tags so FL
+  // Studio, Mixed In Key, Rekordbox, foobar2000, Spotify etc. see the
+  // analysis without us being a dependency. Runs AFTER the response so
+  // analysis flow isn't blocked on the tag write — tag writing is a
+  // nice-to-have, not a hard requirement.
+  if (req.query.notags !== '1' && writeTagsToFileEnabled()) {
+    setImmediate(() => writeTagsToFile(id, { bpm, key_note, key_mode }));
+  }
+});
 app.post('/history/:id/notes',    (req, res) => { dbRun('UPDATE history SET notes=? WHERE id=?', [req.body.notes, req.params.id]); res.json({ ok: true }); });
 app.post('/history/:id/transcript',(req, res)=> { dbRun('UPDATE history SET transcript=? WHERE id=?', [req.body.transcript, req.params.id]); res.json({ ok: true }); });
 // Favorites — toggle the is_favorite flag. Returns the new state so the
@@ -737,6 +934,158 @@ app.post('/history/:id/user-notes', (req, res) => {
   res.json({ ok: true });
 });
 app.get('/history',  (_, res) => res.json(dbAll('SELECT * FROM history ORDER BY created_at DESC LIMIT 500')));
+
+// ── Duplicate detection via perceptual audio hash ───────────────────────
+// Walks all history rows that have an audio_hash, groups them by hamming
+// distance threshold. Two tracks within `threshold` bits of each other
+// are considered duplicates (same audio, different files).
+//
+// Default threshold: 50 bits out of 512 (~10%). Tighter (25-30) catches
+// only near-identical encodings; looser (80+) catches edits/mixes too.
+// Returns groups of 2+ tracks. Singletons are excluded from results.
+app.get('/history/duplicates', (req, res) => {
+  const threshold = Math.min(Math.max(parseInt(req.query.threshold || '50', 10), 1), 256);
+  try {
+    const tracks = dbAll(`
+      SELECT id, title, channel, file_path, format, duration, audio_hash, created_at, thumbnail
+      FROM history
+      WHERE audio_hash IS NOT NULL AND audio_hash != ''
+      ORDER BY created_at DESC
+    `);
+
+    // Union-find over hamming-close pairs. For N tracks this is O(N²)
+    // pairwise comparisons but each comparison is fast (8 bytes XOR'd
+    // 64 times). At N=500 it's 125K comparisons → ~20ms.
+    const parent = new Map();
+    const find = (x) => {
+      let r = x;
+      while (parent.get(r) !== r) r = parent.get(r);
+      let c = x;
+      while (parent.get(c) !== r) {
+        const next = parent.get(c);
+        parent.set(c, r);
+        c = next;
+      }
+      return r;
+    };
+    const union = (a, b) => {
+      const ra = find(a), rb = find(b);
+      if (ra !== rb) parent.set(ra, rb);
+    };
+    for (const t of tracks) parent.set(t.id, t.id);
+
+    for (let i = 0; i < tracks.length; i++) {
+      for (let j = i + 1; j < tracks.length; j++) {
+        const d = hammingDistanceHex(tracks[i].audio_hash, tracks[j].audio_hash);
+        if (d !== null && d <= threshold) union(tracks[i].id, tracks[j].id);
+      }
+    }
+
+    // Group tracks by their root
+    const groups = new Map();
+    for (const t of tracks) {
+      const root = find(t.id);
+      if (!groups.has(root)) groups.set(root, []);
+      groups.get(root).push(t);
+    }
+    const dupeGroups = [];
+    for (const [root, group] of groups) {
+      if (group.length < 2) continue;
+      // Sort within group: oldest first (so the user can keep the
+      // "original" and delete re-downloads)
+      group.sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+      dupeGroups.push({
+        group_id: root,
+        tracks: group,
+        count: group.length,
+      });
+    }
+    // Order groups by size descending (biggest duplicate clusters first)
+    dupeGroups.sort((a, b) => b.count - a.count);
+
+    res.json({
+      ok: true,
+      threshold,
+      groups: dupeGroups,
+      total_hashed: tracks.length,
+    });
+  } catch (e) {
+    slog('history/duplicates failed: ' + e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Backfill: compute fingerprints for tracks that don't have one yet.
+// Necessary because fingerprinting only runs on new downloads; existing
+// users may have hundreds of tracks predating this feature. Returns
+// immediately and processes in the background, broadcasting progress
+// events over SSE so the UI can track.
+app.post('/history/fingerprint-backfill', (req, res) => {
+  const limit = Math.min(parseInt((req.body && req.body.limit) || '500', 10), 5000);
+  try {
+    const missing = dbAll(`
+      SELECT id, file_path FROM history
+      WHERE (audio_hash IS NULL OR audio_hash = '')
+        AND file_path IS NOT NULL
+      ORDER BY created_at DESC
+      LIMIT ?
+    `, [limit]);
+    res.json({ ok: true, queued: missing.length });
+
+    // Process serially in the background. Each fingerprint takes a few
+    // seconds; running them parallel would thrash the CPU and slow down
+    // any in-flight stem separation. Broadcast progress events so the
+    // renderer can show a status pill.
+    let done = 0;
+    const total = missing.length;
+    const processNext = (i) => {
+      if (i >= missing.length) {
+        broadcastEvent('fingerprint-backfill', { state: 'complete', done, total });
+        return;
+      }
+      const row = missing[i];
+      if (!fs.existsSync(row.file_path)) {
+        done++;
+        broadcastEvent('fingerprint-backfill', { state: 'progress', done, total });
+        return processNext(i + 1);
+      }
+      const scriptPath = getResourcePath('fingerprint.py');
+      if (!scriptPath) {
+        broadcastEvent('fingerprint-backfill', { state: 'error', message: 'fingerprint.py missing' });
+        return;
+      }
+      const pythonCmd = getPythonCmd();
+      const proc = spawn(pythonCmd, [scriptPath, row.file_path], { windowsHide: true });
+      let stdout = '';
+      proc.stdout.on('data', d => { stdout += d; });
+      proc.on('close', () => {
+        try {
+          const result = JSON.parse((stdout || '').trim().split('\n').pop() || '{}');
+          if (result.ok && result.hash) {
+            dbRun('UPDATE history SET audio_hash=? WHERE id=?', [result.hash, row.id]);
+          }
+        } catch {}
+        done++;
+        if (done % 5 === 0 || done === total) {
+          saveDB();
+          broadcastEvent('fingerprint-backfill', { state: 'progress', done, total });
+        }
+        processNext(i + 1);
+      });
+      proc.on('error', () => {
+        done++;
+        processNext(i + 1);
+      });
+    };
+    if (missing.length > 0) {
+      broadcastEvent('fingerprint-backfill', { state: 'start', done: 0, total });
+      processNext(0);
+    }
+  } catch (e) {
+    slog('fingerprint-backfill failed: ' + e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
 app.delete('/history/:id', (req, res) => { dbRun('DELETE FROM history WHERE id=?', [req.params.id]); broadcastEvent('history-changed', { reason: 'delete', historyId: req.params.id }); res.json({ ok: true }); });
 
 // Move a file to a different folder and update its path in history
@@ -1165,6 +1514,175 @@ app.delete('/stockpile/folders/:id', (req, res) => {
   }
 });
 
+// ── Disk usage breakdown for the stockpile ──────────────────────────────────
+// Returns per-folder size totals + global totals, so the renderer can show
+// users which folders are bloating their library and how much space the
+// whole stockpile occupies on disk.
+//
+// Two independent sources of truth get reported:
+//   1. **DB-tracked files** — every file_path in the history table that
+//      belongs to a tagged track. We stat each one to get its real size on
+//      disk. This is the AUTHORITATIVE per-folder figure because tags drive
+//      file location (15t patch).
+//   2. **Filesystem walk** — recursively walking the stockpile root on disk
+//      to catch files that aren't in the DB (manually-dropped files, leftover
+//      stems, etc). This caches the difference as `untracked_bytes` so the
+//      user can spot orphans.
+//
+// The endpoint is opt-in: pass `?root=<path>` because the stockpile_root
+// lives in renderer settings, not on the server.
+//
+// Performance: O(N) over all tagged files. On a 5000-track library this is
+// ~200ms because fs.statSync is fast. We don't cache because (a) library
+// size is bounded, (b) values drift as files come and go, and (c) the UI
+// only requests this when the user opens the Storage panel.
+app.get('/stockpile/disk-usage', (req, res) => {
+  const stockpile_root = req.query.root;
+  if (!stockpile_root) return res.status(400).json({ error: 'root query param required' });
+  try {
+    // Pull every folder + the count + the file_paths of tracks tagged into it.
+    // We only count PRIMARY tags because that's where the file physically lives —
+    // the 15t patch made first-tag-wins the rule. A non-primary tag is purely
+    // a DB association and would double-count if we summed by it.
+    const folders = dbAll(`
+      SELECT f.id, f.name, f.color, f.created_at
+      FROM stockpile_folders f
+      ORDER BY f.name COLLATE NOCASE
+    `);
+
+    let grandTotalBytes = 0;
+    let trackedFilesCount = 0;
+    let missingFilesCount = 0;
+    const folderRows = [];
+    const trackedPaths = new Set();  // for the orphan-detection pass below
+
+    for (const f of folders) {
+      const trackRows = dbAll(`
+        SELECT h.file_path
+        FROM stockpile_tags t
+        JOIN history h ON h.id = t.history_id
+        WHERE t.folder_id=? AND t.is_primary=1 AND h.file_path IS NOT NULL
+      `, [f.id]);
+
+      let folderBytes = 0;
+      let folderMissing = 0;
+      let folderFiles = 0;
+      for (const tr of trackRows) {
+        const p = tr.file_path;
+        if (!p) continue;
+        // Normalize for the orphan check below — case-insensitive on Windows.
+        const norm = process.platform === 'win32' ? p.toLowerCase() : p;
+        trackedPaths.add(norm);
+        try {
+          const st = fs.statSync(p);
+          if (st.isFile()) {
+            folderBytes += st.size;
+            folderFiles++;
+            trackedFilesCount++;
+            grandTotalBytes += st.size;
+          }
+        } catch {
+          // File row exists in DB but file is gone from disk
+          folderMissing++;
+          missingFilesCount++;
+        }
+      }
+
+      folderRows.push({
+        id: f.id,
+        name: f.name,
+        color: f.color || null,
+        bytes: folderBytes,
+        file_count: folderFiles,
+        missing_count: folderMissing,
+      });
+    }
+
+    // Second pass: walk the stockpile_root looking for audio files that
+    // AREN'T in trackedPaths. These are "orphans" — either untagged files
+    // (sitting at the stockpile root) or detritus from manual drops.
+    // Capped at 50,000 directory entries scanned so a misconfigured huge
+    // root can't hang the server.
+    const audioExts = new Set(['.wav', '.mp3', '.flac', '.ogg', '.m4a', '.aac', '.opus', '.aiff']);
+    let untrackedBytes = 0;
+    let untrackedCount = 0;
+    let rootBytes = 0;
+    let scanned = 0;
+    const SCAN_LIMIT = 50000;
+    function walk(dir) {
+      if (scanned >= SCAN_LIMIT) return;
+      let entries;
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of entries) {
+        if (scanned >= SCAN_LIMIT) return;
+        scanned++;
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!e.isFile()) continue;
+        const ext = path.extname(e.name).toLowerCase();
+        if (!audioExts.has(ext)) continue;
+        try {
+          const st = fs.statSync(full);
+          rootBytes += st.size;
+          const norm = process.platform === 'win32' ? full.toLowerCase() : full;
+          if (!trackedPaths.has(norm)) {
+            untrackedBytes += st.size;
+            untrackedCount++;
+          }
+        } catch {}
+      }
+    }
+    try {
+      if (fs.existsSync(stockpile_root)) walk(stockpile_root);
+    } catch (e) {
+      slog('disk-usage walk failed: ' + e.message);
+    }
+
+    // Free space on the drive. This needs node 19+ for fs.statfs; we fall
+    // back to null on older versions or non-Windows where we can't be sure.
+    let freeBytes = null;
+    let totalDriveBytes = null;
+    try {
+      if (typeof fs.statfsSync === 'function') {
+        const sf = fs.statfsSync(stockpile_root);
+        freeBytes = Number(sf.bavail) * Number(sf.bsize);
+        totalDriveBytes = Number(sf.blocks) * Number(sf.bsize);
+      }
+    } catch {}
+
+    res.json({
+      ok: true,
+      stockpile_root,
+      folders: folderRows,
+      tracked: {
+        files: trackedFilesCount,
+        bytes: grandTotalBytes,
+      },
+      missing_files: missingFilesCount,
+      untracked: {
+        files: untrackedCount,
+        bytes: untrackedBytes,
+      },
+      root_total_bytes: rootBytes,
+      drive: {
+        free_bytes: freeBytes,
+        total_bytes: totalDriveBytes,
+      },
+      scan_truncated: scanned >= SCAN_LIMIT,
+    });
+  } catch (e) {
+    slog('stockpile/disk-usage failed: ' + e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // List tracks tagged into a folder.
 app.get('/stockpile/folders/:id/tracks', (req, res) => {
   const id = parseInt(req.params.id, 10);
@@ -1299,6 +1817,136 @@ app.get('/stockpile/folders/:id/matches', (req, res) => {
 });
 
 // Bulk-tag a list of tracks into a folder. Body: { history_ids: [], source?, override? }
+// ── Auto-organize: suggest a folder for every untagged track ────────────
+// For each untagged track, scores every existing folder against it using
+// the same signals as folder/match (artist seed fuzzy match + mood
+// centroid cosine similarity + BPM/key proximity), then returns the
+// top-scoring folder for each track. The renderer presents this as a
+// confirmation list ("track X → folder Y, accept?") with per-track override.
+//
+// Why a separate endpoint rather than re-using /stockpile/folders/:id/matches?
+// That endpoint goes per-folder. For auto-organize we want per-TRACK ranked
+// by best folder — flipping the iteration direction is cheaper than calling
+// the per-folder endpoint N times and re-sorting.
+//
+// Tunables:
+//   ?min_confidence=0.35   (default 0.35) — drop weaker suggestions
+//   ?limit=200             (default 200)  — process at most N untagged tracks
+app.get('/stockpile/auto-organize-suggestions', (req, res) => {
+  const minConf = parseFloat(req.query.min_confidence || '0.35');
+  const limit = Math.min(parseInt(req.query.limit || '200', 10), 1000);
+
+  try {
+    const folders = dbAll(`
+      SELECT id, name, color, artist_seeds, mood_centroid, description
+      FROM stockpile_folders
+    `);
+    if (!folders.length) {
+      return res.json({ suggestions: [], folders_count: 0, reason: 'No folders yet — create at least one folder first' });
+    }
+
+    // Untagged tracks with their mood data + BPM/key for scoring.
+    const untagged = dbAll(`
+      SELECT h.id, h.title, h.file_path, h.bpm, h.key_note, h.key_mode,
+             m.energy, m.tonality, m.density, m.tempo_pos
+      FROM history h
+      LEFT JOIN track_mood m ON m.history_id = h.id
+      WHERE NOT EXISTS (SELECT 1 FROM stockpile_tags t WHERE t.history_id = h.id)
+        AND h.file_path IS NOT NULL
+      ORDER BY h.created_at DESC
+      LIMIT ?
+    `, [limit]);
+
+    // Precompute folder seeds + centroids once per folder.
+    const folderCtx = folders.map(f => ({
+      f,
+      seeds: (f.artist_seeds || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
+      centroid: (() => { try { return f.mood_centroid ? JSON.parse(f.mood_centroid) : null; } catch { return null; } })(),
+    }));
+
+    const suggestions = [];
+    for (const t of untagged) {
+      const rawHay = ((t.file_path || '') + ' ' + (t.title || ''));
+      const trackMood = (t.energy != null) ? {
+        energy: t.energy, tonality: t.tonality, density: t.density, tempo_pos: t.tempo_pos,
+      } : null;
+
+      let bestFolder = null;
+      let bestScore = 0;
+      let bestReason = null;
+
+      for (const fc of folderCtx) {
+        let score = 0;
+        let reason = null;
+
+        // Strong signal: artist seed fuzzy match.
+        if (fc.seeds.length) {
+          const am = findArtistMatch(rawHay, fc.seeds);
+          if (am.matched) {
+            score = Math.max(score, am.confidence);
+            reason = 'matches "' + am.matchedSeed + '"';
+          }
+        }
+
+        // Medium: mood centroid cosine similarity (mood vector is normalized).
+        if (trackMood && fc.centroid) {
+          try {
+            const fv = [fc.centroid.energy || 0, fc.centroid.tonality || 0, fc.centroid.density || 0, fc.centroid.tempo_pos || 0];
+            const tv = [trackMood.energy || 0, trackMood.tonality || 0, trackMood.density || 0, trackMood.tempo_pos || 0];
+            const dot = fv.reduce((s, v, i) => s + v * tv[i], 0);
+            const fm = Math.sqrt(fv.reduce((s, v) => s + v * v, 0)) || 1;
+            const tm = Math.sqrt(tv.reduce((s, v) => s + v * v, 0)) || 1;
+            const cos = dot / (fm * tm);  // [0..1] (vectors are >= 0)
+            // Mood alone is a soft signal; cap its contribution.
+            const moodScore = Math.max(0, cos) * 0.55;
+            if (moodScore > score) {
+              score = moodScore;
+              reason = 'mood similar to folder';
+            } else if (reason && cos > 0.7) {
+              reason += ' + mood match';
+            }
+          } catch {}
+        }
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestFolder = fc.f;
+          bestReason = reason;
+        }
+      }
+
+      if (bestFolder && bestScore >= minConf) {
+        suggestions.push({
+          history_id: t.id,
+          title: t.title,
+          file_path: t.file_path,
+          bpm: t.bpm,
+          key_note: t.key_note,
+          key_mode: t.key_mode,
+          suggested_folder_id: bestFolder.id,
+          suggested_folder_name: bestFolder.name,
+          suggested_folder_color: bestFolder.color,
+          confidence: Math.round(bestScore * 100) / 100,
+          reason: bestReason,
+        });
+      }
+    }
+
+    // Sort by confidence descending so user sees strong matches first.
+    suggestions.sort((a, b) => b.confidence - a.confidence);
+
+    res.json({
+      suggestions,
+      untagged_count: untagged.length,
+      folders_count: folders.length,
+      threshold: minConf,
+    });
+  } catch (e) {
+    slog('auto-organize-suggestions failed: ' + e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Skips tracks already tagged in this folder unless override=true.
 // Used for the "Tag all matches" workflow.
 app.post('/stockpile/folders/:id/bulk-tag', (req, res) => {
@@ -1585,10 +2233,40 @@ app.delete('/stockpile/tracks/:historyId/tags/:folderId', (req, res) => {
 // enough to avoid false positives like "Lil B" matching every track with
 // "lil" in the title. Lower confidences still surface as suggestions in
 // the UI but don't auto-tag.
-app.post('/stockpile/tracks/:historyId/auto-match', (req, res) => {
-  const historyId = parseInt(req.params.historyId, 10);
+// ── Prefs helpers ────────────────────────────────────────────────────────
+function getPref(key, fallback) {
+  const r = dbAll('SELECT value FROM prefs WHERE key=?', [key]);
+  return r.length ? r[0].value : (fallback !== undefined ? fallback : null);
+}
+function setPref(key, value) {
+  dbRun('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+    [key, String(value)]);
+  saveDB();
+}
+
+app.get('/prefs', (req, res) => {
+  const out = {};
+  for (const r of dbAll('SELECT key, value FROM prefs')) out[r.key] = r.value;
+  res.json(out);
+});
+app.post('/prefs', (req, res) => {
+  const body = req.body || {};
+  for (const [k, v] of Object.entries(body)) {
+    if (typeof k === 'string' && k.length < 100) setPref(k, v);
+  }
+  // Prefs drive the watch-folder daemon — re-evaluate on every change.
+  restartStockpileWatcher();
+  res.json({ ok: true });
+});
+
+// ── Auto-match core (shared by the HTTP endpoint, the watch-folder
+//    daemon, and any future caller). Tags a track into folders whose
+//    artist seeds match its title/path; optionally promotes the best
+//    match to primary and physically moves the file into the folder. ──
+function autoMatchTrack(historyId, opts) {
+  opts = opts || {};
   const track = dbAll('SELECT title, file_path FROM history WHERE id=?', [historyId]);
-  if (!track.length) return res.status(404).json({ error: 'Track not found' });
+  if (!track.length) return { error: 'Track not found' };
   const hay = ((track[0].file_path || '') + ' ' + (track[0].title || '')).toLowerCase();
   const folders = dbAll(`SELECT id, name, artist_seeds FROM stockpile_folders WHERE artist_seeds IS NOT NULL AND artist_seeds != ''`);
   const tagged = [];
@@ -1597,19 +2275,73 @@ app.post('/stockpile/tracks/:historyId/auto-match', (req, res) => {
     if (!seeds.length) continue;
     const m = findArtistMatch(hay, seeds);
     if (m.matched && m.confidence >= 0.85) {
-      // Already tagged into this folder? Skip.
       const existing = dbAll('SELECT id FROM stockpile_tags WHERE history_id=? AND folder_id=?', [historyId, f.id]);
       if (existing.length) continue;
       dbRun(`INSERT INTO stockpile_tags (history_id, folder_id, is_primary, source, confidence)
              VALUES (?, ?, ?, ?, ?)`,
-        [historyId, f.id, 0, 'auto-match-on-download', m.confidence]);
+        [historyId, f.id, 0, opts.source || 'auto-match-on-download', m.confidence]);
       tagged.push({ folder_id: f.id, folder_name: f.name, seed: m.seed, confidence: m.confidence });
       refreshFolderCentroid(f.id);
     }
   }
   if (tagged.length) saveDB();
-  res.json({ ok: true, tagged });
+
+  let committed = null;
+  if (opts.commit && opts.stockpileRoot) {
+    try {
+      const hasPrimary = dbAll(
+        'SELECT id FROM stockpile_tags WHERE history_id=? AND is_primary=1', [historyId]).length > 0;
+      if (!hasPrimary) {
+        const best = dbAll(`
+          SELECT t.id FROM stockpile_tags t
+          WHERE t.history_id=?
+          ORDER BY t.confidence DESC, t.created_at ASC LIMIT 1
+        `, [historyId])[0];
+        if (best) {
+          dbRun('UPDATE stockpile_tags SET is_primary=0 WHERE history_id=?', [historyId]);
+          dbRun('UPDATE stockpile_tags SET is_primary=1 WHERE id=?', [best.id]);
+          saveDB();
+        }
+      }
+      const result = commitTrackToPrimary(historyId, opts.stockpileRoot);
+      if (result && result.moved) {
+        const prim = dbAll(`
+          SELECT f.name FROM stockpile_tags t
+          JOIN stockpile_folders f ON f.id = t.folder_id
+          WHERE t.history_id=? AND t.is_primary=1 LIMIT 1
+        `, [historyId])[0];
+        committed = { moved: true, newPath: result.newPath, folder_name: prim ? prim.name : null };
+        broadcastEvent('history-changed', { reason: 'auto-send' });
+      } else if (result) {
+        committed = { moved: false, reason: result.reason };
+      }
+    } catch (e) {
+      slog('autoMatchTrack commit failed for id=' + historyId + ': ' + e.message);
+      committed = { moved: false, reason: 'error', error: e.message };
+    }
+  }
+  return { tagged, committed };
+}
+
+app.post('/stockpile/tracks/:historyId/auto-match', (req, res) => {
+  const historyId = parseInt(req.params.historyId, 10);
+  // Auto-send can come from the explicit request body (desktop passes its
+  // setting) OR from the shared server pref (covers extension downloads,
+  // which don't know about desktop localStorage).
+  const prefAutoSend = getPref('auto_send') === '1';
+  const prefRoot = getPref('stockpile_root') || null;
+  const wantCommit = !!(req.body && req.body.commit) || prefAutoSend;
+  const commitRoot = (req.body && req.body.stockpile_root) || prefRoot;
+  const r = autoMatchTrack(historyId, { commit: wantCommit && !!commitRoot, stockpileRoot: commitRoot });
+  if (r.error) return res.status(404).json({ error: r.error });
+  res.json({ ok: true, tagged: r.tagged, committed: r.committed });
 });
+
+/* legacy auto-match body replaced by autoMatchTrack() above
+  if (tagged.length) saveDB();
+
+*/
+
 
 // All tags for a track.
 app.get('/stockpile/tracks/:historyId/tags', (req, res) => {
@@ -1901,6 +2633,385 @@ app.post('/stockpile/repair-files', (req, res) => {
 });
 
 
+// ── Adopt orphans: import untracked audio files into the library ────────────
+// The Storage Breakdown panel reports audio files sitting in the stockpile
+// root tree that aren't referenced by ANY history row ("479 untagged audio
+// files in root"). Until now that warning was read-only — there was nothing
+// the user could do about it from the app. This endpoint fixes that: it
+// walks the root, finds every audio file no history row points at, and
+// inserts a minimal history row for each (title from filename). Once they
+// exist as history rows, the normal auto-organize flow can suggest folders
+// and commit moves.
+//
+// Notes:
+//   • We exclude files already referenced by ANY history row (tagged or
+//     not) — the disk-usage walk only checks tagged paths, so its orphan
+//     count can include known-but-untagged rows. Adopting those again
+//     would create duplicates.
+//   • Stem outputs (paths containing "— Stems") are skipped by default —
+//     producers don't want 6 stem WAVs per track flooding their history.
+//     Pass include_stems=true to adopt them anyway.
+//   • Capped at 2000 adoptions per call to bound the response.
+app.post('/stockpile/adopt-orphans', (req, res) => {
+  const root = (req.body && req.body.root || '').trim();
+  const includeStems = !!(req.body && req.body.include_stems);
+  if (!root) return res.status(400).json({ error: 'Missing root' });
+  if (!fs.existsSync(root)) return res.status(400).json({ error: 'Root does not exist: ' + root });
+  try {
+    // Every path the DB already knows about — tagged or not.
+    const known = new Set();
+    for (const r of dbAll('SELECT file_path FROM history WHERE file_path IS NOT NULL')) {
+      const norm = process.platform === 'win32' ? r.file_path.toLowerCase() : r.file_path;
+      known.add(norm);
+    }
+
+    const files = walkAudio(root, 6);
+    const adopted = [];
+    let skippedKnown = 0, skippedStems = 0;
+    const ADOPT_CAP = 2000;
+
+    for (const f of files) {
+      if (adopted.length >= ADOPT_CAP) break;
+      const norm = process.platform === 'win32' ? f.path.toLowerCase() : f.path;
+      if (known.has(norm)) { skippedKnown++; continue; }
+      if (!includeStems && /—\s*Stems/i.test(f.path)) { skippedStems++; continue; }
+      const title = path.basename(f.name, path.extname(f.name));
+      const fmt = path.extname(f.name).replace('.', '').toLowerCase();
+      dbRun(`INSERT INTO history (title, file_path, format) VALUES (?, ?, ?)`,
+        [title, f.path, fmt]);
+      known.add(norm); // guard against duplicate paths within one walk
+      adopted.push({ title, file_path: f.path });
+    }
+    if (adopted.length) {
+      saveDB();
+      broadcastEvent('history-changed', { reason: 'adopt-orphans' });
+    }
+    slog('adopt-orphans: root=' + root + ' adopted=' + adopted.length +
+         ' skippedKnown=' + skippedKnown + ' skippedStems=' + skippedStems);
+    res.json({
+      ok: true,
+      adopted: adopted.length,
+      skipped_known: skippedKnown,
+      skipped_stems: skippedStems,
+      capped: adopted.length >= ADOPT_CAP,
+      sample: adopted.slice(0, 25),
+    });
+  } catch (e) {
+    slog('adopt-orphans failed: ' + e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Prune missing: remove history rows whose file is gone ───────────────────
+// Companion to /repair-history. Repair relocates rows it can fuzzy-match to
+// a real file; this removes the rest (the truly dead entries that show up
+// as "⚠ N missing files" in the Storage Breakdown). Tags cascade-delete so
+// folder counts stay honest. Dry-run by default so the UI can show a
+// confirmation count; pass confirm=true to actually delete.
+// ══════════════════════════════════════════════════════════════════════
+// WATCH FOLDER (0.1.1)
+// ══════════════════════════════════════════════════════════════════════
+// When prefs.watch_folder === '1' and prefs.stockpile_root is set, a
+// recursive fs.watch daemon adopts any new audio file dropped into the
+// root tree: insert into history → fingerprint → auto-match → (if
+// auto_send) move into the matched folder. The orphan problem from the
+// Storage Breakdown stops accumulating instead of needing manual fixes.
+//
+// Robustness notes:
+//   • Files are adopted only after their size is stable across two stats
+//     1.5s apart — copies-in-progress and yt-dlp partials are skipped
+//     until they settle. .part/.ytdl/.tmp extensions are ignored outright.
+//   • Paths already in history are ignored — this also makes the daemon
+//     immune to its own moves (auto-send relocates the file, the new
+//     path is already in history by the time its event fires).
+//   • "— Stems" outputs are ignored so separations don't flood history.
+//   • fs.watch{recursive} is fully supported on Windows (the target OS).
+let stockpileWatcher = null;
+let watcherRoot = null;
+const watcherPending = new Map(); // path → debounce timer
+
+function restartStockpileWatcher() {
+  const want = getPref('watch_folder') === '1';
+  const root = getPref('stockpile_root') || '';
+  if (stockpileWatcher && (!want || root !== watcherRoot)) {
+    try { stockpileWatcher.close(); } catch {}
+    stockpileWatcher = null;
+    watcherRoot = null;
+    slog('watch-folder: stopped');
+  }
+  if (!want || !root || stockpileWatcher) return;
+  if (!fs.existsSync(root)) { slog('watch-folder: root missing, not starting: ' + root); return; }
+  try {
+    stockpileWatcher = fs.watch(root, { recursive: true }, (evt, fname) => {
+      if (!fname) return;
+      const full = path.join(root, fname.toString());
+      const ext = path.extname(full).toLowerCase();
+      if (!AUDIO_EXTS.has(ext)) return;
+      if (/—\s*Stems/i.test(full)) return;
+      // Debounce per path — editors/copies fire bursts of events.
+      clearTimeout(watcherPending.get(full));
+      watcherPending.set(full, setTimeout(() => {
+        watcherPending.delete(full);
+        adoptWatchedFile(full).catch(e => slog('watch-folder adopt error: ' + e.message));
+      }, 3000));
+    });
+    watcherRoot = root;
+    slog('watch-folder: watching ' + root);
+  } catch (e) {
+    slog('watch-folder: failed to start: ' + e.message);
+  }
+}
+
+async function adoptWatchedFile(full) {
+  // Known to the DB already? (covers our own auto-send moves too)
+  const norm = process.platform === 'win32' ? full.toLowerCase() : full;
+  const known = dbAll('SELECT id FROM history WHERE file_path IS NOT NULL').length
+    ? dbAll('SELECT 1 FROM history WHERE ' +
+        (process.platform === 'win32' ? 'LOWER(file_path)=?' : 'file_path=?'), [norm]).length > 0
+    : false;
+  if (known) return;
+  let st1; try { st1 = fs.statSync(full); } catch { return; }   // vanished
+  if (!st1.isFile() || st1.size === 0) return;
+  await new Promise(r => setTimeout(r, 1500));
+  let st2; try { st2 = fs.statSync(full); } catch { return; }
+  if (st2.size !== st1.size) {
+    // Still being written — re-arm the debounce and try again later.
+    clearTimeout(watcherPending.get(full));
+    watcherPending.set(full, setTimeout(() => {
+      watcherPending.delete(full);
+      adoptWatchedFile(full).catch(() => {});
+    }, 4000));
+    return;
+  }
+  const title = path.basename(full, path.extname(full));
+  const fmt = path.extname(full).replace('.', '').toLowerCase();
+  dbRun('INSERT INTO history (title, file_path, format) VALUES (?, ?, ?)', [title, full, fmt]);
+  const idRow = dbAll('SELECT last_insert_rowid() AS id')[0];
+  const historyId = idRow ? idRow.id : null;
+  saveDB();
+  slog('watch-folder: adopted "' + title + '" (id=' + historyId + ')');
+  if (historyId) {
+    try { computeFingerprint(historyId, full); } catch {}
+    const autoSend = getPref('auto_send') === '1';
+    const root = getPref('stockpile_root') || null;
+    const r = autoMatchTrack(historyId, {
+      commit: autoSend && !!root, stockpileRoot: root, source: 'watch-folder',
+    });
+    if (r.committed && r.committed.moved) {
+      slog('watch-folder: auto-sent "' + title + '" → ' + (r.committed.folder_name || '?'));
+    }
+  }
+  broadcastEvent('history-changed', { reason: 'watch-folder' });
+}
+
+// (AUDIO_EXTS is declared once, further down with walkAudio — watcher
+// callbacks run post-boot so the const is initialized by then.)
+// Start (if enabled) shortly after boot — DB is loaded by then.
+setTimeout(restartStockpileWatcher, 4000);
+
+// ══════════════════════════════════════════════════════════════════════
+// YT-DLP SELF-UPDATE (0.1.1)
+// ══════════════════════════════════════════════════════════════════════
+// YouTube breaks yt-dlp every few weeks; until now that meant downloads
+// died until the user manually swapped the binary. This checks GitHub's
+// latest release against the installed version on boot + every 24h, and
+// swaps the binary in place (download → .new → atomic rename, old kept
+// as .bak for rollback). Only runs when the resolved binary lives in a
+// writable app dir — a system-wide PATH install is the user's to manage.
+let ytdlpUpdateState = { checking: false, installed: null, latest: null, lastCheck: null, lastResult: null };
+
+function ytdlpInstalledVersion() {
+  return new Promise((resolve) => {
+    try {
+      const p = spawn(bin('yt-dlp'), ['--version'], { windowsHide: true });
+      let out = '';
+      p.stdout.on('data', d => out += d);
+      p.on('close', () => resolve(out.trim() || null));
+      p.on('error', () => resolve(null));
+      setTimeout(() => { try { p.kill(); } catch {} resolve(out.trim() || null); }, 8000);
+    } catch { resolve(null); }
+  });
+}
+
+async function checkAndUpdateYtdlp(force) {
+  if (ytdlpUpdateState.checking) return ytdlpUpdateState;
+  ytdlpUpdateState.checking = true;
+  try {
+    const installed = await ytdlpInstalledVersion();
+    ytdlpUpdateState.installed = installed;
+    const rel = await fetch('https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest', {
+      headers: { 'User-Agent': 'freqphull-updater' },
+    }).then(r => r.json());
+    const latest = (rel && rel.tag_name) ? String(rel.tag_name).replace(/^v/, '') : null;
+    ytdlpUpdateState.latest = latest;
+    ytdlpUpdateState.lastCheck = new Date().toISOString();
+    if (!latest) { ytdlpUpdateState.lastResult = 'check-failed'; return ytdlpUpdateState; }
+    if (installed && installed === latest && !force) {
+      ytdlpUpdateState.lastResult = 'up-to-date';
+      return ytdlpUpdateState;
+    }
+    // Where does the live binary resolve to? Only self-update binaries
+    // inside our own folders.
+    const live = bin('yt-dlp');
+    const exe = process.platform === 'win32' ? '.exe' : '';
+    const isOurs = live && (live.includes(path.join('resources', 'bin')) || live.includes(path.join(__dirname, 'bin')) || /[\\/]bin[\\/]yt-dlp/.test(live));
+    if (!isOurs || !fs.existsSync(live)) {
+      ytdlpUpdateState.lastResult = installed ? 'system-install' : 'no-binary';
+      slog('ytdlp-update: binary not app-managed (' + live + ') — skipping self-update');
+      return ytdlpUpdateState;
+    }
+    const assetName = process.platform === 'win32' ? 'yt-dlp.exe'
+                    : process.platform === 'darwin' ? 'yt-dlp_macos' : 'yt-dlp';
+    const asset = (rel.assets || []).find(a => a.name === assetName);
+    if (!asset) { ytdlpUpdateState.lastResult = 'asset-missing'; return ytdlpUpdateState; }
+    slog('ytdlp-update: downloading ' + latest + ' (' + assetName + ', ' + Math.round(asset.size / 1048576) + ' MB)');
+    const buf = Buffer.from(await fetch(asset.browser_download_url, {
+      headers: { 'User-Agent': 'freqphull-updater' },
+    }).then(r => r.arrayBuffer()));
+    if (buf.length < 1000000) throw new Error('download too small (' + buf.length + ' bytes)');
+    const tmp = live + '.new';
+    fs.writeFileSync(tmp, buf);
+    if (process.platform !== 'win32') fs.chmodSync(tmp, 0o755);
+    try { fs.renameSync(live, live + '.bak'); } catch {}
+    fs.renameSync(tmp, live);
+    ytdlpUpdateState.lastResult = 'updated';
+    ytdlpUpdateState.installed = latest;
+    slog('ytdlp-update: updated ' + (installed || '?') + ' → ' + latest);
+  } catch (e) {
+    ytdlpUpdateState.lastResult = 'error: ' + e.message;
+    slog('ytdlp-update failed: ' + e.message);
+  } finally {
+    ytdlpUpdateState.checking = false;
+  }
+  return ytdlpUpdateState;
+}
+
+app.get('/ytdlp/status', async (req, res) => {
+  if (!ytdlpUpdateState.installed) ytdlpUpdateState.installed = await ytdlpInstalledVersion();
+  res.json(ytdlpUpdateState);
+});
+app.post('/ytdlp/update', async (req, res) => {
+  const st = await checkAndUpdateYtdlp(true);
+  res.json(st);
+});
+// Boot check (delayed so startup stays snappy) + daily re-check.
+setTimeout(() => checkAndUpdateYtdlp(false), 15000);
+setInterval(() => checkAndUpdateYtdlp(false), 24 * 3600 * 1000);
+
+// ══════════════════════════════════════════════════════════════════════
+// FIND SIMILAR (0.1.1)
+// ══════════════════════════════════════════════════════════════════════
+// "More like this" for any track. Reuses the data we already collect:
+//   • fingerprint hamming similarity (timbre/content, weight 0.45)
+//   • mood-vector cosine (energy/tonality/density/tempo, weight 0.30)
+//   • BPM proximity incl. half/double-time equivalence (weight 0.15)
+//   • key compatibility — same key, relative major/minor (weight 0.10)
+// Components degrade gracefully: missing data redistributes weight over
+// what IS available, so untagged/unfingerprinted tracks still rank.
+app.get('/tracks/:id/similar', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const limit = Math.min(parseInt(req.query.limit || '12', 10), 50);
+  try {
+    const baseRows = dbAll(`
+      SELECT h.id, h.title, h.channel, h.file_path, h.thumbnail, h.bpm, h.key_note, h.key_mode,
+             h.duration, h.format, h.audio_hash,
+             m.energy, m.tonality, m.density, m.tempo_pos
+      FROM history h LEFT JOIN track_mood m ON m.history_id = h.id
+      WHERE h.id = ?`, [id]);
+    if (!baseRows.length) return res.status(404).json({ error: 'Track not found' });
+    const base = baseRows[0];
+
+    const all = dbAll(`
+      SELECT h.id, h.title, h.channel, h.file_path, h.thumbnail, h.bpm, h.key_note, h.key_mode,
+             h.duration, h.format, h.audio_hash,
+             m.energy, m.tonality, m.density, m.tempo_pos
+      FROM history h LEFT JOIN track_mood m ON m.history_id = h.id
+      WHERE h.id != ?`, [id]);
+
+    const NOTES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+    const noteIdx = (n) => NOTES.indexOf(String(n || '').replace('Db','C#').replace('Eb','D#').replace('Gb','F#').replace('Ab','G#').replace('Bb','A#'));
+
+    function score(o) {
+      const parts = []; // [value 0..1, weight, reasonKey]
+      if (base.audio_hash && o.audio_hash) {
+        const d = hammingDistanceHex(base.audio_hash, o.audio_hash);
+        if (d !== null) parts.push([Math.max(0, 1 - d / 256), 0.45, 'sound']);
+      }
+      if (base.energy != null && o.energy != null) {
+        const a = [base.energy, base.tonality, base.density, base.tempo_pos];
+        const b = [o.energy, o.tonality, o.density, o.tempo_pos];
+        let dot = 0, na = 0, nb = 0;
+        for (let i = 0; i < 4; i++) { dot += (a[i]||0)*(b[i]||0); na += (a[i]||0)**2; nb += (b[i]||0)**2; }
+        if (na > 0 && nb > 0) parts.push([Math.max(0, dot / Math.sqrt(na * nb)), 0.30, 'mood']);
+      }
+      if (base.bpm && o.bpm) {
+        // Half/double-time equivalence: 140 ≈ 70 ≈ 280 for mixing purposes.
+        const ratios = [o.bpm / base.bpm, (o.bpm * 2) / base.bpm, o.bpm / (base.bpm * 2)];
+        const closest = Math.min(...ratios.map(r => Math.abs(1 - r)));
+        parts.push([Math.max(0, 1 - closest * 8), 0.15, 'bpm']); // ±12.5% → 0
+      }
+      if (base.key_note && o.key_note) {
+        const bi = noteIdx(base.key_note), oi = noteIdx(o.key_note);
+        let k = 0;
+        if (bi >= 0 && oi >= 0) {
+          const sameMode = (base.key_mode || '') === (o.key_mode || '');
+          if (bi === oi && sameMode) k = 1;                       // same key
+          else if (!sameMode && ((base.key_mode || '').toLowerCase().startsWith('min')
+                   ? (oi === (bi + 3) % 12)                        // Am → C
+                   : (oi === (bi + 9) % 12))) k = 0.9;             // C → Am
+          else if (sameMode && (oi === (bi + 7) % 12 || oi === (bi + 5) % 12)) k = 0.7; // ±5th
+        }
+        parts.push([k, 0.10, 'key']);
+      }
+      if (!parts.length) return { total: 0, reasons: [] };
+      const wsum = parts.reduce((a, p) => a + p[1], 0);
+      const total = parts.reduce((a, p) => a + p[0] * (p[1] / wsum), 0);
+      return { total, reasons: parts.filter(p => p[0] >= 0.6).map(p => p[2]) };
+    }
+
+    const scored = all
+      .map(o => { const sc = score(o); return { ...o, similarity: Math.round(sc.total * 100) / 100, reasons: sc.reasons, audio_hash: undefined }; })
+      .filter(o => o.similarity >= 0.35)
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, limit);
+
+    res.json({ ok: true, base: { id: base.id, title: base.title }, results: scored });
+  } catch (e) {
+    slog('similar failed: ' + e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+app.post('/history/prune-missing', (req, res) => {
+  const confirmDelete = !!(req.body && req.body.confirm);
+  try {
+    const rows = dbAll('SELECT id, title, file_path FROM history WHERE file_path IS NOT NULL');
+    const dead = rows.filter(r => { try { return !fs.existsSync(r.file_path); } catch { return true; } });
+    if (!confirmDelete) {
+      return res.json({ ok: true, dry_run: true, missing: dead.length,
+                        sample: dead.slice(0, 25).map(d => ({ id: d.id, title: d.title })) });
+    }
+    let removed = 0;
+    for (const d of dead) {
+      dbRun('DELETE FROM stockpile_tags WHERE history_id=?', [d.id]);
+      dbRun('DELETE FROM track_mood WHERE history_id=?', [d.id]);
+      dbRun('DELETE FROM history WHERE id=?', [d.id]);
+      removed++;
+    }
+    if (removed) {
+      saveDB();
+      broadcastEvent('history-changed', { reason: 'prune-missing' });
+    }
+    slog('prune-missing: removed=' + removed);
+    res.json({ ok: true, dry_run: false, removed });
+  } catch (e) {
+    slog('prune-missing failed: ' + e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
 app.post('/stockpile/tracks/:historyId/mood', (req, res) => {
   const historyId = parseInt(req.params.historyId, 10);
   const { energy, tonality, density, tempo_pos, label } = req.body || {};
@@ -2062,8 +3173,16 @@ app.get('/analyze', async (req, res) => {
   slog('Running: python ' + scriptTmp + ' ' + wavTmp);
   const { spawn } = require('child_process');
   const pythonCmd = getPythonCmd();
+  // Beat-switch deep mode: lowers the section-detection threshold so the
+  // best candidate boundary is surfaced even on subtler switches. Forced
+  // when the filename literally announces one ("beat switch", "beatswitch",
+  // "beat-switch"…) or when the renderer asks via ?deep=1.
+  const wantSections = req.query.deep === '1' ||
+    /beat[\s._\-]*switch/i.test(path.basename(filePath));
+  const pyArgs = wantSections ? [scriptTmp, '--sections', wavTmp] : [scriptTmp, wavTmp];
+  if (wantSections) slog('analyze: beat-switch deep mode on');
   slog('analyze: spawning ' + pythonCmd + ' ' + scriptTmp);
-  const proc = spawn(pythonCmd, [scriptTmp, wavTmp], { windowsHide: true, env: process.env });
+  const proc = spawn(pythonCmd, pyArgs, { windowsHide: true, env: process.env });
 
   let stdout = '', stderr = '';
   proc.stdout.on('data', d => { stdout += d.toString(); });
@@ -2856,6 +3975,54 @@ app.get('/stems', (req, res) => {
 
   proc.on('close', code => {
     slog('stems.py exit=' + code);
+    // Recovery path: sometimes the python process exits with code=null
+    // (signal-killed, broken stdout pipe, etc.) AFTER the stems have
+    // already been written to disk. The user's work is done; the
+    // process just couldn't gracefully signal completion. In that case,
+    // scan the expected output directory for stem files and synthesize
+    // a `done` event so the renderer treats it as success.
+    if (!lastDone && (code === null || code === 0)) {
+      try {
+        // Stem files land under <outDir>/<input-basename> Stems/
+        const baseName = path.basename(filePath, path.extname(filePath));
+        // The python script uses some Unicode chars in its folder names
+        // (▢ etc) so we can't reliably reconstruct the exact path; scan
+        // outDir for any directory whose name contains the base name.
+        let foundDir = null;
+        try {
+          const entries = fs.readdirSync(outDir, { withFileTypes: true });
+          for (const e of entries) {
+            if (e.isDirectory() && e.name.includes(baseName.slice(0, 20))) {
+              foundDir = path.join(outDir, e.name);
+              break;
+            }
+          }
+        } catch {}
+        if (foundDir) {
+          const stemFiles = fs.readdirSync(foundDir)
+            .filter(f => /\.(wav|flac)$/i.test(f) && !/\.work/i.test(f))
+            .map(f => ({
+              name: path.basename(f, path.extname(f)).toLowerCase(),
+              label: path.basename(f, path.extname(f)),
+              path: path.join(foundDir, f),
+            }));
+          if (stemFiles.length >= 2) {
+            slog('stems.py recovery: found ' + stemFiles.length + ' stems on disk despite exit=' + code + ', emitting synthesized done');
+            const recoveredMsg = {
+              type: 'done',
+              stems: stemFiles,
+              output_dir: foundDir,
+              recovered: true,
+              note: 'Stems separated successfully — recovered after pipe was closed early',
+            };
+            sse('done', recoveredMsg);
+            lastDone = recoveredMsg;
+          }
+        }
+      } catch (e) {
+        slog('stems.py recovery scan failed: ' + e.message);
+      }
+    }
     if (code !== 0 && !lastDone) {
       const errMsg = stderrBuf.trim().slice(-300) || 'Stem separation failed (exit ' + code + ')';
       sse('error', {
