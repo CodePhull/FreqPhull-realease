@@ -1760,6 +1760,135 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .slider:before{position:absolute;content:"";height:16px;width:16px;left:2px;bottom:2px;background:var(--muted);transition:.2s;border-radius:50%}
 .switch input:checked+.slider{background:var(--green);border-color:var(--green)}
 .switch input:checked+.slider:before{transform:translateX(20px);background:var(--white)}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ * v0.2.2 — Responsive shell + accessibility + polish
+ * Additive only: nothing here changes the default ≥1100px rendering.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* Fluid main-content padding. Was a flat 36px/44px which dominated
+ * the visible area on a half-screen window. clamp() scales padding
+ * with viewport while keeping the wide-screen look unchanged. */
+@media (max-width: 1100px) {
+  #main{padding:clamp(18px, 3vw, 36px) clamp(20px, 3.4vw, 44px)}
+}
+
+/* Sidebar shrinks gradually before going icon-only.
+ * 960–800px: trim to 168px, ellipsis long labels */
+@media (max-width: 960px) {
+  #sidebar{width:168px}
+  .nav-btn{font-size:13.5px;padding:10px 14px;gap:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .nav-sec{padding:12px 14px 6px;font-size:11px}
+}
+
+/* 800–620px: icon rail (62px). Labels become tooltips on hover.
+ * Section dividers collapse to a thin line so the rail stays clean. */
+@media (max-width: 800px) {
+  #sidebar{width:62px;padding:6px 0}
+  .nav-btn{justify-content:center;padding:11px 0;gap:0;position:relative}
+  .nav-btn > :not(.nav-ico):not(.nav-fill){display:none}
+  .nav-btn .nav-ico{opacity:.7}
+  .nav-btn.on .nav-ico, .nav-btn:hover .nav-ico{opacity:1}
+  .nav-btn.on::before{top:8px;bottom:8px}
+  .nav-sec{height:0;padding:0;margin:6px 14px;border-top:1px solid var(--border);overflow:hidden;color:transparent}
+  .sidebar-credit{font-size:0;height:6px}
+}
+
+/* Below 620px: settings/stockpile cards stack 1-up, dialogs go fullscreen-ish */
+@media (max-width: 620px) {
+  .sp-summary-row{grid-template-columns:repeat(2,1fr)}
+  .sp-folder-grid{grid-template-columns:1fr}
+  .setting-row{flex-direction:column;align-items:stretch;gap:8px;padding:14px 0}
+  .setting-row > .switch, .setting-row > select, .setting-row > button{align-self:flex-end}
+  .setup-card{width:100%!important;max-width:none!important;border-radius:10px}
+  .modal-content, .confirm-modal{width:calc(100vw - 24px)!important;max-width:none!important}
+  .pro-grid{grid-template-columns:1fr 1fr}
+  .pro-stat{min-width:0}
+}
+
+/* Tiny windows (≤460px) — emergency reflow, app still usable */
+@media (max-width: 460px) {
+  #main{padding:14px 12px}
+  #sidebar{width:48px}
+  .pro-grid{grid-template-columns:1fr}
+}
+
+/* ── Accessibility: visible keyboard focus ─────────────────────────
+ * Default browser focus rings were getting suppressed by some button
+ * styles. :focus-visible only triggers on keyboard navigation, so
+ * mouse users don't see a ring after clicking. */
+:focus-visible{outline:2px solid var(--white);outline-offset:2px;border-radius:4px}
+.nav-btn:focus-visible{outline-offset:-2px}
+.btn:focus-visible, button:focus-visible{outline:2px solid var(--white);outline-offset:2px}
+input:focus-visible, select:focus-visible, textarea:focus-visible{outline:2px solid var(--white);outline-offset:1px}
+/* Hide the noisy focus ring on programmatic .blur() targets (mini player buttons) */
+[tabindex="-1"]:focus{outline:none}
+
+/* ── Smoother surface interactions ─────────────────────────────────
+ * Composite-only properties (opacity, transform) for hover responses,
+ * with GPU promotion hints. Keeps 60fps even with the analyzer running. */
+.btn{will-change:transform;backface-visibility:hidden}
+.btn:not(:disabled):hover{transform:translateY(-1px)}
+.btn:not(:disabled):active{transform:translateY(0) scale(.98)}
+.nav-btn{will-change:background-color,color}
+.hist-row{transition:background var(--t-base) var(--e-out), transform var(--t-base) var(--e-out)}
+.hist-row:hover{background:var(--wbg);transform:translateX(2px)}
+
+/* Cards lift on hover (was abrupt). The transform is GPU-cheap; the
+ * box-shadow change still costs but only fires on direct hover. */
+.sp-folder-card, .setup-card{will-change:transform}
+
+/* Scrollbar polish — only inside scrollable panes. Webkit only; falls
+ * back gracefully to the browser default. */
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:5px;border:2px solid transparent;background-clip:content-box;transition:background var(--t-base) var(--e-out)}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.16);background-clip:content-box}
+
+/* ── Honor system high-contrast / forced-colors mode ─────────────── */
+@media (forced-colors: active){
+  .btn, .nav-btn, .setting-row{border:1px solid ButtonBorder}
+  .nav-btn.on{background:Highlight;color:HighlightText}
+}
+
+/* Touch targets — make sure interactive controls are ≥32px tall on
+ * pointer:coarse devices (touch laptops, kiosks). Doesn't affect
+ * mouse/trackpad users. */
+@media (pointer: coarse){
+  .btn{min-height:32px}
+  .nav-btn{min-height:40px}
+  .hist-row{min-height:48px}
+}
+
+
+
+/* Background analysis pill (0.2.2) — floats bottom-right, fades in/out
+ * gently, never blocks the underlying UI. Click to retry. */
+.bg-pill{
+  position:fixed;bottom:18px;right:18px;z-index:7000;
+  display:flex;align-items:center;gap:8px;
+  padding:8px 14px;border-radius:999px;
+  background:var(--bg2);border:1px solid var(--border2);
+  color:var(--off);font-size:12px;font-weight:500;
+  box-shadow:0 4px 16px rgba(0,0,0,.32);
+  opacity:0;pointer-events:none;
+  transform:translateY(8px);
+  transition:opacity 220ms var(--e-out), transform 220ms var(--e-out), background 220ms var(--e-out);
+}
+.bg-pill.active{opacity:1;pointer-events:auto;transform:translateY(0);cursor:pointer}
+.bg-pill.active:hover{background:var(--bg3,#1a1a1a);border-color:var(--border3)}
+.bg-pill.done{opacity:1;pointer-events:auto;transform:translateY(0);color:#7ed982;border-color:#3a5d3a}
+.bg-pill.hidden{opacity:0;pointer-events:none;transform:translateY(8px)}
+.bg-pill-spin{display:inline-block;animation:bg-pill-rot 1.4s linear infinite;font-size:14px;color:var(--white)}
+@keyframes bg-pill-rot{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion: reduce){
+  .bg-pill-spin{animation-duration:5s}
+}
+@media (max-width: 620px){
+  .bg-pill{bottom:12px;right:12px;left:12px;justify-content:center;font-size:11.5px}
+}
+
 </style>
 </head>
 <body>

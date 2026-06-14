@@ -867,11 +867,13 @@ async function processDlQueue() {
     // track title with high confidence, auto-tag the track into that folder.
     // Best-effort — failures are silent (we don't want to noise the user
     // about a feature they may not have set up yet).
-    if (historyId) {
+    if (historyId && autoTagEnabled()) {
       try {
         // "Auto-send to detected folder": when the setting is on, ask the
         // server to also promote the best match to primary and move the
         // file into place — one motion from download to organized.
+        // Gated on autoTagEnabled() above — if the user opted out of
+        // automatic tagging, skip the whole thing.
         const autoSend = localStorage.getItem('freqphull.autoSend') === '1';
         const am = await fetch(API + '/stockpile/tracks/' + historyId + '/auto-match', {
           method: 'POST',
@@ -975,6 +977,35 @@ const _notifTimers = new WeakMap(); // toast el → { timeout, startedAt, remain
 // top-right corner; the stack has the higher z-index, so without this it
 // covered the banner's Install/Later buttons whenever a toast fired (the
 // manual update check fires one immediately — guaranteed collision).
+// Debounced window-resize broadcaster. Several pieces of UI use measured
+// dimensions (notification stack, mini player thumb position, banner
+// underlay). Listening once and firing a single rAF on changes keeps
+// the handlers cheap and 60fps. Triggered by both real window resize
+// AND ResizeObserver on the viewport so it also reacts when the dev
+// tools dock changes size.
+(function installResizeRelay(){
+  if (window._fpResizeInstalled) return;
+  window._fpResizeInstalled = true;
+  let pending = false;
+  function fire(){
+    pending = false;
+    try { if (typeof _repositionNotifStack === 'function') _repositionNotifStack(); } catch {}
+    try { window.dispatchEvent(new CustomEvent('fp-layout-refresh')); } catch {}
+  }
+  function schedule(){
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(fire);
+  }
+  window.addEventListener('resize', schedule, { passive: true });
+  // Layout can change without a window resize (sidebar collapse via
+  // breakpoint, Electron window state). Observe the body too.
+  try {
+    const ro = new ResizeObserver(schedule);
+    ro.observe(document.body);
+  } catch {}
+})();
+
 function _repositionNotifStack() {
   if (!_notifStack) return;
   const banner = document.getElementById('update-banner');
@@ -3651,6 +3682,17 @@ function subscribeToServerEvents() {
       } catch { return; }
       renderHistory();
     });
+
+    // Background analysis worker (0.2.2) — surface its state in a small
+    // pill near the History header so users see "Analyzing 5 tracks…"
+    // happening live as bulk downloads catch up. The pill auto-hides
+    // when the worker goes idle.
+    es.addEventListener('bg-analyze', e => {
+      try {
+        const d = JSON.parse(e.data);
+        renderBgAnalyzePill(d);
+      } catch {}
+    });
     es.onerror = () => {
       // EventSource reconnects automatically; nothing to do. We don't
       // flip _eventsSubscribed back because the same es object retries.
@@ -3760,6 +3802,8 @@ function syncPrefsToServer() {
         stockpile_root: stockpileFolder || '',
         auto_send: localStorage.getItem('freqphull.autoSend') === '1' ? '1' : '0',
         watch_folder: localStorage.getItem('freqphull.watchFolder') === '1' ? '1' : '0',
+        // '1' or '0'; absent in localStorage means ON (default)
+        auto_tag: autoTagEnabled() ? '1' : '0',
       }),
     }).catch(() => {});
   } catch {}
@@ -4633,6 +4677,61 @@ async function startFingerprintBackfill() {
     showAppNotification('✕ ' + e.message, 'err');
   }
 }
+
+// ── Background analysis pill (0.2.2) ──────────────────────────────
+// Drawn into #bg-analyze-pill (added to index.html, lives next to the
+// History header). Three visible states:
+//   • hidden — worker idle, queue empty (the normal state)
+//   • active — "Analyzing 5 tracks… (current title)"
+//   • done   — brief "All caught up" flash, auto-hides after 4s
+function renderBgAnalyzePill(d) {
+  let pill = document.getElementById('bg-analyze-pill');
+  if (!pill) {
+    pill = document.createElement('div');
+    pill.id = 'bg-analyze-pill';
+    pill.className = 'bg-pill';
+    pill.addEventListener('click', () => fetch(API + '/bg-analyze/run', { method: 'POST' }).catch(()=>{}));
+    pill.title = 'Click to re-run / retry failed';
+    // Mount in the document body so it floats in the corner regardless
+    // of which tab is active.
+    document.body.appendChild(pill);
+  }
+  if (!d) return;
+  if (d.state === 'progress' && d.current) {
+    pill.classList.add('active');
+    pill.classList.remove('hidden', 'done');
+    const title = (d.current.title || '').slice(0, 38);
+    pill.innerHTML = '<span class="bg-pill-spin">⟳</span> ' +
+      t('bgAnalyzing') + ' ' + d.remaining + ' · ' + escapeHtml(title);
+  } else if (d.state === 'idle') {
+    if (d.remaining > 0) {
+      // Worker stopped but rows still pending — usually all hit retry cap
+      pill.classList.add('active');
+      pill.classList.remove('hidden');
+      pill.innerHTML = '⚠ ' + d.remaining + ' ' + t('bgPending');
+    } else {
+      pill.classList.add('done');
+      pill.classList.remove('active');
+      pill.textContent = '✓ ' + t('bgCaughtUp');
+      setTimeout(() => { if (pill.classList.contains('done')) pill.classList.add('hidden'); }, 4000);
+    }
+  }
+}
+
+// Boot: query status once so the pill shows up if there's already a
+// backlog from a previous session (watch folder ran while desktop was
+// closed, etc.).
+setTimeout(async () => {
+  try {
+    const j = await fetch(API + '/bg-analyze/status').then(r => r.json());
+    if (j && (j.running || j.remaining > 0)) {
+      renderBgAnalyzePill({
+        state: j.running ? 'progress' : 'idle',
+        current: j.current, remaining: j.remaining,
+      });
+    }
+  } catch {}
+}, 3000);
 
 function renderHistory(){
   const q=(document.getElementById('hist-search')?.value||'').toLowerCase(),list=document.getElementById('hist-list');
@@ -5641,6 +5740,22 @@ function resetFullnessOverrides() {
 // "Auto-send to detected folder" — when enabled, the post-download
 // auto-match call passes commit:true so the server promotes the best
 // match to primary AND physically moves the file into the folder.
+// "Auto-tag downloads": when OFF, the post-download auto-match call is
+// skipped entirely — tracks arrive in History untagged regardless of
+// whether their title matches a folder's artist seeds. Users who want
+// pure manual organization opt out here. Defaults ON (the original
+// behavior since 0.0.8). Stored as freqphull.autoTag === '0' for OFF,
+// so the absence of the key means ON.
+function toggleAutoTag(checked) {
+  localStorage.setItem('freqphull.autoTag', checked ? '1' : '0');
+  syncPrefsToServer();
+  if (typeof showAppNotification === 'function') {
+    showAppNotification(checked ? t('autoTagOnNotif') : t('autoTagOffNotif'), 'info', null, 3000);
+  }
+}
+// Single source of truth — every gate uses this helper.
+function autoTagEnabled() { return localStorage.getItem('freqphull.autoTag') !== '0'; }
+
 function toggleAutoSend(checked) {
   localStorage.setItem('freqphull.autoSend', checked ? '1' : '0');
   syncPrefsToServer(); // extension downloads + watch folder honor it too
@@ -8311,6 +8426,17 @@ function stepToHuman(step) {
 
 const T = {
   en: {
+    // ── Background analysis pill (0.2.2) ──
+    bgAnalyzing:'Analyzing',
+    bgPending:'tracks pending — click to retry',
+    bgCaughtUp:'All tracks analyzed',
+
+    // ── Auto-tag opt-out (0.2.2) ──
+    autoTagName:'Auto-tag downloads',
+    autoTagDesc:"After each download, scan the title against your Stockpile folders' artist seeds and tag matches automatically. Turn OFF to keep new downloads completely untagged — you'll handle organization manually, or in batches via Auto-organize. (Disabling this also turns Auto-send into a no-op, since there's no tag to act on.)",
+    autoTagOnNotif:'Auto-tag ON — downloads will be matched to folders by artist',
+    autoTagOffNotif:'Auto-tag OFF — downloads stay untagged, organize manually',
+
     // ── Beat switch (0.1.3) ──
     bsTitle:'Beat switch detected',
     bsSection:'Beat',
@@ -8667,6 +8793,17 @@ const T = {
     close:'Close', by:'by', save:'Save', delete:'Delete',
   },
   fr: {
+    // ── Bandeau d'analyse en arrière-plan (0.2.2) ──
+    bgAnalyzing:'Analyse de',
+    bgPending:'pistes en attente — cliquez pour relancer',
+    bgCaughtUp:'Toutes les pistes sont analysées',
+
+    // ── Désactivation auto-étiquetage (0.2.2) ──
+    autoTagName:'Étiquetage auto des téléchargements',
+    autoTagDesc:"Après chaque téléchargement, analyse le titre par rapport aux artistes de référence de vos dossiers Stockpile et étiquette automatiquement les correspondances. Désactivez pour garder les nouveaux téléchargements totalement non étiquetés — vous gérerez l'organisation manuellement ou par lots avec Auto-organiser. (Désactiver ceci rend également l'Envoi auto sans effet, puisqu'il n'y a plus d'étiquette à promouvoir.)",
+    autoTagOnNotif:'Étiquetage auto activé — les téléchargements seront associés aux dossiers par artiste',
+    autoTagOffNotif:'Étiquetage auto désactivé — les téléchargements restent non étiquetés, organisez à la main',
+
     // ── Beat switch (0.1.3) ──
     bsTitle:'Beat switch détecté',
     bsSection:'Beat',
@@ -9243,6 +9380,16 @@ function renderSettings() {
         <div class="setting-desc" id="clean-temp-desc">${t('cleanTempDesc')}</div>
       </div>
       <button class="btn sm" id="btn-clean-temp" onclick="cleanTempFiles()">🧹 ${t('btnCleanNow')}</button>
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-name">${t('autoTagName')}</div>
+        <div class="setting-desc">${t('autoTagDesc')}</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" ${autoTagEnabled() ? 'checked' : ''} onchange="toggleAutoTag(this.checked)"/>
+        <span class="slider"></span>
+      </label>
     </div>
     <div class="setting-row">
       <div class="setting-info">

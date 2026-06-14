@@ -873,6 +873,7 @@ app.get('/download', async (req, res) => {
     // extension) that history gained a row, so their History tab can
     // refresh + pulse the new entry without a manual reload.
     broadcastEvent('history-changed', { reason: 'download', historyId });
+    nudgeAnalysisWorker();
     res.end();
   });
   proc.on('error', e => {
@@ -2325,6 +2326,14 @@ function autoMatchTrack(historyId, opts) {
 
 app.post('/stockpile/tracks/:historyId/auto-match', (req, res) => {
   const historyId = parseInt(req.params.historyId, 10);
+  // Honor the global auto-tag opt-out (0.2.2). Absent or '1' = enabled;
+  // explicit '0' = disabled. The DESKTOP also gates client-side, so this
+  // mostly catches extension downloads and the watch folder calling in.
+  // We return ok:true with an empty tag set so callers don't error.
+  const force = !!(req.body && req.body.force);
+  if (!force && getPref('auto_tag', '1') === '0') {
+    return res.json({ ok: true, tagged: [], committed: null, skipped: 'auto_tag_disabled' });
+  }
   // Auto-send can come from the explicit request body (desktop passes its
   // setting) OR from the shared server pref (covers extension downloads,
   // which don't know about desktop localStorage).
@@ -2685,6 +2694,7 @@ app.post('/stockpile/adopt-orphans', (req, res) => {
     if (adopted.length) {
       saveDB();
       broadcastEvent('history-changed', { reason: 'adopt-orphans' });
+      nudgeAnalysisWorker();
     }
     slog('adopt-orphans: root=' + root + ' adopted=' + adopted.length +
          ' skippedKnown=' + skippedKnown + ' skippedStems=' + skippedStems);
@@ -2792,6 +2802,14 @@ async function adoptWatchedFile(full) {
   slog('watch-folder: adopted "' + title + '" (id=' + historyId + ')');
   if (historyId) {
     try { computeFingerprint(historyId, full); } catch {}
+    // Watch-folder ingest also honors the auto-tag opt-out — bare
+    // import only, tagging stays the user's call.
+    if (getPref('auto_tag', '1') === '0') {
+      slog('watch-folder: auto-tag disabled, adopting "' + title + '" without tagging');
+      broadcastEvent('history-changed', { reason: 'watch-folder' });
+  nudgeAnalysisWorker();
+      return;
+    }
     const autoSend = getPref('auto_send') === '1';
     const root = getPref('stockpile_root') || null;
     const r = autoMatchTrack(historyId, {
@@ -2802,6 +2820,7 @@ async function adoptWatchedFile(full) {
     }
   }
   broadcastEvent('history-changed', { reason: 'watch-folder' });
+  nudgeAnalysisWorker();
 }
 
 // (AUDIO_EXTS is declared once, further down with walkAudio — watcher
@@ -3084,6 +3103,200 @@ app.get('/stockpile/summary', (_, res) => {
 // ════════════════════════════════════════════════════════════════════════════
 
 // Professional audio analysis via librosa Python script
+// ════════════════════════════════════════════════════════════════════
+// Background analysis worker (0.2.2)
+// ════════════════════════════════════════════════════════════════════
+// Picks up any history row where bpm IS NULL and runs analyze.py over
+// it serially in the background — same code path as the on-demand
+// /analyze endpoint, just headless. Used to backfill bulk downloads
+// (playlist grabs, parallel queue grabs) so the History always shows
+// complete metadata regardless of how the tracks got in.
+//
+// Design notes:
+//   • One worker, serial — analyze.py is CPU-heavy; running N at once
+//     would tank the UI thread on slow machines.
+//   • Loops while there's work; new arrivals (download done, watch-
+//     folder ingest) call nudgeAnalysisWorker() which is debounced
+//     (one wake-up per 2s burst).
+//   • Failures are remembered (per-history-id) — 3 strikes parks the
+//     row until app restart so a poison file doesn't burn CPU forever.
+
+const analyzeWorker = {
+  running: false,
+  current: null,           // {id, title} of the row being analyzed
+  queueSize: 0,            // last known size (for status endpoint)
+  failed: new Map(),       // historyId -> fail count
+  nudgeTimer: null,
+};
+
+function nextAnalysisCandidate() {
+  // bpm IS NULL is the trust signal — anything with bpm set is "done"
+  // even if other fields are partial. Exclude failures at the cap.
+  const failedIds = Array.from(analyzeWorker.failed.entries())
+    .filter(function(e){ return e[1] >= 3; }).map(function(e){ return e[0]; });
+  const exclude = failedIds.length ? (' AND id NOT IN (' + failedIds.join(',') + ')') : '';
+  const rows = dbAll(
+    'SELECT id, title, file_path FROM history' +
+    ' WHERE bpm IS NULL AND file_path IS NOT NULL' + exclude +
+    ' ORDER BY id DESC LIMIT 1');
+  return rows.length ? rows[0] : null;
+}
+
+function refreshAnalysisQueueSize() {
+  try {
+    const r = dbAll('SELECT COUNT(*) AS n FROM history WHERE bpm IS NULL AND file_path IS NOT NULL');
+    analyzeWorker.queueSize = r[0] ? r[0].n : 0;
+  } catch (e) { analyzeWorker.queueSize = 0; }
+}
+
+function analyzeOneInBackground(row) {
+  return new Promise(function(resolve){
+    if (!fs.existsSync(row.file_path)) {
+      slog('bg-analyze: file missing, marking failed: ' + row.file_path);
+      analyzeWorker.failed.set(row.id, 3);
+      return resolve(false);
+    }
+    const scriptSrc = getResourcePath('analyze.py');
+    if (!scriptSrc) { slog('bg-analyze: analyze.py not found, worker stopping'); return resolve(false); }
+    const scriptTmp = path.join(os.tmpdir(), 'freqphull_analyze.py');
+    try { fs.copyFileSync(scriptSrc, scriptTmp); } catch (e) {}
+
+    const wavTmp = path.join(os.tmpdir(), 'freqphull_bg_' + Date.now() + '_' + row.id + '.wav');
+    const ffmpegBin = bin('ffmpeg');
+    let safe;
+    try { safe = asciiSafeFfmpegPath(row.file_path); }
+    catch (e) {
+      slog('bg-analyze: ASCII-safe copy failed for id=' + row.id + ': ' + e.message);
+      return resolve(false);
+    }
+
+    // 1) Decode to WAV
+    run(ffmpegBin, ['-y', '-i', safe.ffmpegPath, '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2', wavTmp])
+      .then(function(){
+        if (safe.tempCopy) { try { fs.unlinkSync(safe.tempCopy); } catch (e) {} }
+        // 2) Run analyzer
+        const pythonCmd = getPythonCmd();
+        const proc = spawn(pythonCmd, [scriptTmp, wavTmp], { windowsHide: true, env: process.env });
+        let stdout = '', stderr = '';
+        proc.stdout.on('data', function(d){ stdout += d.toString(); });
+        proc.stderr.on('data', function(d){ stderr += d.toString(); });
+        // 4-minute hard ceiling — a hung Python must not block the worker.
+        const guard = setTimeout(function(){ try { proc.kill('SIGKILL'); } catch (e) {} }, 240000);
+        proc.on('close', function(code){
+          clearTimeout(guard);
+          try { fs.unlinkSync(wavTmp); } catch (e) {}
+          if (code !== 0) {
+            slog('bg-analyze id=' + row.id + ' python exit=' + code + ': ' + stderr.slice(0, 200));
+            analyzeWorker.failed.set(row.id, (analyzeWorker.failed.get(row.id) || 0) + 1);
+            return resolve(false);
+          }
+          try {
+            const result = JSON.parse(stdout.trim());
+            if (result.error || result.bpm == null) {
+              analyzeWorker.failed.set(row.id, (analyzeWorker.failed.get(row.id) || 0) + 1);
+              return resolve(false);
+            }
+            // 3) Persist BPM/key (same shape as /history/:id/analysis)
+            dbRun('UPDATE history SET bpm=?, key_note=?, key_mode=? WHERE id=?',
+              [result.bpm, result.key, result.mode, row.id]);
+            // Cache mood for stockpile suggestions
+            if (result.mood_profile) {
+              try {
+                const m = result.mood_profile;
+                const existing = dbAll('SELECT history_id FROM track_mood WHERE history_id=?', [row.id]);
+                if (existing.length) {
+                  dbRun("UPDATE track_mood SET energy=?, tonality=?, density=?, tempo_pos=?, label=?," +
+                        " updated_at=strftime('%Y-%m-%d %H:%M:%S','now') WHERE history_id=?",
+                    [m.energy, m.tonality, m.density, m.tempo_pos, m.label || null, row.id]);
+                } else {
+                  dbRun('INSERT INTO track_mood (history_id, energy, tonality, density, tempo_pos, label)' +
+                        ' VALUES (?, ?, ?, ?, ?, ?)',
+                    [row.id, m.energy, m.tonality, m.density, m.tempo_pos, m.label || null]);
+                }
+              } catch (e) {}
+            }
+            saveDB();
+            // 4) File tags (fire-and-forget — same as /history/:id/analysis)
+            if (writeTagsToFileEnabled()) {
+              setImmediate(function(){
+                writeTagsToFile(row.id, { bpm: result.bpm, key_note: result.key, key_mode: result.mode });
+              });
+            }
+            slog('bg-analyze id=' + row.id + ' OK bpm=' + result.bpm + ' key=' + result.key + ' ' + result.mode);
+            broadcastEvent('history-changed', { reason: 'bg-analyze', historyId: row.id });
+            resolve(true);
+          } catch (e) {
+            slog('bg-analyze id=' + row.id + ' parse error: ' + e.message);
+            analyzeWorker.failed.set(row.id, (analyzeWorker.failed.get(row.id) || 0) + 1);
+            resolve(false);
+          }
+        });
+      })
+      .catch(function(e){
+        if (safe.tempCopy) { try { fs.unlinkSync(safe.tempCopy); } catch (e2) {} }
+        slog('bg-analyze id=' + row.id + ' ffmpeg failed: ' + e.message);
+        try { fs.unlinkSync(wavTmp); } catch (e2) {}
+        analyzeWorker.failed.set(row.id, (analyzeWorker.failed.get(row.id) || 0) + 1);
+        resolve(false);
+      });
+  });
+}
+
+async function analysisWorkerLoop() {
+  if (analyzeWorker.running) return;
+  analyzeWorker.running = true;
+  try {
+    while (true) {
+      refreshAnalysisQueueSize();
+      if (analyzeWorker.queueSize === 0) break;
+      const row = nextAnalysisCandidate();
+      if (!row) break;
+      analyzeWorker.current = { id: row.id, title: row.title };
+      broadcastEvent('bg-analyze', { state: 'progress', current: analyzeWorker.current, remaining: analyzeWorker.queueSize });
+      await analyzeOneInBackground(row);
+      analyzeWorker.current = null;
+    }
+  } finally {
+    analyzeWorker.running = false;
+    refreshAnalysisQueueSize();
+    broadcastEvent('bg-analyze', { state: 'idle', remaining: analyzeWorker.queueSize });
+  }
+}
+
+// Debounced wake-up. A playlist of 30 grabs lands as 30 download-done
+// events; we want ONE worker startup that drains all 30 serially.
+function nudgeAnalysisWorker() {
+  if (analyzeWorker.nudgeTimer) clearTimeout(analyzeWorker.nudgeTimer);
+  analyzeWorker.nudgeTimer = setTimeout(function(){
+    analyzeWorker.nudgeTimer = null;
+    analysisWorkerLoop().catch(function(e){ slog('analysis worker loop crashed: ' + e.message); });
+  }, 2000);
+}
+
+app.get('/bg-analyze/status', function(req, res){
+  refreshAnalysisQueueSize();
+  res.json({
+    running: analyzeWorker.running,
+    current: analyzeWorker.current,
+    remaining: analyzeWorker.queueSize,
+    failed_count: Array.from(analyzeWorker.failed.values()).filter(function(n){ return n >= 3; }).length,
+  });
+});
+
+// Manual trigger — useful for users with pre-existing untagged libraries
+// who want to backfill now, or to retry after errors.
+app.post('/bg-analyze/run', function(req, res){
+  analyzeWorker.failed.clear();
+  nudgeAnalysisWorker();
+  res.json({ ok: true, scheduled: true });
+});
+
+// Boot kick — picks up rows added by watch folder while the app was
+// closed, or anything left over from a previous session.
+setTimeout(nudgeAnalysisWorker, 10000);
+
+
+
 app.get('/analyze', async (req, res) => {
   const filePath = (req.query.path || '').trim();
   slog('analyze request: ' + filePath);

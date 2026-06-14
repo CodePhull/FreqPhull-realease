@@ -9,6 +9,29 @@ along the way.
 
 ---
 
+## v0.2.2 (2026-06-14)
+
+**Background analysis worker**
+- New: any track in History with no BPM gets picked up by a server-side worker and analyzed automatically — same `analyze.py` pipeline as on-demand. Bulk grabs, playlist downloads, watch-folder ingest, manually-adopted orphans: History always ends up complete. One worker, serial (CPU-heavy pipeline can't share well); arrivals are debounced so 30 playlist grabs nudge it once and it drains them in order.
+- Floating pill in the corner shows "Analyzing 5 · current title" while it works; click to retry failed rows. Auto-hides when idle. Failed rows are parked after 3 strikes so a poison file doesn't burn CPU in a loop. Endpoints: `GET /bg-analyze/status`, `POST /bg-analyze/run`.
+
+**Auto-tag opt-out**
+- New Settings toggle: "Auto-tag downloads". Defaults ON (matches behavior since v0.0.8). When OFF, downloads — desktop, extension, AND watch-folder ingest — arrive in History without any folder tags. Auto-send becomes a no-op while off, since there's no tag to act on. Organize manually or with Auto-organize when ready.
+- Honored everywhere through one helper: `autoTagEnabled()` in the renderer, `getPref('auto_tag')` on the server, synced via `/prefs` so a single toggle covers all three ingest paths.
+
+**Responsive UI**
+- The app now reflows cleanly down to phone-width without changing the default desktop look. Breakpoints add up: ≤1100px fluid main padding, ≤960px sidebar trims to 168px with ellipsis labels, ≤800px sidebar becomes an icon rail (62px), ≤620px the stat cards stack 2-up, settings rows go vertical, dialogs fill the viewport with padding, the pro analyzer grid drops to 2 columns. ≤460px emergency single-column.
+- Debounced resize relay: JS-driven layout (notification stack position, modals) gets notified once per animation frame, via both `resize` and a `ResizeObserver` on body — so DevTools dock changes and Electron window state changes also trigger a re-flow.
+
+**Smoother & more accessible**
+- Composite-only hover transforms with `will-change` hints — buttons, history rows, folder cards lift on hover at GPU speed without paint thrash.
+- Visible keyboard focus rings everywhere (`:focus-visible` — only on keyboard nav, never after a mouse click).
+- Touch-target minimums on `pointer:coarse` devices (touch laptops, kiosks): buttons ≥32px, nav buttons ≥40px, history rows ≥48px.
+- High-contrast / forced-colors mode honored (`@media (forced-colors: active)`).
+- Quieter scrollbars (10px, low-contrast, brighten on hover).
+- No design change — all rules are additive and gated behind breakpoints, focus state, hover, or system preference media features.
+
+
 ## v0.2.1 (2026-06-13)
 
 **Desktop: Fetch auto-queues the download**
