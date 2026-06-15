@@ -22,6 +22,7 @@ let queueNextId = 1;
 // being closed (a side panel reload re-runs panel.js, which would
 // reset to default if we kept it in-memory only).
 let queueAutoclearHours = 24;
+let autoAnalyzeAfterDownload = false;  // v4.2.1 — default OFF since desktop has bg-analyze worker that handles BPM/key independently. Users who want the in-panel auto-preview can opt in.
 let _queueSweepInterval = null;
 
 document.addEventListener('DOMContentLoaded',()=>{
@@ -108,6 +109,17 @@ document.addEventListener('DOMContentLoaded',()=>{
   if(acSel) acSel.addEventListener('change', e => setQueueAutoclear(e.target.value));
   const pSel = document.getElementById('parallel-sel');
   if(pSel) pSel.addEventListener('change', e => setMaxParallel(e.target.value));
+  // Auto-analyze toggle — persist on change. MV3 CSP blocks inline
+  // onchange handlers, so it's wired here like the rest.
+  const aa = document.getElementById('autoanalyze-toggle');
+  if(aa) aa.addEventListener('change', e => {
+    autoAnalyzeAfterDownload = !!e.target.checked;
+    try { chrome.storage.local.set({ autoAnalyzeAfterDownload }); } catch {}
+    showNotification(autoAnalyzeAfterDownload
+      ? 'Auto-analyze ON — last finishing download will open in the player'
+      : 'Auto-analyze OFF — downloads stay quiet, use Open on a row to analyze',
+      'info');
+  });
   // Playlist picker (all wired here — MV3 CSP blocks inline handlers)
   const plLink = document.getElementById('pl-link');
   if(plLink) plLink.addEventListener('click', openPlaylistPicker);
@@ -128,7 +140,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   // reset to defaults — we need persistent storage. chrome.storage.local
   // is the right place (sync would limit us to 100KB across all keys).
   try {
-    chrome.storage.local.get(['queueAutoclearHours','maxParallel'], r => {
+    chrome.storage.local.get(['queueAutoclearHours','maxParallel','autoAnalyzeAfterDownload'], r => {
       const v = r && r.queueAutoclearHours;
       if(typeof v === 'number' && v >= 0) queueAutoclearHours = v;
       const sel = document.getElementById('autoclear-sel');
@@ -137,6 +149,12 @@ document.addEventListener('DOMContentLoaded',()=>{
       if(typeof mp === 'number' && mp >= 1 && mp <= 3) maxParallel = mp;
       const psel = document.getElementById('parallel-sel');
       if(psel) psel.value = String(maxParallel);
+      // Toggle defaults to false (v4.2.1+). Respect both stored values
+      // explicitly so the saved preference is honored regardless of
+      // which default ships in a given version.
+      if(r && typeof r.autoAnalyzeAfterDownload === 'boolean') autoAnalyzeAfterDownload = r.autoAnalyzeAfterDownload;
+      const at = document.getElementById('autoanalyze-toggle');
+      if(at) at.checked = autoAnalyzeAfterDownload;
     });
   } catch {}
   // Start periodic sweep — every minute is plenty
@@ -662,6 +680,14 @@ function startDownload(item){
     if(othersBusy){
       st('✓ '+ (d.filename||'Track').slice(0,30) + ' — queued for review','ok');
       return; // skip auto-load; user can Open from queue
+    }
+    // Auto-analyze toggle (0.2.2): when off, downloads NEVER open in the
+    // player. The user explicitly opted into "queue tracks all day, look
+    // at them later" — respect it, even on a singleton download where
+    // everything's idle. Open button on the row still works on demand.
+    if(!autoAnalyzeAfterDownload){
+      st('✓ '+ (d.filename||'Track').slice(0,30) + ' — done','ok');
+      return;
     }
 
     $('progfill').style.width='100%';

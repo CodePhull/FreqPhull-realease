@@ -1,17 +1,17 @@
 @echo off
 setlocal EnableDelayedExpansion
-title FREQ.PHULL — Download Build Binaries
+title FREQ.PHULL - Download Build Binaries
 color 0B
 echo.
 echo  =============================================
-echo   FREQ.PHULL — Fetching yt-dlp + ffmpeg
+echo   FREQ.PHULL - Fetching yt-dlp + ffmpeg
 echo   These get bundled into the .exe installer
 echo  =============================================
 echo.
 
 if not exist "bin" mkdir bin
 
-REM ── yt-dlp ──────────────────────────────────────────────────────────────────
+REM == yt-dlp ==================================================================
 echo  [*] Downloading yt-dlp.exe (~17 MB)...
 call :download_with_validation ^
     "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" ^
@@ -23,7 +23,7 @@ if errorlevel 1 (
     echo          2. Save the file as bin\yt-dlp.exe
 )
 
-REM ── ffmpeg ──────────────────────────────────────────────────────────────────
+REM == ffmpeg ==================================================================
 echo.
 echo  [*] Downloading ffmpeg zip (~100 MB, may take a minute)...
 
@@ -70,7 +70,7 @@ powershell -ExecutionPolicy Bypass -Command ^
     "try { Add-Type -AssemblyName System.IO.Compression.FileSystem; $z=[System.IO.Compression.ZipFile]::OpenRead('%FFZIP%'); $z.Dispose(); exit 0 } catch { Write-Host ('Zip validation failed: ' + $_.Exception.Message); exit 1 }"
 if errorlevel 1 (
     echo  [ERROR] Downloaded file is not a valid zip ^(probably an HTML error page^).
-    echo          Check %FFZIP% — if it's tiny ^(under 1MB^), the download was blocked.
+    echo          Check %FFZIP% - if it's tiny ^(under 1MB^), the download was blocked.
     del "%FFZIP%" 2>nul
     goto :summary
 )
@@ -141,13 +141,13 @@ curl -L -f --retry 3 --retry-delay 2 --connect-timeout 30 -o "%DL_OUT%" "%DL_URL
 if exist "%DL_OUT%" call :check_size "%DL_OUT%" %DL_MIN% && goto :download_ok
 
 if exist "%DL_OUT%" (
-    for %%A in ("%DL_OUT%") do echo    Downloaded file is only %%~zA bytes ^(expected %DL_MIN%+^) — looks like a stub/error page
+    for %%A in ("%DL_OUT%") do echo    Downloaded file is only %%~zA bytes ^(expected %DL_MIN%+^) - looks like a stub/error page
     del "%DL_OUT%" 2>nul
 )
 exit /b 1
 
 :download_ok
-for %%A in ("%DL_OUT%") do echo    OK — got %%~zA bytes
+for %%A in ("%DL_OUT%") do echo    OK - got %%~zA bytes
 exit /b 0
 
 :check_size

@@ -825,32 +825,105 @@ app.get('/download', async (req, res) => {
   slog('yt-dlp path: ' + ytdlp);
   slog('ffmpeg dir: ' + ffDir);
 
-  const args = ['--no-playlist', '--no-warnings', '-x', '--audio-format', fmt, '--audio-quality', '0', '--ffmpeg-location', ffDir, '--newline', '-o', path.join(outDir, '%(title)s.%(ext)s'), url];
+  const args = ['--no-playlist', '--no-warnings', '-x', '--audio-format', fmt, '--audio-quality', '0', '--ffmpeg-location', ffDir, '--newline',
+                // CRITICAL (0.2.2 fix): print the final path AFTER all
+                // postprocessing/moves. This is how we identify which file
+                // belongs to THIS download — the old "newest mtime in dir"
+                // heuristic raced badly between parallel grabs.
+                '--print', 'after_move:filepath',
+                '-o', path.join(outDir, '%(title)s.%(ext)s'), url];
   if (fmt === 'wav') args.push('--postprocessor-args', 'ffmpeg:-acodec pcm_s16le -ar 44100');
+
+  // ── Pre-download snapshot (0.2.2 race-proof) ──────────────────
+  // Take an instant snapshot of every file in outDir BEFORE yt-dlp runs.
+  // After it exits, we diff this set against the new listing to find
+  // exactly what THIS download produced — independent of mtime, immune
+  // to parallel downloads writing into the same folder at the same time.
+  let preFiles;
+  try { preFiles = new Set(fs.readdirSync(outDir)); }
+  catch (e) { preFiles = new Set(); }
 
   sse('status', { message: 'Starting download…' });
   const proc = spawn(ytdlp, args, { windowsHide: true });
   let stderr = '';
+  // Where we'll capture the real output path. Sources in priority order:
+  //   1. --print after_move:filepath (modern yt-dlp, ≥2023.07.06)
+  //   2. "Destination:" lines (the final destination, post extract-audio)
+  //   3. snapshot-diff: files in outDir that weren't there pre-run
+  //   4. mtime-newest fallback (last resort — logged warning)
+  let printedPath = null;
+  let destPath = null;
+  // The --print line arrives on stdout interleaved with [download] progress
+  // lines. Filter on the absolute-path shape so we don't mistake a
+  // progress line for a path.
+  function looksLikePath(line) {
+    const s = line.trim();
+    if (!s) return false;
+    // Windows: "C:\\...\\file.mp3" or "\\\\server\\share\\..."
+    // Unix:    "/home/.../file.mp3"
+    return /^[A-Za-z]:[\\\/]/.test(s) || s.startsWith('/') || s.startsWith('\\\\');
+  }
 
   proc.stdout.on('data', d => {
-    const line = d.toString();
-    const m = line.match(/\[download\]\s+([\d.]+)%/);
-    if (m) sse('progress', { progress: parseFloat(m[1]) });
+    const text = d.toString();
+    text.split(/\r?\n/).forEach(line => {
+      const m = line.match(/\[download\]\s+([\d.]+)%/);
+      if (m) { sse('progress', { progress: parseFloat(m[1]) }); return; }
+      // Pure-path lines come from --print after_move:filepath
+      if (looksLikePath(line)) { printedPath = line.trim(); return; }
+      // Destination lines, e.g. "[ExtractAudio] Destination: /path/file.mp3"
+      const dm = line.match(/Destination:\s+(.+)$/);
+      if (dm && dm[1]) destPath = dm[1].trim();
+    });
   });
   proc.stderr.on('data', d => { stderr += d; slog('yt-dlp stderr: ' + d.toString().trim()); });
   proc.on('close', async code => {
     slog('yt-dlp exit code: ' + code);
     if (code !== 0) { sse('error', { message: stderr.trim() || 'yt-dlp failed with code ' + code }); return res.end(); }
 
-    const files = fs.readdirSync(outDir)
-      .map(f => ({ name: f, mtime: fs.statSync(path.join(outDir, f)).mtimeMs }))
-      .filter(f => f.name.toLowerCase().endsWith('.' + fmt))
-      .sort((a, b) => b.mtime - a.mtime);
-
-    if (!files.length) { sse('error', { message: 'Output file not found in ' + outDir }); return res.end(); }
-
-    const filename = files[0].name, fullPath = path.join(outDir, filename);
-    slog('Downloaded to: ' + fullPath);
+    // Resolve THIS download's actual file. Priority:
+    //   1. --print after_move:filepath  (most accurate, race-proof)
+    //   2. Last "Destination:" line     (post-extract-audio destination)
+    //   3. mtime-newest                 (legacy, raced with parallel)
+    let fullPath = null, filename = null, resolved = 'unknown';
+    if (printedPath && fs.existsSync(printedPath)) {
+      fullPath = printedPath;
+      filename = path.basename(printedPath);
+      resolved = 'after_move';
+    } else if (destPath && fs.existsSync(destPath)) {
+      fullPath = destPath;
+      filename = path.basename(destPath);
+      resolved = 'destination';
+    } else {
+      // Snapshot-diff: pick files in outDir that weren't there before
+      // yt-dlp ran AND match our target format. Race-proof regardless
+      // of how many other downloads share this folder.
+      let postFiles;
+      try { postFiles = fs.readdirSync(outDir); }
+      catch (e) { postFiles = []; }
+      const newFiles = postFiles
+        .filter(f => !preFiles.has(f) && f.toLowerCase().endsWith('.' + fmt))
+        .map(f => ({ name: f, mtime: fs.statSync(path.join(outDir, f)).mtimeMs }))
+        .sort((a, b) => b.mtime - a.mtime);
+      if (newFiles.length) {
+        filename = newFiles[0].name;
+        fullPath = path.join(outDir, filename);
+        resolved = 'snapshot-diff';
+      } else {
+        // Last resort: legacy mtime scan. Should never reach here on a
+        // modern yt-dlp + healthy outDir; log a warning so we notice.
+        const allFiles = postFiles
+          .map(f => ({ name: f, mtime: fs.statSync(path.join(outDir, f)).mtimeMs }))
+          .filter(f => f.name.toLowerCase().endsWith('.' + fmt))
+          .sort((a, b) => b.mtime - a.mtime);
+        if (!allFiles.length) { sse('error', { message: 'Output file not found in ' + outDir }); return res.end(); }
+        filename = allFiles[0].name;
+        fullPath = path.join(outDir, filename);
+        resolved = 'mtime-last-resort';
+        slog('WARN: parallel-safe path detection fully exhausted (no --print, no Destination, no snapshot-new); falling back to mtime');
+      }
+    }
+    slog('Downloaded to: ' + fullPath + ' (via ' + resolved + ')');
 
     let meta = {};
     try { meta = JSON.parse(await run(ytdlp, ['--dump-json', '--no-playlist', '--no-warnings', url])); } catch(e) { slog('Meta fetch error: ' + e.message); }

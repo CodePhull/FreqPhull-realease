@@ -355,9 +355,15 @@ function showTab(btn) {
   // Note: the global mini player keeps playing across tab switches now —
   // it's not folder-scoped anymore.
 
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('on'));
+  // Accessibility (0.2.2): aria-current marks the active nav item so
+  // screen readers announce the current page.
+  document.querySelectorAll('.nav-btn').forEach(b => {
+    b.classList.remove('on');
+    b.removeAttribute('aria-current');
+  });
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('on'));
   btn.classList.add('on');
+  btn.setAttribute('aria-current', 'page');
   document.getElementById('tab-' + btn.dataset.tab).classList.add('on');
 
   const newTab = btn.dataset.tab;
@@ -12493,6 +12499,31 @@ function onUpdateBannerLater() {
   _updateDismissedSession = true;
   _hideUpdateBanner();
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// KEYBOARD: Space toggles play/pause from anywhere (0.2.2)
+// ══════════════════════════════════════════════════════════════════════
+// Standard media-player ergonomic. Skipped when typing in an input,
+// textarea, or contenteditable; skipped when a modal is open so the
+// user can still type within the modal.
+(function installGlobalSpaceKey(){
+  document.addEventListener('keydown', (e) => {
+    if (e.code !== 'Space') return;
+    const ae = document.activeElement;
+    if (!ae) return;
+    const tag = ae.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || ae.isContentEditable) return;
+    // Don't hijack when a modal is taking focus
+    const openModal = Array.from(document.querySelectorAll('.setup-modal'))
+      .find(m => m.style.display && m.style.display !== 'none');
+    if (openModal) return;
+    e.preventDefault();
+    // Prefer the mini player toggle, fall back to the analyzer's own play.
+    const mini = document.getElementById('sp-fv-mini-toggle');
+    if (mini && mini.offsetParent !== null) { mini.click(); return; }
+    if (typeof togglePlayPause === 'function') { try { togglePlayPause(); } catch {} }
+  });
+})();
 
 // ══════════════════════════════════════════════════════════════════════
 // CLICK-OUTSIDE-TO-CLOSE FOR POPUP MODALS (patch 20)

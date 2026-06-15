@@ -9,7 +9,29 @@ along the way.
 
 ---
 
-## v0.2.2 (2026-06-14)
+## v0.2.3 (2026-06-15)
+
+**Build: Download-Binaries.bat works reliably**
+- The bundled binary fetcher had UTF-8 multi-byte characters (em-dashes, box-drawing) AND LF-only line endings — a bad combination for Windows CMD. The mojibake was cosmetic ("ÔçÖ"), but the LF endings caused the parser's label-search to fail intermittently mid-run ("The system cannot find the batch label specified - download_with_validation") because CMD's seek logic relies on CRLF terminators. Converted to pure ASCII with CRLF endings — every label call now resolves correctly regardless of which control-flow branch ran before.
+
+**Race fix bulletproofed (server)**
+- Added a pre-download `outDir` snapshot to the path-resolution chain. The full priority is now: `--print after_move:filepath` → `[ExtractAudio] Destination:` line → snapshot-diff (files that weren't there pre-run) → legacy mtime as last resort. Even if yt-dlp's print flag fails on an unusual build, the snapshot diff makes parallel downloads writing to the same folder mathematically impossible to mis-attribute. Each fallback path is logged so we can see which one fired.
+
+**Extension v4.2.1: auto-analyze defaults OFF**
+- The in-panel auto-load/analyze step is the only thing that ever blocked the extension panel after a download landed. Since v0.2.2 desktop has a background analysis worker that handles BPM/key independently of the extension, the in-panel preview was redundant on top of being a freeze risk. Default flipped — bulk grabs are now snappy out of the box; users who liked the instant single-grab preview flip the Settings toggle back on. Stored preference is honored across both defaults, so existing users keep their previous setting.
+
+**Accessibility & UI polish**
+- Skip-to-content link (visible only when keyboard-focused, jumps past the sidebar).
+- Sidebar is now a real `<nav aria-label="Workspace">`, main area `role="main"` and programmatically focusable from the skip link.
+- `aria-current="page"` on the active nav button — screen readers announce the current tab. Active state visual gets a slightly crisper icon transition.
+- Every icon-only mini-player button got an `aria-label` (Close, Shuffle, Previous/Next, Play/Pause, Repeat, Favorite, Transcript, Mute).
+- Notification stack is now a polite live region (`role="status"`, `aria-live="polite"`, `aria-atomic="false"`) — toasts get announced to screen readers without interrupting current speech.
+- Global Space-to-play/pause shortcut, scoped: ignored when typing in inputs/textareas/selects/contenteditable, ignored when a modal is open.
+- Smoother tab pane transition (140ms fade in, instant under `prefers-reduced-motion`). Quieter empty-state class for cards that have nothing yet.
+
+**Parallel download race fixed (server)**
+- Critical bug from v4.1.3+ extension and any parallel grabs: when two downloads ran concurrently to the same folder, the post-yt-dlp scan that picked the output file used "newest mtime" — and could race-pick the OTHER download's file. Result: track A's history row ended up pointing at track B's audio, so playing track A from history played track B. Now we capture yt-dlp's own `--print after_move:filepath` output (race-proof, knows exactly which file belongs to this invocation), fall back to `[ExtractAudio] Destination:` lines, then the legacy mtime scan only as last resort with a logged warning.
+- Affects: extension parallel-download queue (default 2 concurrent since v4.1.3), playlist grabs (v0.2.0+), watch-folder ingest of concurrent file drops. Single-download flows were never affected. No data migration needed — fresh downloads from here on will be correctly attributed; existing mis-attributed rows can be located by listening and corrected via "Fix file locations" or by re-downloading.
 
 **Background analysis worker**
 - New: any track in History with no BPM gets picked up by a server-side worker and analyzed automatically — same `analyze.py` pipeline as on-demand. Bulk grabs, playlist downloads, watch-folder ingest, manually-adopted orphans: History always ends up complete. One worker, serial (CPU-heavy pipeline can't share well); arrivals are debounced so 30 playlist grabs nudge it once and it drains them in order.

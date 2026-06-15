@@ -144,6 +144,16 @@
   </div>
   <div class="set-row">
     <div class="set-info">
+      <div class="set-name">Auto-analyze after download</div>
+      <div class="set-desc">OFF by default (v4.2.1+) — bulk grabs stay snappy and never freeze the panel mid-queue. The desktop app analyzes downloads in the background regardless, so BPM/key will appear in History within seconds either way. Turn this ON if you want every download to also auto-load into the in-panel player + run an instant preview-analysis here. Single grabs only — multi-grabs always skip the in-panel preview to keep the queue moving.</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="autoanalyze-toggle"/>
+      <span class="slider"></span>
+    </label>
+  </div>
+  <div class="set-row">
+    <div class="set-info">
       <div class="set-name">Parallel downloads</div>
       <div class="set-desc">How many tracks download at the same time. 2 is a good default — queue moves faster without hammering the connection. Set 1 to restore one-at-a-time behavior.</div>
     </div>
@@ -157,7 +167,7 @@
   <div class="set-row">
     <div class="set-info">
       <div class="set-name">Freq.Phull Extension</div>
-      <div class="set-desc">v4.1.5 — Cynphull / Hood Knights<br/>Connects to the local desktop engine on 127.0.0.1:47891. Start the desktop app to use download + analyze.</div>
+      <div class="set-desc">v4.2.1 — Cynphull / Hood Knights<br/>Connects to the local desktop engine on 127.0.0.1:47891. Start the desktop app to use download + analyze.</div>
     </div>
   </div>
 </div>
