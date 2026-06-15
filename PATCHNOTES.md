@@ -9,6 +9,22 @@ along the way.
 
 ---
 
+## v0.2.4 (2026-06-15)
+
+**Keyboard shortcuts fixed + bare arrows for prev/next**
+- v0.2.2's Space-from-anywhere shortcut never actually worked. Two reasons: (1) a separate, mode-aware mini-player keyboard handler had been quietly handling Space since long before — my new handler double-fired with it, the two toggles cancelled, and the user saw nothing change. (2) When the mini player was hidden, the fallback called `togglePlayPause()` — a function that doesn't exist in this codebase. The new handler has been removed entirely; the existing mini-player handler is now the only source of truth and it correctly drives both mirror mode (Analyzer audio path) and legacy mode (HTMLAudioElement path).
+- Previous/Next promoted from Ctrl+← / Ctrl+→ to **bare ← / →** — what users actually expect from a media player. Alt+← / Alt+→ continue to seek 5s within the current track, unchanged.
+- Stuck-input fix: clicking the YouTube URL field at the top of Download trapped focus there indefinitely, so subsequent Space presses just typed into the field. A body-level mousedown listener now drops focus from inputs when you click anywhere non-interactive (body, cards, dividers), so global shortcuts wake back up after the very first outside click.
+- Mini-player tooltips corrected — they previously claimed `Ctrl+←` / `Ctrl+→` for prev/next, but no such binding ever existed.
+
+Active shortcuts (when mini player is visible and you aren't typing):
+- `Space` — play / pause
+- `←` / `→` — previous / next track
+- `Alt+←` / `Alt+→` — seek 5s back / forward
+- `Esc` — close top modal
+- `Ctrl+Alt+←` / `Ctrl+Alt+→` — tab history back / forward
+
+
 ## v0.2.3 (2026-06-15)
 
 **Build: Download-Binaries.bat works reliably**

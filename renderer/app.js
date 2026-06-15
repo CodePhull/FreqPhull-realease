@@ -11795,12 +11795,14 @@ window.addEventListener('keydown', (e) => {
       globalPlayer.audio.currentTime = Math.min(globalPlayer.audio.duration, globalPlayer.audio.currentTime + 5);
       updateMiniPlayerTime();
     }
-  } else if (e.code === 'ArrowLeft' && (e.ctrlKey || e.metaKey)) {
-    // Ctrl+← jumps to previous track in the current playlist context
+  } else if (e.code === 'ArrowLeft' && !e.altKey && !e.shiftKey) {
+    // ← jumps to previous track (v0.2.4: was Ctrl+← only; promoted to
+    // bare ← because that's what users actually expect from a media
+    // player. Alt+← still seeks back 5s — handled above.)
     e.preventDefault();
     globalPlayerPrev();
-  } else if (e.code === 'ArrowRight' && (e.ctrlKey || e.metaKey)) {
-    // Ctrl+→ jumps to next track
+  } else if (e.code === 'ArrowRight' && !e.altKey && !e.shiftKey) {
+    // → jumps to next track (same promotion as ArrowLeft above).
     e.preventDefault();
     globalPlayerNext();
   }
@@ -12500,29 +12502,24 @@ function onUpdateBannerLater() {
   _hideUpdateBanner();
 }
 
-// ══════════════════════════════════════════════════════════════════════
-// KEYBOARD: Space toggles play/pause from anywhere (0.2.2)
-// ══════════════════════════════════════════════════════════════════════
-// Standard media-player ergonomic. Skipped when typing in an input,
-// textarea, or contenteditable; skipped when a modal is open so the
-// user can still type within the modal.
-(function installGlobalSpaceKey(){
-  document.addEventListener('keydown', (e) => {
-    if (e.code !== 'Space') return;
+// (v0.2.2's installGlobalSpaceKey was REMOVED in v0.2.4 — it double-
+// fired with the proper mode-aware mini-player keyboard handler below
+// at the "Keyboard shortcuts when the mini player is active" block.
+// Its button.click() approach also targeted folderViewTogglePlay() in
+// mirror mode, which is the wrong audio path. All media shortcuts now
+// live in that one place. Also: a body-level mousedown handler below
+// drops focus from stuck input fields so Space/arrows work after the
+// very first click outside the URL field.)
+(function installInputBlurOnOutsideClick(){
+  document.addEventListener('mousedown', (e) => {
     const ae = document.activeElement;
     if (!ae) return;
-    const tag = ae.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || ae.isContentEditable) return;
-    // Don't hijack when a modal is taking focus
-    const openModal = Array.from(document.querySelectorAll('.setup-modal'))
-      .find(m => m.style.display && m.style.display !== 'none');
-    if (openModal) return;
-    e.preventDefault();
-    // Prefer the mini player toggle, fall back to the analyzer's own play.
-    const mini = document.getElementById('sp-fv-mini-toggle');
-    if (mini && mini.offsetParent !== null) { mini.click(); return; }
-    if (typeof togglePlayPause === 'function') { try { togglePlayPause(); } catch {} }
-  });
+    if (ae.tagName !== 'INPUT' && ae.tagName !== 'TEXTAREA') return;
+    const t = e.target;
+    if (!t || t === ae) return;
+    if (t.closest && t.closest('input,textarea,select,button,a,label,[contenteditable="true"]')) return;
+    try { ae.blur(); } catch {}
+  }, true);
 })();
 
 // ══════════════════════════════════════════════════════════════════════
