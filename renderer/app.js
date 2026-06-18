@@ -3378,21 +3378,28 @@ function resetProg() { document.getElementById('seek-fill').style.width='0%'; do
 const PLAY_SVG  = '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="7,5 7,19 19,12"/></svg>';
 const PAUSE_SVG = '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>';
 function _refreshHistoryRowPlayState() {
-  // Determine the currently-playing track id across both modes.
+  // Two separate signals: which track is LOADED (the row stays
+  // highlighted while loaded, even when paused) and which is PLAYING
+  // (the button icon switches between pause-bars and play-triangle).
   let activeId = null;
-  if (analyzeMirrorActive && typeof playing !== 'undefined' && playing && currentHistId) {
+  if (analyzeMirrorActive && currentHistId) {
     activeId = currentHistId;
   } else if (globalPlayer && globalPlayer.track && globalPlayer.track.id) {
     activeId = globalPlayer.track.id;
   }
+  const audioPlaying = (
+    (globalPlayer && globalPlayer.audio && !globalPlayer.audio.paused) ||
+    (analyzeMirrorActive && typeof playing !== 'undefined' && playing)
+  );
   const rows = document.querySelectorAll('.hist-row');
   for (const row of rows) {
     const id = parseInt(row.dataset.id, 10);
     const btn = row.querySelector('.hist-play');
     if (!btn) continue;
-    const shouldPlay = (id === activeId);
-    const isMarked = btn.classList.contains('playing');
-    if (shouldPlay !== isMarked) {
+    const shouldActive = (id === activeId);
+    const shouldPlay = shouldActive && audioPlaying;
+    if (shouldActive !== btn.classList.contains('active')) btn.classList.toggle('active', shouldActive);
+    if (shouldPlay !== btn.classList.contains('playing')) {
       btn.classList.toggle('playing', shouldPlay);
       btn.innerHTML = shouldPlay ? PAUSE_SVG : PLAY_SVG;
     }
@@ -4739,7 +4746,26 @@ setTimeout(async () => {
   } catch {}
 }, 3000);
 
-function renderHistory(){
+// v0.2.5: rAF-coalesced re-render. A playlist of 30 grabs lands as 30
+// history-changed + 30 bg-analyze SSE events; without this wrapper each
+// one triggered a full _renderHistoryImpl() (innerHTML rewrite of the
+// whole list). Now: any number of requestRenderHistory() calls inside
+// one frame collapse to a single render before paint.
+let _renderHistoryQueued = false;
+function requestRenderHistory(){
+  if (_renderHistoryQueued) return;
+  _renderHistoryQueued = true;
+  requestAnimationFrame(() => {
+    _renderHistoryQueued = false;
+    try { _renderHistoryImpl(); } catch (e) { console.error('renderHistory crashed:', e); }
+  });
+}
+// Keep the public name backward-compatible so existing call sites
+// (and any future ones) just work. Anything that needs a guaranteed
+// synchronous render can still call _renderHistoryImpl() directly.
+function renderHistory() { requestRenderHistory(); }
+
+function _renderHistoryImpl(){
   const q=(document.getElementById('hist-search')?.value||'').toLowerCase(),list=document.getElementById('hist-list');
   // Category filter — drives a virtual subset of histData based on the
   // user's selection in the "Filter by folder" dropdown. Supported values:
@@ -4814,14 +4840,24 @@ function renderHistory(){
     // Without the mirror check, history rows never light up because the
     // play-from-history flow goes through the Analyzer, leaving
     // globalPlayer.track null.
-    const isPlaying = (
+    // v0.2.5: distinguish ACTIVE (track loaded) from PLAYING (audio
+    // actually advancing). Mirror mode used to drop the row highlight
+    // as soon as the user paused — visually you "lost your place" the
+    // moment you hit stop. Now the row stays lit while the track is
+    // loaded (matches legacy mode's pre-existing behavior); the icon
+    // alone flips between pause-bars and play-triangle.
+    const isActive = (
       (globalPlayer && globalPlayer.track && globalPlayer.track.id === h.id) ||
-      (analyzeMirrorActive && currentHistId === h.id && typeof playing !== 'undefined' && playing)
+      (analyzeMirrorActive && currentHistId === h.id)
+    );
+    const isPlaying = isActive && (
+      (globalPlayer && globalPlayer.audio && !globalPlayer.audio.paused) ||
+      (analyzeMirrorActive && typeof playing !== 'undefined' && playing)
     );
     const playIcon = isPlaying
       ? '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>'
       : '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="7,5 7,19 19,12"/></svg>';
-    const playBtn = selectMode ? '' : `<button class="hist-play ${isPlaying ? 'playing' : ''}" tabindex="-1" onmousedown="this.blur()" onclick="event.stopPropagation();playFromHistory(${h.id});this.blur()" title="Preview">${playIcon}</button>`;
+    const playBtn = selectMode ? '' : `<button class="hist-play ${isActive ? 'active' : ''} ${isPlaying ? 'playing' : ''}" tabindex="-1" onmousedown="this.blur()" onclick="event.stopPropagation();playFromHistory(${h.id});this.blur()" title="Preview">${playIcon}</button>`;
     // Favorite heart — filled when favorited. Click toggles. The toggle
     // optimistically updates h.is_favorite then sends to the server so
     // there's no perceptible delay.
@@ -8432,6 +8468,12 @@ function stepToHuman(step) {
 
 const T = {
   en: {
+    // ── Scroll-lock toggle (0.2.6) ──
+    scrollLockOn:'Following playing track in History',
+    scrollLockOff:'Browsing freely - track will change without scrolling',
+    scrollLockTitleOn:'Following - click to browse freely while playing',
+    scrollLockTitleOff:'Browsing freely - click to follow the playing track',
+
     // ── Background analysis pill (0.2.2) ──
     bgAnalyzing:'Analyzing',
     bgPending:'tracks pending — click to retry',
@@ -8799,6 +8841,12 @@ const T = {
     close:'Close', by:'by', save:'Save', delete:'Delete',
   },
   fr: {
+    // ── Verrouillage de defilement (0.2.6) ──
+    scrollLockOn:'Suivi de la piste en lecture dans Historique',
+    scrollLockOff:'Navigation libre - la piste change sans defilement',
+    scrollLockTitleOn:'Suivi actif - cliquez pour naviguer librement pendant la lecture',
+    scrollLockTitleOff:'Navigation libre - cliquez pour suivre la piste en lecture',
+
     // ── Bandeau d'analyse en arrière-plan (0.2.2) ──
     bgAnalyzing:'Analyse de',
     bgPending:'pistes en attente — cliquez pour relancer',
@@ -11145,6 +11193,43 @@ function updatePrevNextButtons() {
   if (nextBtn) nextBtn.disabled = !hasList || ctx.index >= ctx.tracks.length - 1;
 }
 
+// v0.2.5: scroll the currently-active history row into view so
+// pressing ←/→ for prev/next never strands the user looking at the
+// wrong list location. No-op if no matching row is visible (we're
+// on a different tab) or if the row is already in view.
+// v0.2.6: respect the mini player's scroll-lock toggle. When the user
+// turns it OFF, they're explicitly opting to keep browsing History
+// while skipping tracks in the background — don't yank the scroll.
+function scrollLockEnabled() {
+  // Stored as '0' for OFF; anything else (including absent) means ON.
+  return localStorage.getItem('freqphull.scrollLock') !== '0';
+}
+
+function _scrollActiveRowIntoView() {
+  if (!scrollLockEnabled()) return;
+  let id = null;
+  if (analyzeMirrorActive && currentHistId) id = currentHistId;
+  else if (globalPlayer && globalPlayer.track && globalPlayer.track.id) id = globalPlayer.track.id;
+  if (!id) return;
+  const row = document.querySelector('.hist-row[data-id="' + id + '"]');
+  if (!row) return;
+  const container = document.getElementById('main');
+  if (!container) return;
+  const r = row.getBoundingClientRect();
+  const c = container.getBoundingClientRect();
+  // Only scroll if the row is outside the comfortable middle band.
+  // Bottom margin is taller (200) so the mini player + the row below
+  // stay visible as users keep tapping →.
+  if (r.top < c.top + 80 || r.bottom > c.bottom - 200) {
+    const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    try {
+      row.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' });
+    } catch {
+      row.scrollIntoView();
+    }
+  }
+}
+
 function globalPlayerPrev() {
   // Mirror mode: walk the Analyzer playlist (set by playFromHistory). The
   // Analyzer remains the audio source — we just swap the loaded track.
@@ -11162,12 +11247,16 @@ function globalPlayerPrev() {
       globalPlayer._handoffTime = 0;
     }
     loadFromHistory(prevTrack.id, { skipTabSwitch: true });
+    // Defer the scroll one rAF so loadFromHistory has set currentHistId
+    // (which our helper reads) before we ask which row to scroll to.
+    requestAnimationFrame(_scrollActiveRowIntoView);
     return;
   }
   const ctx = globalPlayer.context;
   if (!ctx || !ctx.tracks || ctx.index <= 0) return;
   const prevIdx = ctx.index - 1;
   playTrack(ctx.tracks[prevIdx], { ...ctx, index: prevIdx });
+  requestAnimationFrame(_scrollActiveRowIntoView);
 }
 function globalPlayerNext() {
   // Mirror mode: walk the Analyzer playlist (set by playFromHistory). The
@@ -11200,6 +11289,7 @@ function globalPlayerNext() {
       globalPlayer._handoffTime = 0;
     }
     loadFromHistory(nextTrack.id, { skipTabSwitch: true });
+    requestAnimationFrame(_scrollActiveRowIntoView);
     return;
   }
   const ctx = globalPlayer.context;
@@ -11304,6 +11394,45 @@ function getMiniPlayerTrack() {
 }
 
 // Heart click in mini player → toggles favorite on current track
+// Scroll-lock toggle (v0.2.6). Persists in localStorage. The icon and
+// aria-pressed state are kept in sync with the actual setting on every
+// app boot (see syncScrollLockButton below) so the button is correct
+// even right after a restart.
+function miniPlayerToggleScrollLock() {
+  const next = !scrollLockEnabled();
+  localStorage.setItem('freqphull.scrollLock', next ? '1' : '0');
+  syncScrollLockButton();
+  if (typeof showAppNotification === 'function') {
+    showAppNotification(next ? t('scrollLockOn') : t('scrollLockOff'), 'info', null, 2200);
+  }
+}
+function syncScrollLockButton() {
+  const btn = document.getElementById('sp-fv-mini-scroll-lock');
+  if (!btn) return;
+  const on = scrollLockEnabled();
+  btn.classList.toggle('off', !on);
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  btn.title = on ? (t('scrollLockTitleOn') || 'Following — click to browse freely while playing')
+                 : (t('scrollLockTitleOff') || 'Browse freely — click to follow the playing track');
+  // Swap the icon: solid anchor when locked, broken/slashed anchor when free.
+  btn.innerHTML = on
+    ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+         <circle cx="12" cy="5" r="3"/>
+         <line x1="12" y1="22" x2="12" y2="8"/>
+         <path d="M5 12H2a10 10 0 0 0 20 0h-3"/>
+       </svg>`
+    : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+         <circle cx="12" cy="5" r="3"/>
+         <line x1="12" y1="22" x2="12" y2="8"/>
+         <path d="M5 12H2a10 10 0 0 0 20 0h-3"/>
+         <!-- diagonal slash signaling "follow disabled" -->
+         <line x1="4" y1="4" x2="20" y2="20" stroke-width="2"/>
+       </svg>`;
+}
+// Boot: ensure the button matches the persisted setting once the DOM
+// is ready. Defer one frame so element exists.
+requestAnimationFrame(() => { try { syncScrollLockButton(); } catch {} });
+
 function miniPlayerToggleFavorite() {
   const tr = getMiniPlayerTrack();
   if (!tr || !tr.id) {

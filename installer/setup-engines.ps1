@@ -152,7 +152,7 @@ try {
     Log "python.org HEAD failed: $($_.Exception.Message)"
 }
 if (-not $netOk) {
-    # Try pytorch as fallback — some networks block python.org but allow CDN
+    # Try pytorch as fallback - some networks block python.org but allow CDN
     try {
         $req = [System.Net.WebRequest]::Create("https://download.pytorch.org/")
         $req.Timeout = 8000
@@ -170,7 +170,7 @@ if (-not $netOk) {
 }
 
 # Windows Defender / antivirus hint: PowerShell can't disable AV but real-time
-# scanning on the user profile drive can make pip installs 5-10× slower or
+# scanning on the user profile drive can make pip installs 5-10x slower or
 # trigger false positives on torch's native binaries. Log a hint to the file
 # so support can recommend an exclusion if setup times out.
 Log "HINT: If setup is slow or fails, add C:\Users\$env:USERNAME\AppData\Local\Programs\Python and ~\.cache to Windows Defender exclusions."
@@ -185,6 +185,98 @@ Log "HINT: If setup is slow or fails, add C:\Users\$env:USERNAME\AppData\Local\P
 EmitStatus "checking_python" 3 "Checking for Python..."
 
 # Returns 0 if version compatible, 1 if too old, 2 if too new, -1 if unparseable
+# ================================================================
+# Robust download with retries + integrity check (v0.2.5)
+# ================================================================
+# Wraps Invoke-WebRequest with: TLS 1.2, silent progress, configurable
+# retries with exponential backoff, minimum-size sanity check, and
+# multi-mirror fallback. Returns $true on success, $false on exhaustion.
+# Used by every download in this script so transient network blips,
+# CDN hiccups, and slow connections never crash the whole setup.
+function Invoke-RobustDownload {
+    param(
+        [string[]] $Urls,            # one or more mirrors, tried in order
+        [string]   $OutFile,
+        [int]      $MinSize = 1000000,
+        [int]      $Retries = 4,
+        [int]      $TimeoutSec = 300,
+        [string]   $StepLabel = "download"
+    )
+    if (Test-Path $OutFile) {
+        $sz = (Get-Item $OutFile).Length
+        if ($sz -ge $MinSize) {
+            Log "$StepLabel : output already exists with valid size ($sz bytes) - reusing"
+            return $true
+        } else {
+            Log "$StepLabel : found partial file ($sz bytes), removing"
+            try { Remove-Item $OutFile -Force -ErrorAction SilentlyContinue } catch {}
+        }
+    }
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $prevProgress = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+    try {
+        foreach ($url in $Urls) {
+            for ($attempt = 1; $attempt -le $Retries; $attempt++) {
+                Log "$StepLabel : attempt $attempt/$Retries from $url"
+                try {
+                    Invoke-WebRequest -Uri $url -OutFile $OutFile -UseBasicParsing -TimeoutSec $TimeoutSec
+                } catch {
+                    Log "$StepLabel : attempt $attempt failed: $($_.Exception.Message)"
+                    if ($attempt -lt $Retries) {
+                        $backoff = [Math]::Min(30, 2 * $attempt)
+                        Log "$StepLabel : backing off $backoff s before retry"
+                        Start-Sleep -Seconds $backoff
+                    }
+                    continue
+                }
+                if (-not (Test-Path $OutFile)) {
+                    Log "$StepLabel : file missing after download"
+                    continue
+                }
+                $sz = (Get-Item $OutFile).Length
+                if ($sz -lt $MinSize) {
+                    Log "$StepLabel : downloaded file too small ($sz bytes, expected >= $MinSize) - retrying"
+                    try { Remove-Item $OutFile -Force -ErrorAction SilentlyContinue } catch {}
+                    continue
+                }
+                Log "$StepLabel : success ($sz bytes from $url)"
+                return $true
+            }
+            Log "$StepLabel : all $Retries attempts at $url failed - trying next mirror if any"
+        }
+    } finally {
+        $ProgressPreference = $prevProgress
+    }
+    return $false
+}
+
+# ================================================================
+# Try-Step: run an action that's allowed to fail without aborting
+# the whole setup. Logs the failure, emits a non-fatal warning,
+# and continues. Use for steps where partial setup is acceptable
+# (model pre-caches, optional optimizations).
+# ================================================================
+function Try-Step {
+    param(
+        [string]   $Label,
+        [scriptblock] $Action,
+        [int]      $Retries = 2
+    )
+    for ($i = 1; $i -le $Retries; $i++) {
+        try {
+            & $Action
+            return $true
+        } catch {
+            Log "$Label : attempt $i/$Retries failed: $($_.Exception.Message)"
+            if ($i -lt $Retries) { Start-Sleep -Seconds (2 * $i) }
+        }
+    }
+    Log "$Label : exhausted retries, continuing without it"
+    EmitStatus "warning" 0 "$Label could not be completed - you can re-run setup later" ""
+    return $false
+}
+
 function TestPythonVersion($versionStr) {
     if ($versionStr -match "Python (\d+)\.(\d+)") {
         $major = [int]$matches[1]
@@ -251,12 +343,20 @@ if (-not $pythonCmd) {
     $pyInstaller = Join-Path $env:TEMP "python-installer.exe"
     $pyUrl = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe"
 
-    try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $pyUrl -OutFile $pyInstaller -UseBasicParsing -TimeoutSec 300
-        Log "Python installer downloaded"
-    } catch {
-        EmitError "Could not download Python installer: $($_.Exception.Message)" "Check internet/firewall, then retry."
+    # Robust download: 4 retries with exponential backoff, ~25MB
+    # minimum-size check (the installer is ~30MB; anything tiny is a
+    # redirect page or proxy intercept).
+    $pyOk = Invoke-RobustDownload `
+        -Urls @($pyUrl) `
+        -OutFile $pyInstaller `
+        -MinSize 25000000 `
+        -Retries 4 `
+        -TimeoutSec 600 `
+        -StepLabel "python_installer"
+    if (-not $pyOk) {
+        EmitError "Could not download Python installer after 4 retries" "Check your internet connection and firewall, then retry the setup. The error log is at $logFile."
+    } else {
+        Log "Python installer downloaded successfully"
     }
 
     EmitStatus "installing_python" 12 "Installing Python 3.11 (silent)..."
@@ -399,7 +499,7 @@ try {
 # ============================================================================
 # PyTorch's CPU wheels are compiled against MSVC and dynamically link against
 # the Visual C++ 2015-2022 Redistributable. Without it, torch_cpu.dll and
-# c10.dll exist on disk but can't load (WinError 127 — "specified procedure
+# c10.dll exist on disk but can't load (WinError 127 - "specified procedure
 # not found"). Detecting this before the 250MB pytorch download saves the
 # user ~5 minutes of retries.
 #
@@ -446,22 +546,22 @@ if (-not $vcRedistFound) {
     #      a non-elevated install will fail with exit 1638 or similar.
     #   2. Download vc_redist.x64.exe from Microsoft's permanent CDN URL.
     #      `https://aka.ms/vs/17/release/vc_redist.x64.exe` is the official
-    #      direct link — they've kept it stable for years across VC++ 2015
+    #      direct link - they've kept it stable for years across VC++ 2015
     #      through 2022.
     #   3. Run with /install /quiet /norestart. Quiet = no UI. Norestart =
     #      defer any required reboot (we never need to reboot for PyTorch
-    #      to load — it picks up new DLLs immediately).
+    #      to load - it picks up new DLLs immediately).
     #   4. Re-check the registry to confirm install took.
     #
     # If any step fails, we fall back to the manual instructions message
     # so the user still has a path forward.
-    Log "Visual C++ 2015-2022 Redistributable not detected — attempting auto-install"
+    Log "Visual C++ 2015-2022 Redistributable not detected - attempting auto-install"
     EmitStatus "installing_vcredist" 20 "Installing Visual C++ runtime..." "~14MB download from Microsoft"
 
     $vcInstalledOk = $false
     $vcInstallStage = "init"
     try {
-        # ── Admin check ──────────────────────────────────────────────────
+        # == Admin check ==================================================
         # If the user launched the engine setup from a non-elevated app
         # (which is the default), the redist install will fail. We can't
         # transparently elevate without a UAC prompt, so we detect non-admin
@@ -472,7 +572,7 @@ if (-not $vcRedistFound) {
         $isAdmin = $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
         Log "Admin check: isAdmin=$isAdmin"
 
-        # ── Download ─────────────────────────────────────────────────────
+        # == Download =====================================================
         # Path under %TEMP% so it gets cleaned up by Windows / our own
         # sweeper eventually. ~14MB so the download is quick on most
         # connections (10-30 seconds).
@@ -480,38 +580,33 @@ if (-not $vcRedistFound) {
         $vcUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
         $vcExe = Join-Path $env:TEMP "freqphull_vc_redist_x64.exe"
         Log "Downloading VC++ Redist from $vcUrl to $vcExe"
-        # Force TLS 1.2 — some default PowerShell configs use SSL3/TLS1.0
+        # Force TLS 1.2 - some default PowerShell configs use SSL3/TLS1.0
         # which Microsoft's CDN now rejects.
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        # Hide the progress bar (Invoke-WebRequest's default is slow and
-        # noisy; setting $ProgressPreference makes it ~100x faster).
-        $prevProgress = $ProgressPreference
-        $ProgressPreference = 'SilentlyContinue'
-        try {
-            Invoke-WebRequest -Uri $vcUrl -OutFile $vcExe -UseBasicParsing -TimeoutSec 120
-        } finally {
-            $ProgressPreference = $prevProgress
-        }
-        if (-not (Test-Path $vcExe)) {
-            throw "Download completed but $vcExe not found"
+        # Robust download with retries. Real redist is ~14MB; minimum-size
+        # threshold catches redirect pages and proxy intercepts.
+        $vcOk = Invoke-RobustDownload `
+            -Urls @($vcUrl) `
+            -OutFile $vcExe `
+            -MinSize 5000000 `
+            -Retries 4 `
+            -TimeoutSec 300 `
+            -StepLabel "vc_redist"
+        if (-not $vcOk) {
+            throw "VC++ Redist download failed after 4 retries"
         }
         $dlSize = (Get-Item $vcExe).Length
-        Log "Download complete: $dlSize bytes"
-        if ($dlSize -lt 1000000) {
-            # Real redist is ~14MB. Anything under 1MB is a redirect page
-            # or an error response written to the file.
-            throw "Downloaded file too small ($dlSize bytes) — likely a network error or proxy intercept"
-        }
+        Log "VC++ Redist download complete: $dlSize bytes"
 
-        # ── Install ──────────────────────────────────────────────────────
+
+        # == Install ======================================================
         # /install /quiet /norestart are the documented silent-mode flags.
         # The installer's exit codes:
         #   0    = success
-        #   1638 = already installed (newer version present) — treat as OK
+        #   1638 = already installed (newer version present) - treat as OK
         #   3010 = success but reboot required (we accept; PyTorch doesn't
         #          need the reboot for DLLs to be picked up)
-        #   1602 = user cancelled (UAC declined) → fall through to manual
-        #   1603 = generic fatal — fall through to manual
+        #   1602 = user cancelled (UAC declined) -> fall through to manual
+        #   1603 = generic fatal - fall through to manual
         $vcInstallStage = "install"
         Log "Running vc_redist.x64.exe /install /quiet /norestart"
         $proc = Start-Process -FilePath $vcExe -ArgumentList "/install","/quiet","/norestart" -Wait -PassThru -ErrorAction Stop
@@ -521,12 +616,12 @@ if (-not $vcRedistFound) {
             0    { $vcInstalledOk = $true; Log "VC++ Redist install succeeded" }
             1638 { $vcInstalledOk = $true; Log "VC++ Redist: newer version already installed (exit 1638)" }
             3010 { $vcInstalledOk = $true; Log "VC++ Redist install succeeded (reboot pending, but not required for PyTorch)" }
-            1602 { Log "VC++ Redist install cancelled by user (exit 1602 — UAC declined?)" }
+            1602 { Log "VC++ Redist install cancelled by user (exit 1602 - UAC declined?)" }
             1603 { Log "VC++ Redist install failed with generic fatal error (exit 1603)" }
-            default { Log "VC++ Redist install exited with $exitCode (unknown — treating as failure)" }
+            default { Log "VC++ Redist install exited with $exitCode (unknown - treating as failure)" }
         }
 
-        # ── Re-check the registry to be sure ─────────────────────────────
+        # == Re-check the registry to be sure =============================
         # The exit code is a strong signal but not absolute proof. The
         # registry check is what actually matters for downstream PyTorch.
         if ($vcInstalledOk) {
@@ -558,14 +653,14 @@ if (-not $vcRedistFound) {
 
     if (-not $vcInstalledOk) {
         # Auto-install didn't work. Fall back to the warning + manual link
-        # so the user still knows what to do. Don't fail setup outright —
+        # so the user still knows what to do. Don't fail setup outright -
         # PyTorch might still load if a partial install or a different
         # Visual Studio is providing the DLLs.
         if (-not $isAdmin) {
             Log "WARN: Auto-install likely failed because setup is not running with admin privileges"
             EmitStatus "vcredist_needs_admin" 21 "Couldn't auto-install VC++ runtime (admin required)" "If PyTorch fails: install https://aka.ms/vs/17/release/vc_redist.x64.exe manually and retry"
         } else {
-            EmitStatus "vcredist_install_failed" 21 "Auto-install of VC++ runtime failed — proceeding anyway" "If PyTorch fails: install https://aka.ms/vs/17/release/vc_redist.x64.exe manually and retry"
+            EmitStatus "vcredist_install_failed" 21 "Auto-install of VC++ runtime failed - proceeding anyway" "If PyTorch fails: install https://aka.ms/vs/17/release/vc_redist.x64.exe manually and retry"
         }
     }
 } else {
@@ -605,7 +700,7 @@ if (-not $torchInstalled) {
     # doesn't.
     #
     # SPECIAL CASE: WinError 127 ("the specified procedure could not be
-    # found") is NOT a network problem — it's a DLL dependency mismatch.
+    # found") is NOT a network problem - it's a DLL dependency mismatch.
     # The torchaudio .pyd loaded but couldn't find a function in c10.dll
     # or torch_cpu.dll. Two known causes:
     #   1. Missing/old Visual C++ 2015-2022 Redistributable
@@ -628,7 +723,7 @@ if (-not $torchInstalled) {
                 # them. Force-clean before retrying so the next install
                 # writes fresh files.
                 if ($sawWinError127) {
-                    Log "Detected WinError 127 — uninstalling stale torch/torchaudio + purging cache before retry"
+                    Log "Detected WinError 127 - uninstalling stale torch/torchaudio + purging cache before retry"
                     Invoke-Py -m pip uninstall -y torch torchaudio torchvision 2>&1 | ForEach-Object { Log "[uninstall] $_" }
                     Invoke-Py -m pip cache purge 2>&1 | ForEach-Object { Log "[cache] $_" }
                 }
@@ -640,7 +735,7 @@ if (-not $torchInstalled) {
             $forceFlag = if ($attempt -gt 1) { "--force-reinstall" } else { "" }
             Invoke-Py -m pip install torch torchaudio $forceFlag --index-url https://download.pytorch.org/whl/cpu --retries 5 --timeout 120 --quiet 2>&1 | ForEach-Object { Log "[torch] $_" }
             if ($LASTEXITCODE -eq 0) {
-                # Re-verify post-install — the pip install can return 0 but
+                # Re-verify post-install - the pip install can return 0 but
                 # leave a broken install if a wheel was corrupted in transit
                 # or if a DLL dependency is missing system-wide.
                 $reverify = Invoke-Py -c "import torch, torchaudio; t=torch.tensor([1.0]); print('OK', torch.__version__, torchaudio.__version__)" 2>&1
@@ -654,10 +749,10 @@ if (-not $torchInstalled) {
                 # "[WinError 127]" in the captured output regardless of
                 # the user's system locale (the number is always English
                 # even when the description is localized e.g. French
-                # "La procédure spécifiée est introuvable").
+                # "La proc?dure sp?cifi?e est introuvable").
                 if ("$reverify" -match "WinError 127" -or "$reverify" -match "specified procedure could not be found" -or "$reverify" -match "proc.dure sp.cifi.e est introuvable") {
                     $sawWinError127 = $true
-                    Log "WinError 127 detected — will force-uninstall before next retry"
+                    Log "WinError 127 detected - will force-uninstall before next retry"
                 }
             } else {
                 Log "Pytorch install attempt ${attempt}: pip exit $LASTEXITCODE"
@@ -668,10 +763,10 @@ if (-not $torchInstalled) {
     }
     if (-not $succeeded) {
         # Pick the right error message based on what we actually saw.
-        # WinError 127 = DLL issue → point at VC++ Redistributable.
-        # Otherwise → generic network/AV message.
+        # WinError 127 = DLL issue -> point at VC++ Redistributable.
+        # Otherwise -> generic network/AV message.
         if ($sawWinError127) {
-            EmitError "PyTorch can't load its native libraries (WinError 127)" "This usually means the Visual C++ 2015-2022 Redistributable (x64) is missing or outdated. Download and install it from: https://aka.ms/vs/17/release/vc_redist.x64.exe — then re-run Freq.Phull's setup. If it still fails after installing VC++ Redist, check %TEMP%\freqphull-setup.log and consider adding C:\Users\$($env:USERNAME)\AppData\Local\Programs\Python and ~\.cache to your antivirus exclusions."
+            EmitError "PyTorch can't load its native libraries (WinError 127)" "This usually means the Visual C++ 2015-2022 Redistributable (x64) is missing or outdated. Download and install it from: https://aka.ms/vs/17/release/vc_redist.x64.exe - then re-run Freq.Phull's setup. If it still fails after installing VC++ Redist, check %TEMP%\freqphull-setup.log and consider adding C:\Users\$($env:USERNAME)\AppData\Local\Programs\Python and ~\.cache to your antivirus exclusions."
         } else {
             EmitError "PyTorch install failed after $maxAttempts attempts" "Check %TEMP%\freqphull-setup.log for details. Common causes: flaky network, full disk, antivirus blocking python.exe, or missing Visual C++ Redistributable (https://aka.ms/vs/17/release/vc_redist.x64.exe)."
         }

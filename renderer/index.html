@@ -314,6 +314,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .hist-row .hist-check{width:18px;height:18px;accent-color:var(--green);flex-shrink:0;cursor:pointer}
 .hist-row .hist-play{width:32px;height:32px;border-radius:50%;border:1px solid var(--border);background:transparent;color:var(--white);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0;font-size:11px;line-height:1;outline:none;transition:transform .1s,background .1s,color .1s,border-color .1s}
 .hist-row .hist-play:hover{background:var(--white);color:#000;border-color:var(--white);transform:scale(1.06)}
+.hist-row .hist-play.active{background:var(--white);color:#000;border-color:var(--white)}
 .hist-row .hist-play.playing{background:var(--white);color:#000;border-color:var(--white)}
 .hist-row .hist-play:focus{outline:none;box-shadow:none}
 
@@ -1108,6 +1109,11 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .sp-fv-mini-extra-btn{background:transparent;border:none;color:var(--muted);cursor:pointer;width:26px;height:26px;display:flex;align-items:center;justify-content:center;padding:0;border-radius:4px;outline:none;flex-shrink:0;transition:color .12s,transform .1s}
 .sp-fv-mini-extra-btn:hover{color:var(--white);transform:scale(1.08)}
 .sp-fv-mini-extra-btn:focus{outline:none}
+/* Scroll-lock toggle states (v0.2.6) — engaged = bright white anchor,
+ * disengaged = muted with a subtle slash for "follow disabled". */
+.scroll-lock-btn{color:var(--white)}
+.scroll-lock-btn.off{color:var(--muted)}
+.scroll-lock-btn.off:hover{color:var(--white)}
 #sp-fv-mini-fav.on{color:#ff5555}
 #sp-fv-mini-fav.on svg{fill:#ff5555;stroke:#ff5555}
 #sp-fv-mini-notepad-btn.on{color:#7ed982}
@@ -2901,6 +2907,19 @@ input:focus-visible, select:focus-visible, textarea:focus-visible{outline:2px so
     </div>
   </div>
   <span class="sp-fv-mini-time-dur" id="sp-fv-mini-time-dur">0:00</span>
+  <!-- Scroll-lock toggle (v0.2.6): when ON (locked), pressing the
+       arrow keys / prev-next buttons scrolls History to follow the
+       active track. When OFF (unlocked), the active track changes but
+       the view stays put — for users who want to keep browsing while
+       a queue plays in the background. -->
+  <button class="sp-fv-mini-extra-btn scroll-lock-btn" id="sp-fv-mini-scroll-lock" tabindex="-1" onmousedown="this.blur()" onclick="miniPlayerToggleScrollLock();this.blur()" title="Follow playing track in History" aria-label="Toggle scroll-follow" aria-pressed="true">
+    <!-- Default: locked anchor (icon swaps in JS when toggled) -->
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="5" r="3"/>
+      <line x1="12" y1="22" x2="12" y2="8"/>
+      <path d="M5 12H2a10 10 0 0 0 20 0h-3"/>
+    </svg>
+  </button>
   <button class="sp-fv-mini-extra-btn" id="sp-fv-mini-fav" tabindex="-1" onmousedown="this.blur()" onclick="miniPlayerToggleFavorite();this.blur()" title="Favorite" aria-label="Toggle favorite">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
   </button>

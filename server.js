@@ -2173,6 +2173,7 @@ function commitTrackToPrimary(historyId, stockpileRoot) {
         return { moved: false, reason: 'already-at-root' };
       }
       const newPath = moveFileSafely(track.file_path, stockpileRoot);
+      markIntentionalMove(newPath);
       dbRun('UPDATE history SET file_path=? WHERE id=?', [newPath, historyId]);
       saveDB();
       return { moved: true, newPath, reason: 'untagged-to-root' };
@@ -2190,6 +2191,7 @@ function commitTrackToPrimary(historyId, stockpileRoot) {
       return { moved: false, reason: 'already-in-folder' };
     }
     const newPath = moveFileSafely(track.file_path, destDir);
+    markIntentionalMove(newPath); // tell the watcher this isn't a NEW file
     dbRun('UPDATE history SET file_path=?, stockpile_committed=1 WHERE id=?', [newPath, historyId]);
     saveDB();
     slog('auto-commit: ' + track.file_path + ' -> ' + newPath);
@@ -2317,6 +2319,23 @@ function setPref(key, value) {
     [key, String(value)]);
   saveDB();
 }
+
+// v0.2.5: debounced batch save. Hot loops (auto-organize, adopt-orphans,
+// fingerprint backfill) used to call saveDB() once per row — 479 disk
+// writes for an orphan import. Now they call requestDeferredSave()
+// instead and a single flush happens 500ms after the last call. Reduces
+// disk churn during bulk ops by ~99% with no behavior change visible to
+// the user (the DB is still durable on app exit).
+let _deferredSaveTimer = null;
+function requestDeferredSave() {
+  if (_deferredSaveTimer) return;
+  _deferredSaveTimer = setTimeout(() => {
+    _deferredSaveTimer = null;
+    try { saveDB(); } catch (e) { slog('deferred save failed: ' + e.message); }
+  }, 500);
+}
+// Flush on exit so an in-flight batch isn't lost on Ctrl-C / app quit.
+process.on('beforeExit', () => { if (_deferredSaveTimer) { clearTimeout(_deferredSaveTimer); try { saveDB(); } catch {} } });
 
 app.get('/prefs', (req, res) => {
   const out = {};
@@ -2812,6 +2831,38 @@ app.post('/stockpile/adopt-orphans', (req, res) => {
 let stockpileWatcher = null;
 let watcherRoot = null;
 const watcherPending = new Map(); // path → debounce timer
+// Paths that WE just moved a file to (commitTrackToPrimary, repair-files,
+// auto-organize). The watcher fires its 'rename' event for these almost
+// instantly; without this set we sometimes race the DB UPDATE that
+// remaps the history row, creating phantom duplicate rows. TTL is short
+// — long enough to cover the 3s debounce + a safety margin.
+const recentIntentionalMoves = new Map(); // normalizedPath → expires_at_ms
+
+function markIntentionalMove(absPath) {
+  if (!absPath) return;
+  try {
+    const norm = path.resolve(absPath).toLowerCase();
+    recentIntentionalMoves.set(norm, Date.now() + 30000);
+  } catch {}
+}
+
+function isRecentIntentionalMove(absPath) {
+  if (!absPath) return false;
+  let norm;
+  try { norm = path.resolve(absPath).toLowerCase(); } catch { return false; }
+  const exp = recentIntentionalMoves.get(norm);
+  if (!exp) return false;
+  if (Date.now() > exp) { recentIntentionalMoves.delete(norm); return false; }
+  return true;
+}
+// Periodic cleanup so the map can't grow unbounded if the user does
+// nothing but watch-folder activity for hours.
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, exp] of recentIntentionalMoves.entries()) {
+    if (now > exp) recentIntentionalMoves.delete(k);
+  }
+}, 60000).unref?.();
 
 function restartStockpileWatcher() {
   const want = getPref('watch_folder') === '1';
@@ -2846,13 +2897,36 @@ function restartStockpileWatcher() {
 }
 
 async function adoptWatchedFile(full) {
-  // Known to the DB already? (covers our own auto-send moves too)
+  // Was this file moved here by US (commitTrackToPrimary, repair, etc.)?
+  // The watcher would otherwise race the DB UPDATE that remaps the
+  // existing history row, creating a phantom duplicate.
+  if (isRecentIntentionalMove(full)) {
+    slog('watch-folder: skipping intentional move target: ' + full);
+    return;
+  }
+  // Known to the DB already? Belt-and-suspenders for any path we didn't
+  // mark (e.g. very old code paths, manual fs ops).
   const norm = process.platform === 'win32' ? full.toLowerCase() : full;
   const known = dbAll('SELECT id FROM history WHERE file_path IS NOT NULL').length
     ? dbAll('SELECT 1 FROM history WHERE ' +
         (process.platform === 'win32' ? 'LOWER(file_path)=?' : 'file_path=?'), [norm]).length > 0
     : false;
   if (known) return;
+  // Final safety net: if a row with the same BASENAME exists with
+  // stockpile_committed=1 and was created in the last 60s, this is
+  // almost certainly the destination of a move we should have caught.
+  // Belt + suspenders + parachute.
+  try {
+    const base = path.basename(full);
+    const recent = dbAll(
+      "SELECT id FROM history WHERE stockpile_committed=1 " +
+      "AND file_path LIKE ? AND created_at > datetime('now','-60 seconds') LIMIT 1",
+      ['%' + base.replace(/[%_]/g, '') + '%']);
+    if (recent.length) {
+      slog('watch-folder: skipping likely-move-target by basename: ' + base);
+      return;
+    }
+  } catch {}
   let st1; try { st1 = fs.statSync(full); } catch { return; }   // vanished
   if (!st1.isFile() || st1.size === 0) return;
   await new Promise(r => setTimeout(r, 1500));

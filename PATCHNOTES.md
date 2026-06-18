@@ -9,6 +9,34 @@ along the way.
 
 ---
 
+## v0.2.6 (2026-06-17)
+
+**Scroll-lock toggle on the mini player**
+- New anchor-icon button in the mini player's extras row (next to the favorite heart). Click to switch between "follow the playing track in History" (default, locked anchor) and "browse freely while the queue plays" (slashed anchor). Persists across sessions in localStorage; respected by both arrow-key skips and the prev/next buttons. The v0.2.5 scroll-follow behavior is unchanged when locked — this just gives users who want to dig through History during long play sessions an opt-out.
+- Translated EN/FR, button has proper `aria-pressed` state and tooltip that reflects the current mode.
+
+
+## v0.2.5 (2026-06-17)
+
+**Stockpile move no longer duplicates rows**
+- Moving a track into a Stockpile folder (auto-send, auto-organize, repair) used to race the watch-folder daemon: it saw the file appear at the destination, fired its adopt-watched debounce, and sometimes won the race against the DB UPDATE that remaps the original row's file_path — producing a phantom duplicate without thumbnail or duration. Now every intentional move registers its destination in a 30s "recent moves" set the watcher consults first; plus a basename safety-net catches anything that slipped through. Three layers, no more duplicates.
+
+**Play indicator persists when paused**
+- The active row's play button used to lose its white-background highlight the moment you paused — you literally lost track of which track you were on. Now the row stays highlighted while the track is LOADED (active), and the icon alone flips between play-triangle and pause-bars to indicate audio state. Legacy mode already behaved this way; mirror mode now matches.
+
+**History scroll-follows arrow navigation**
+- Pressing ←/→ to walk through tracks now scrolls the active row into view if it's off-screen. Comfortable middle band: only scrolls when the row is within 80px of the top or 200px of the bottom (so the mini player and the next-row preview stay visible). Respects `prefers-reduced-motion` — instant jump instead of smooth.
+
+**Python setup: robust download + retry counters**
+- `setup-engines.ps1` had 653 non-ASCII UTF-8 bytes (em-dashes, box-drawing) with no BOM. PowerShell's default codepage misread them, sometimes producing apparent parenthesis chars that broke the parser — the "Missing closing parenthesis" crash users reported. Sanitized to pure ASCII + CRLF, same as Download-Binaries.bat got last patch.
+- New `Invoke-RobustDownload` helper: 4 retries with exponential backoff, configurable mirror list, minimum-size sanity check, file-exists short-circuit (resume across crashed setups), TLS 1.2 forced. Wired into both download sites (Python installer, VC++ Redist). New `Try-Step` wrapper for non-fatal steps — partial setup is now graceful instead of catastrophic.
+
+**Optimization**
+- Renderer: `renderHistory()` is now rAF-coalesced. A playlist of 30 grabs used to trigger 30 full innerHTML rewrites within 100ms (history-changed + bg-analyze events); now all events within one frame collapse to a single render.
+- Server: new `requestDeferredSave()` for hot loops. Bulk operations like Auto-organize (200+ tracks) and adopt-orphans (479 files) no longer write to disk on every row — a single flush 500ms after the last call. With `beforeExit` flush so nothing is lost on quit.
+- Note on the ffmpeg.dll error: that's Electron's bundled Chromium media DLL, not our code. If it goes missing it usually means antivirus quarantined it or it was deleted from the install folder. Reinstall the app to restore.
+
+
 ## v0.2.4 (2026-06-15)
 
 **Keyboard shortcuts fixed + bare arrows for prev/next**
