@@ -22,6 +22,16 @@ contextBridge.exposeInMainWorld('api', {
   // ── Auto-updater bridge ────────────────────────────────────────────────
   // Renderer-side surface for electron-updater. Methods invoke into the
   // main process; events fire callbacks on update lifecycle changes.
+  // v0.2.8: Hardware acceleration toggle + relaunch (separate APIs;
+  // not updater methods, just colocated with related concerns).
+  bootFlags: {
+    get: () => ipcRenderer.invoke('boot-flags:get'),
+    set: (patch) => ipcRenderer.invoke('boot-flags:set', patch),
+  },
+  app: {
+    relaunch: () => ipcRenderer.invoke('app:relaunch'),
+  },
+
   updater: {
     // Manually trigger a check. Returns {ok, version} or {ok:false, error}.
     check:       () => ipcRenderer.invoke('updater:check'),
@@ -36,7 +46,7 @@ contextBridge.exposeInMainWorld('api', {
     // Event subscriptions. Each returns an unsubscribe function so callers
     // can clean up if they ever need to (currently nobody does, the banner
     // lives forever).
-    onChecking:  (cb) => { const fn = ()      => cb(); ipcRenderer.on('update-checking', fn);          return () => ipcRenderer.removeListener('update-checking', fn); },
+    onChecking:  (cb) => { const fn = ()      => cb(); ipcRenderer.on('checking-for-update', fn);     return () => ipcRenderer.removeListener('checking-for-update', fn); },
     onAvailable: (cb) => { const fn = (_, i) => cb(i); ipcRenderer.on('update-available', fn);         return () => ipcRenderer.removeListener('update-available', fn); },
     onNone:      (cb) => { const fn = (_, i) => cb(i); ipcRenderer.on('update-not-available', fn);     return () => ipcRenderer.removeListener('update-not-available', fn); },
     onError:     (cb) => { const fn = (_, i) => cb(i); ipcRenderer.on('update-error', fn);             return () => ipcRenderer.removeListener('update-error', fn); },

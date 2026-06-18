@@ -2213,6 +2213,211 @@ body{
   text-rendering:optimizeLegibility;
 }
 
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ * v0.2.7 PERF PASS - render only what's visible
+ * Cooperative with the browser's lazy rendering: off-screen history
+ * rows skip layout, style, and paint until they enter the viewport.
+ * Single most impactful change for users with thousands of tracks.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+.hist-row{
+  /* Browser-managed virtualization. Off-screen rows render at ~78px
+   * placeholder height (contain-intrinsic-size) and skip ALL paint
+   * work. Scrolling stays buttery even at 10,000+ rows. */
+  content-visibility: auto;
+  contain-intrinsic-size: 0 78px;
+  /* Force own composite layer so transitions don't repaint neighbors */
+  contain: layout style paint;
+}
+
+/* Same trick for stockpile folder cards in the Stockpile tab */
+.sp-folder-card{
+  content-visibility: auto;
+  contain-intrinsic-size: 0 120px;
+  contain: layout style paint;
+}
+
+/* History list container also benefits from layout containment so
+ * inserting/removing rows doesn't reflow the surrounding chrome. */
+#hist-list, #hist-list-wrap, .hist-list{
+  contain: layout style;
+}
+
+/* GPU promotion hints for the high-touch interactive surfaces. These
+ * are the elements that transform/opacity-animate every frame during
+ * interaction (mini player progress, scrollbars, modal backdrop). */
+.sp-fv-mini-player, .app-notif-stack, .setup-modal {
+  will-change: transform, opacity;
+  transform: translateZ(0);
+}
+
+/* Background images & thumbnails decode async (off main thread) so the
+ * initial paint isn't blocked by image work. */
+.hist-thumb, .sp-folder-thumb, #ytimg, img.thumb {
+  content-visibility: auto;
+}
+
+/* Smoother native scrolling everywhere */
+* { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce){
+  * { scroll-behavior: auto; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * v0.2.7 DESIGN POLISH - subtle premium tweaks
+ * No layout changes, no new colors. Just a few touches of light/depth
+ * to make the surfaces feel less flat.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* Soft top-edge gradient on cards so they feel lit from above */
+.setup-card, .sp-folder-card {
+  background-image: linear-gradient(180deg, rgba(255,255,255,.012) 0%, transparent 60%);
+}
+
+/* Very subtle inner highlight on primary buttons (catches the light
+ * like a real key) */
+.btn.pri {
+  background-image: linear-gradient(180deg, rgba(255,255,255,.06) 0%, transparent 40%);
+}
+
+/* Hist-row gets a faint inset bottom line that brightens on hover —
+ * cleaner separation than a flat divider */
+.hist-row {
+  box-shadow: inset 0 -1px 0 0 rgba(255,255,255,.018);
+  transition:
+    background 180ms var(--ease-out-cubic),
+    transform 180ms var(--ease-out-cubic),
+    box-shadow 180ms var(--ease-out-cubic);
+}
+.hist-row:hover {
+  box-shadow:
+    inset 0 -1px 0 0 rgba(255,255,255,.04),
+    0 1px 0 0 rgba(255,255,255,.04) inset;
+}
+
+/* Sidebar gets a faint right-edge that fades out at top/bottom — gives
+ * the rail a sense of depth without a hard separator. */
+#sidebar {
+  background-image: linear-gradient(180deg,
+    transparent 0%,
+    rgba(255,255,255,.014) 40%,
+    rgba(255,255,255,.014) 60%,
+    transparent 100%);
+}
+
+/* Mini player gets a top edge highlight (just 1px of ultra-low alpha)
+ * to lift it off the page */
+.sp-fv-mini-player {
+  box-shadow:
+    0 -1px 0 0 rgba(255,255,255,.05),
+    0 -8px 24px -8px rgba(0,0,0,.4);
+}
+
+/* Inputs get a soft top-inset shadow when not focused — gives them
+ * subtle depth, then brightens on focus */
+input:not(:focus), textarea:not(:focus), select:not(:focus) {
+  box-shadow: inset 0 1px 0 0 rgba(0,0,0,.18);
+}
+
+/* Scrollbar — already styled in 0.2.2 but tighten the timing */
+::-webkit-scrollbar-thumb {
+  transition: background 240ms var(--ease-out-cubic);
+}
+
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ * v0.2.8 - How-to modal styling + thumb fallback + leave anim
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* Extension how-to modal — clear numbered steps with HK branding */
+.ext-howto-card { text-align:left; }
+.ext-howto-list {
+  list-style:none; padding:0; margin:0;
+  display:flex; flex-direction:column; gap:16px;
+}
+.ext-howto-list li {
+  display:flex; gap:14px; align-items:flex-start;
+  padding:12px 14px;
+  background:var(--bg2);
+  border:1px solid var(--border);
+  border-radius:8px;
+  transition: border-color 200ms var(--ease-out-cubic),
+              background 200ms var(--ease-out-cubic);
+}
+.ext-howto-list li:hover {
+  background:var(--bg3, #1a1a1a);
+  border-color:var(--border2);
+}
+.ext-howto-step-num {
+  flex-shrink:0;
+  width:30px; height:30px;
+  border-radius:50%;
+  background:linear-gradient(180deg, var(--bg4) 0%, var(--bg3) 100%);
+  border:1px solid var(--border2);
+  color:var(--white);
+  font-weight:600; font-size:13px;
+  display:flex; align-items:center; justify-content:center;
+}
+.ext-howto-step-body { flex:1; min-width:0; }
+.ext-howto-step-title {
+  font-size:14px; font-weight:600;
+  color:var(--white); margin-bottom:4px;
+}
+.ext-howto-step-desc {
+  font-size:12.5px; color:var(--muted);
+  line-height:1.5; margin-bottom:8px;
+}
+.ext-howto-step-body .btn { margin-top:4px; }
+.ext-howto-code {
+  display:inline-block;
+  background:var(--bg);
+  border:1px solid var(--border2);
+  border-radius:4px;
+  padding:3px 8px;
+  font-family:'Courier New', monospace;
+  font-size:12px;
+  color:#6ab0ff;
+  user-select:all;
+  margin-top:4px;
+}
+.ext-howto-tip {
+  margin-top:18px;
+  padding:10px 14px;
+  background:rgba(106,176,255,.06);
+  border:1px solid rgba(106,176,255,.18);
+  border-radius:6px;
+  font-size:12px;
+  color:var(--off);
+  line-height:1.5;
+}
+
+/* Thumbnail fallback — discreet HK monogram tile */
+.hist-thumb.thumb-fallback,
+.sp-fv-row-thumb.thumb-fallback,
+img.thumb-fallback {
+  background:var(--bg2);
+  opacity:.85;
+  filter:saturate(.4);
+}
+
+/* Row leave animation — used by the reconciler when a row vanishes */
+.hist-row-leaving {
+  animation: hist-row-out 180ms var(--ease-out-cubic) forwards;
+  pointer-events:none;
+}
+@keyframes hist-row-out {
+  0%   { opacity:1; transform:translateX(0);    max-height:120px; }
+  100% { opacity:0; transform:translateX(-8px); max-height:0;
+         margin-top:0; margin-bottom:0; padding-top:0; padding-bottom:0;
+         border-width:0; overflow:hidden; }
+}
+@media (prefers-reduced-motion: reduce){
+  .hist-row-leaving { animation:none; }
+}
+
 </style>
 </head>
 <body>

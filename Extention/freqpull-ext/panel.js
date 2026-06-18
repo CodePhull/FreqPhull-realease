@@ -132,7 +132,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   const plClose = document.getElementById('pl-close');
   if(plClose) plClose.addEventListener('click', () => $('pl-modal').classList.add('hide'));
 
-  renderRef(); loadHist(); checkBackend();
+  renderRef(); loadHist(); checkBackend(); checkExtensionUpdateBanner();
   startHistLivePoll();
 
   // Restore auto-clear setting from chrome.storage. The panel reloads
@@ -770,6 +770,47 @@ function startDownload(item){
 
 // ── Notification system ───────────────────────────────────────────────────────
 let notifTimer=null;
+// v4.3.0: extension self-update banner. Background script pings GitHub
+// every 6h and stores the latest commit SHA against the user's last-seen
+// SHA. If they differ, we render a soft banner at the top of the panel
+// with a "View update" link and a "Dismiss" button (marks seen).
+function checkExtensionUpdateBanner(){
+  try {
+    chrome.storage.local.get(['extLatestSha','extLastSeenSha','extLatestUrl','extLatestMsg'], (r) => {
+      if (!r || !r.extLatestSha) return;
+      if (r.extLastSeenSha === r.extLatestSha) return; // already dismissed
+      renderExtUpdateBanner(r.extLatestSha, r.extLatestUrl, r.extLatestMsg);
+    });
+  } catch {}
+}
+
+function renderExtUpdateBanner(sha, url, msg){
+  let b = document.getElementById('ext-update-banner');
+  if (!b) {
+    b = document.createElement('div');
+    b.id = 'ext-update-banner';
+    b.className = 'ext-update-banner';
+    document.body.insertBefore(b, document.body.firstChild);
+  }
+  const short = (sha || '').slice(0,7);
+  b.innerHTML = '<span class="ext-update-text">A new version of the extension is available' +
+    (msg ? ' &mdash; <em>' + msg.replace(/[<&]/g, c => c==='<' ? '&lt;' : '&amp;') + '</em>' : '') +
+    '</span>' +
+    '<a href="#" class="ext-update-view" data-url="' + (url || '') + '">View update (' + short + ')</a>' +
+    '<button class="ext-update-dismiss" title="Dismiss until next change">&times;</button>';
+  b.querySelector('.ext-update-view').addEventListener('click', (e) => {
+    e.preventDefault();
+    const dest = e.target.dataset.url ||
+      'https://github.com/CodePhull/FreqPhull-realease/tree/main/freqpull-ext';
+    chrome.tabs.create({ url: dest });
+  });
+  b.querySelector('.ext-update-dismiss').addEventListener('click', () => {
+    chrome.storage.local.set({ extLastSeenSha: sha });
+    b.classList.add('out');
+    setTimeout(() => b.remove(), 260);
+  });
+}
+
 function showNotification(msg, type, onClick){
   let el=$('notif');
   if(!el){

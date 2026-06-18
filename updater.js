@@ -191,7 +191,12 @@ function setupUpdater(opts) {
   // check below. All other errors still log as errors.
   const isNoReleasesError = (e) =>
     e && e.message && /no published versions/i.test(e.message);
+  // v0.2.8: boot check fires SOONER (1500ms vs 8s) so users see the
+  // update prompt almost immediately on launch. A 'checking' event is
+  // also sent to the renderer for a brief status indicator so it's
+  // visible that we're checking — silent boot was confusing users.
   setTimeout(() => {
+    send('checking-for-update', { source: 'boot' });
     autoUpdater.checkForUpdates().catch(e => {
       if (isNoReleasesError(e)) {
         mainLog('[updater] no releases published yet (expected during dev)');
@@ -199,18 +204,17 @@ function setupUpdater(opts) {
         mainLog('[updater] startup check failed: ' + e.message);
       }
     });
-    // One retry at 90s if the boot check never produced a result —
-    // machines that launch the app at login often don't have network
-    // for the first seconds, which used to mean no update prompt until
-    // the 4-hour interval.
+    // Retry once at 90s if the first check inconclusive (login-time
+    // network unreachable, DNS hiccup).
     setTimeout(() => {
       if (bootCheckGotResult) return;
       mainLog('[updater] boot check inconclusive — retrying once');
+      send('checking-for-update', { source: 'retry' });
       autoUpdater.checkForUpdates().catch(e => {
         if (!isNoReleasesError(e)) mainLog('[updater] retry check failed: ' + e.message);
       });
     }, 90000);
-  }, 8000);
+  }, 1500);
 
   // Subsequent checks: every 4 hours while running. Long-running sessions
   // (people leave the app open all day) will pick up new releases without

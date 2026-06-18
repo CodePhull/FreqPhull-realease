@@ -9,11 +9,58 @@ along the way.
 
 ---
 
+## v0.2.8 (2026-06-18)
+
+**Hardware acceleration toggle**
+- New Settings row. Stored in a tiny `boot-flags.json` next to the app's userData, read SYNCHRONOUSLY at main.js startup before `app.ready` (which is when Electron requires `disableHardwareAcceleration()` to be called). Toggling pops a restart-now confirm; the change is invisible until restart so we make that explicit. Honors EN/FR.
+
+**Browser-extension link + install how-to**
+- New Settings row: "Open page" button goes straight to the freqpull-ext folder on the releases repo; "How to install" pops a 5-step modal with the Chrome flow (Open repo -> chrome://extensions -> Developer mode -> Load unpacked -> Pin). Each step in its own bordered card with a numbered medallion; tip box at the bottom about the 127.0.0.1:47891 link. Fully translated EN/FR.
+
+**Thumbnail bug-proof**
+- New `HK_FALLBACK_THUMB` (inline SVG of the HK monogram, dark tile background) and a `resolveThumb()` helper used by every `<img>` render path: History rows, Stockpile folder-view rows, Similar-tracks modal. Plus a global `window._thumbFail()` onerror handler that swaps a broken URL to the fallback and self-clears so a bad fallback can't loop. Existing rows render with `loading="lazy" decoding="async"`. Visually the fallback is muted and desaturated so users can tell at a glance which rows lost their thumb.
+
+**History refresh stutter fixed**
+- The old `_renderHistoryImpl` did `list.innerHTML = rows.map(...).join('')` which destroyed every row on every render, throwing away decoded image bitmaps and forcing tag strips to lazy-load again. Replaced with row-level DOM reconciliation:
+  - Build per-row fingerprint (id+title+bpm+key+thumb+favorite+tags+playstate)
+  - First render or huge delta (>80 rows): full innerHTML rewrite (fastest)
+  - Otherwise: skip untouched rows entirely, patch changed rows in place, preserve already-decoded `<img>` nodes when src is unchanged
+  - New rows insert with the existing pulse animation; gone rows fade out (180ms transform+opacity, collapses max-height to zero)
+- Net effect: no flash, no layout reflow on static rows, no tag re-hydrate jiggle when the data hasn't moved.
+
+**Installer no longer looks like 1988**
+- Switched NSIS to `oneClick: true` — modern silent install with a small branded progress dialog (Chrome/Discord style). No more wizard pages, no Next/Next/Finish. The app launches automatically when install completes. `runAfterFinish: true`. Custom installer artifact name: `Freq.Phull-Setup-${version}.exe`.
+
+EN/FR i18n parity 468/468.
+
+
 ## v0.2.7 (2026-06-18)
 
 **Brand fonts now bundled in the package**
 - Bebas Neue and Inter (weights 300/400/500/600) are now shipped as local .woff2 files in `renderer/fonts/` (~110 KB total). Loaded via @font-face — no network dependency, no Google Fonts CDN, fully offline-proof. The Google Fonts <link> has been removed.
 - Strengthened the system-font fallback chain stays in place for the first frame: `'Oswald','Anton','Impact','Haettenschweiler','Arial Narrow'` for Bebas Neue, `'Segoe UI Variable','Segoe UI',system-ui,...` for Inter. `font-display:swap` means the real fonts replace them within ~5ms once decoded.
+
+**Visible boot update check**
+- The auto-update boot check now fires at 1500ms (was 8000ms) and surfaces a small "Checking for updates..." toast on launch so users see it happening instead of a silent background check. A confirmation toast ("You're up to date") flashes briefly if no update is found - but ONLY on the boot check, not on every 4-hour interval (would be spammy). Found-update banner unchanged.
+
+**Extension self-update banner (v4.3.0)**
+- Extension now polls GitHub's commits API every 6 hours for the latest commit SHA of the `freqpull-ext` folder in the releases repo. When it differs from the user's last-seen SHA, a soft top banner appears in the panel: "A new version of the extension is available - <commit message>" with a "View update" link to the repo and a dismiss button. Dismissing marks the SHA as seen until the NEXT change. Rate-limited well under GitHub's 60 req/hr unauthenticated cap.
+
+**Performance pass for huge histories**
+- `content-visibility: auto` on `.hist-row` and `.sp-folder-card` - off-screen rows skip layout, style, AND paint entirely. With the LIMIT 500 lifted in this same release, users can have 5,000+ rows and scrolling stays buttery (browser-native virtualization, zero JS overhead).
+- `contain: layout style paint` on rows so transitions don't repaint neighbors.
+- `contain-intrinsic-size` placeholder so the scroll-bar dimensions are correct before rows materialize.
+- GPU promotion (`will-change` + `translateZ(0)`) on the mini player, notification stack, and modal backdrops - the elements that animate every frame.
+- Mousedown ripple listener marked `passive: true` so the browser dispatches it on the compositor thread.
+- Smooth-scroll behavior globally; honors `prefers-reduced-motion`.
+
+**Design polish**
+- Soft top-edge gradient on cards (lit-from-above feel).
+- Inner highlight on primary buttons - catches the light like a real key.
+- History row inset bottom line that brightens on hover (cleaner than a flat divider).
+- Sidebar gets a faint vertical highlight gradient with falloff at top/bottom for depth.
+- Mini player gets a subtle 1px top edge + soft drop shadow lifting it off the page.
+- Inputs get a soft top-inset shadow when not focused; sharpen on focus.
 
 **History cap lifted**
 - The `/history` endpoint had a hardcoded `LIMIT 500` — older downloads weren't deleted, just silently invisible to the renderer once you crossed 500 tracks. Removed. The endpoint now returns every row by default; an optional `?limit=N` query parameter is honored if any caller wants a slice. Safety ceiling at 50,000 to bound the response payload size.

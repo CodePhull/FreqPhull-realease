@@ -235,3 +235,42 @@ input[type=range]{flex:1;accent-color:var(--w)}.pr .pk{font-size:9px;color:var(-
 .toggle .slider::before{content:"";position:absolute;height:14px;width:14px;left:3px;top:3px;background:#888;border-radius:50%;transition:transform .15s ease,background .15s ease}
 .toggle input:checked + .slider{background:#3a5d3a}
 .toggle input:checked + .slider::before{transform:translateX(16px);background:#dff5e4}
+
+
+/* ── Extension self-update banner (v4.3.0) ────────────────────── */
+.ext-update-banner{
+  display:flex;align-items:center;gap:10px;
+  padding:8px 12px;
+  background:linear-gradient(180deg, rgba(106, 176, 255, .08), rgba(106, 176, 255, .03));
+  border-bottom:1px solid rgba(106, 176, 255, .22);
+  color:#cdddef; font-size:11.5px;
+  animation: ext-update-in 280ms cubic-bezier(.165,.84,.44,1) both;
+}
+.ext-update-banner.out{
+  animation: ext-update-out 220ms ease both;
+}
+.ext-update-text{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.ext-update-text em{color:#fff; font-style:normal; font-weight:500}
+.ext-update-view{
+  color:#6ab0ff; text-decoration:none; font-weight:500;
+  padding:3px 8px; border-radius:4px;
+  transition: background .18s ease;
+}
+.ext-update-view:hover{background:rgba(106, 176, 255, .12)}
+.ext-update-dismiss{
+  background:transparent;border:none;color:#9aa;cursor:pointer;
+  padding:0 4px; font-size:16px; line-height:1;
+  transition: color .18s ease, transform .14s ease;
+}
+.ext-update-dismiss:hover{color:#fff; transform:scale(1.15)}
+@keyframes ext-update-in {
+  0%   { opacity:0; transform:translateY(-8px) }
+  100% { opacity:1; transform:translateY(0) }
+}
+@keyframes ext-update-out {
+  0%   { opacity:1; transform:translateY(0) }
+  100% { opacity:0; transform:translateY(-8px) }
+}
+@media (prefers-reduced-motion: reduce){
+  .ext-update-banner, .ext-update-banner.out{animation:none}
+}

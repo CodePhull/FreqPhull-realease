@@ -1,6 +1,6 @@
 {
   "name": "freqphull",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "Freq.Phull",
   "main": "main.js",
   "scripts": {
@@ -45,15 +45,19 @@
       "requestedExecutionLevel": "asInvoker"
     },
     "nsis": {
-      "oneClick": false,
+      "oneClick": true,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
+      "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Freq.Phull",
       "deleteAppDataOnUninstall": false,
       "installerHeaderIcon": "assets/icon.ico",
-      "include": "assets/installer.nsh"
+      "include": "assets/installer.nsh",
+      "runAfterFinish": true,
+      "uninstallerIcon": "assets/icon.ico",
+      "menuCategory": "Freq.Phull",
+      "artifactName": "Freq.Phull-Setup-${version}.${ext}"
     },
     "files": [
       "**/*",
@@ -100,7 +104,9 @@
       {
         "from": "installer/",
         "to": "installer/",
-        "filter": ["setup-engines.ps1"]
+        "filter": [
+          "setup-engines.ps1"
+        ]
       },
       {
         "from": "stems.py",

@@ -4638,7 +4638,7 @@ async function openSimilarTracks(historyId) {
       const badges = [rr.bpm ? Math.round(rr.bpm) + ' BPM' : '', rr.key_note ? rr.key_note + ' ' + (rr.key_mode || '') : ''].filter(Boolean).join(' · ');
       return `
       <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg);border-radius:6px;margin-bottom:5px">
-        <img src="${rr.thumbnail || ''}" onerror="this.style.display='none'" style="width:42px;height:30px;object-fit:cover;border-radius:4px" alt=""/>
+        <img src="${resolveThumb(rr.thumbnail)}" onerror="window._thumbFail(this)" loading="lazy" decoding="async" style="width:42px;height:30px;object-fit:cover;border-radius:4px" alt=""/>
         <div style="flex:1;min-width:0">
           <div style="font-size:12px;color:var(--white);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(rr.title || '(untitled)')}</div>
           <div style="font-size:10px;color:var(--hint)">${badges}${reasons ? ' · ' + reasons : ''}</div>
@@ -4765,6 +4765,34 @@ function requestRenderHistory(){
 // synchronous render can still call _renderHistoryImpl() directly.
 function renderHistory() { requestRenderHistory(); }
 
+// v0.2.8: HK-logo fallback as inline SVG. Used whenever a thumbnail URL
+// is missing OR fails to load. Generated once at module load; cheap.
+const HK_FALLBACK_THUMB = 'data:image/svg+xml;base64,' + btoa(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">' +
+  '<rect width="100" height="100" fill="#161616"/>' +
+  '<g transform="translate(50,50)" fill="none" stroke="#3a3a3a" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M -22 -22 L -22 22 M -22 0 L 4 0 M 4 -22 L 4 22 M 4 0 L 22 -22 M 4 0 L 22 22"/>' +
+  '</g></svg>'
+);
+
+function resolveThumb(url) {
+  if (!url || typeof url !== 'string') return HK_FALLBACK_THUMB;
+  const t = url.trim();
+  if (!t || t === 'null' || t === 'undefined') return HK_FALLBACK_THUMB;
+  return t;
+}
+
+// Global onerror: <img onerror="window._thumbFail(this)"> swaps to the
+// HK fallback. Self-clears handler so a broken fallback can't loop.
+window._thumbFail = function(img) {
+  if (img && img.src !== HK_FALLBACK_THUMB) {
+    img.src = HK_FALLBACK_THUMB;
+    img.classList.add('thumb-fallback');
+    img.onerror = null;
+  }
+};
+
+
 function _renderHistoryImpl(){
   const q=(document.getElementById('hist-search')?.value||'').toLowerCase(),list=document.getElementById('hist-list');
   // Category filter — drives a virtual subset of histData based on the
@@ -4815,7 +4843,12 @@ function _renderHistoryImpl(){
     list.innerHTML = '<div class="hist-empty">' + empty + '</div>';
     return;
   }
-  list.innerHTML=rows.map(h=>{
+  // v0.2.8: row-level DOM reconciliation to eliminate the refresh
+  // stutter. Previously list.innerHTML = ... destroyed every row on
+  // every render, throwing away decoded image bitmaps and forcing
+  // tags to lazy-load all over again. Now we build the row HTML the
+  // same way (template literal below) but apply it surgically.
+  function buildHistoryRowHTML(h){
     const checked = selectedIds.has(h.id);
     const checkbox = selectMode ? `<input type="checkbox" class="hist-check" ${checked?'checked':''} onclick="toggleRowSelect(${h.id},event)"/>` : '';
     const rowClass = 'hist-row' + (checked ? ' selected' : '');
@@ -4877,8 +4910,103 @@ function _renderHistoryImpl(){
     // by the cleanup pass below so subsequent re-renders don't re-flash.
     const isNew = prevSeenHistId > 0 && (h.id || 0) > prevSeenHistId;
     const pulseClass = isNew ? ' row-pulse' : '';
-    return `<div class="${rowClass}${pulseClass}" data-id="${h.id}"${rowTitle} ${onclick} draggable="true" ondragstart="dragHistoryRowToExternal(event, ${h.id})">${checkbox}${playBtn}<img class="hist-thumb" loading="lazy" decoding="async" src="${h.thumbnail||''}" onerror="this.style.display='none'" alt=""/>${favBtn}<div class="hist-info"><div class="hist-title">${h.title||'(untitled)'}</div><div class="hist-meta">${[h.channel,h.created_at?.slice(0,16),fmtSec(h.duration)].filter(Boolean).join(' · ')}</div>${tagStrip}</div><div class="hist-badges">${h.bpm?`<span class="badge bpm">${Math.round(h.bpm)} BPM</span>`:''}${h.key_note?`<span class="badge key">${h.key_note} ${h.key_mode||''}</span>`:''}${h.format?`<span class="badge">${h.format.toUpperCase()}</span>`:''}</div>${selectMode?'':`<button class="btn xs" tabindex="-1" onmousedown="this.blur()" onclick="event.stopPropagation();openSimilarTracks(${h.id});this.blur()" title="${t('simBtn')}">≈</button><button class="btn xs danger" onclick="event.stopPropagation();deleteHistory(${h.id})">Remove</button>`}</div>`;
-  }).join('');
+    return `<div class="${rowClass}${pulseClass}" data-id="${h.id}"${rowTitle} ${onclick} draggable="true" ondragstart="dragHistoryRowToExternal(event, ${h.id})">${checkbox}${playBtn}<img class="hist-thumb" loading="lazy" decoding="async" src="${resolveThumb(h.thumbnail)}" onerror="window._thumbFail(this)" alt=""/>${favBtn}<div class="hist-info"><div class="hist-title">${h.title||'(untitled)'}</div><div class="hist-meta">${[h.channel,h.created_at?.slice(0,16),fmtSec(h.duration)].filter(Boolean).join(' · ')}</div>${tagStrip}</div><div class="hist-badges">${h.bpm?`<span class="badge bpm">${Math.round(h.bpm)} BPM</span>`:''}${h.key_note?`<span class="badge key">${h.key_note} ${h.key_mode||''}</span>`:''}${h.format?`<span class="badge">${h.format.toUpperCase()}</span>`:''}</div>${selectMode?'':`<button class="btn xs" tabindex="-1" onmousedown="this.blur()" onclick="event.stopPropagation();openSimilarTracks(${h.id});this.blur()" title="${t('simBtn')}">≈</button><button class="btn xs danger" onclick="event.stopPropagation();deleteHistory(${h.id})">Remove</button>`}</div>`;
+  } // end buildHistoryRowHTML
+
+  // Build a fingerprint for each row so we can detect which ones
+  // actually changed since last render. Cheap (~30 char digest).
+  function rowFingerprint(h){
+    return [h.id, h.title, h.bpm, h.key_note, h.key_mode, h.format,
+            h.thumbnail, h.duration, h.is_favorite, h.channel,
+            (tagsByHist[h.id]||[]).map(tg=>tg.folder_id).join(','),
+            isActiveFor(h.id), isPlayingFor(h.id), selectedIds.has(h.id), selectMode
+           ].join('|');
+  }
+  function isActiveFor(id){
+    return ((globalPlayer && globalPlayer.track && globalPlayer.track.id === id) ||
+            (analyzeMirrorActive && currentHistId === id));
+  }
+  function isPlayingFor(id){
+    if (!isActiveFor(id)) return false;
+    return ((globalPlayer && globalPlayer.audio && !globalPlayer.audio.paused) ||
+            (analyzeMirrorActive && typeof playing !== 'undefined' && playing));
+  }
+
+  // First render of this list, or massive change → fall back to full
+  // innerHTML rewrite (faster than 100s of individual mutations).
+  const existing = Array.from(list.children).filter(el => el.classList && el.classList.contains('hist-row'));
+  const FULL_REWRITE_THRESHOLD = 80;
+  if (!existing.length || Math.abs(existing.length - rows.length) > FULL_REWRITE_THRESHOLD) {
+    list.innerHTML = rows.map(buildHistoryRowHTML).join('');
+  } else {
+    // Reconcile by data-id. Build a map of current DOM rows.
+    const domMap = new Map();
+    for (const el of existing) domMap.set(parseInt(el.dataset.id, 10), el);
+    const newIds = new Set(rows.map(h => h.id));
+
+    // Remove rows that are no longer present (fade out then drop)
+    for (const [id, el] of domMap) {
+      if (!newIds.has(id)) {
+        el.classList.add('hist-row-leaving');
+        setTimeout(() => el.remove(), 180);
+      }
+    }
+
+    // Walk the new ordering: insert new rows, move/patch existing ones.
+    let prevEl = null;
+    for (const h of rows) {
+      const existingEl = domMap.get(h.id);
+      const fp = rowFingerprint(h);
+
+      if (existingEl) {
+        // Row exists. Only rewrite if its fingerprint changed.
+        if (existingEl.dataset.fp !== fp) {
+          // Patch contents in place — <img> nodes get swapped only when
+          // src actually differs (browsers preserve the decoded image
+          // for same-src). This is what kills the flash.
+          const tmp = document.createElement('div');
+          tmp.innerHTML = buildHistoryRowHTML(h);
+          const fresh = tmp.firstElementChild;
+          if (fresh) {
+            existingEl.className = fresh.className;
+            existingEl.setAttribute('title', fresh.getAttribute('title') || '');
+            existingEl.setAttribute('draggable', 'true');
+            // Replace children but preserve thumbs whose src is unchanged
+            const oldThumb = existingEl.querySelector('.hist-thumb');
+            const newThumb = fresh.querySelector('.hist-thumb');
+            const thumbSrcSame = oldThumb && newThumb && oldThumb.src === resolveThumb(h.thumbnail);
+            existingEl.innerHTML = fresh.innerHTML;
+            if (thumbSrcSame) {
+              const replacedThumb = existingEl.querySelector('.hist-thumb');
+              if (replacedThumb && oldThumb.complete) {
+                // Reuse the already-decoded bitmap by swapping nodes
+                replacedThumb.replaceWith(oldThumb);
+              }
+            }
+            existingEl.dataset.fp = fp;
+          }
+        }
+        // Ensure ordering — only touch DOM if position changed
+        if (prevEl ? existingEl.previousElementSibling !== prevEl
+                   : list.firstElementChild !== existingEl) {
+          if (prevEl) prevEl.after(existingEl); else list.prepend(existingEl);
+        }
+        prevEl = existingEl;
+      } else {
+        // New row — insert with pulse animation
+        const tmp = document.createElement('div');
+        tmp.innerHTML = buildHistoryRowHTML(h);
+        const fresh = tmp.firstElementChild;
+        if (fresh) {
+          fresh.dataset.fp = fp;
+          fresh.classList.add('row-pulse');
+          if (prevEl) prevEl.after(fresh); else list.prepend(fresh);
+          prevEl = fresh;
+        }
+      }
+    }
+  }
+
   // Update the pulse baseline + clean up the pulse class after it plays
   window._lastSeenHistId = maxHistId;
   setTimeout(() => {
@@ -5804,6 +5932,94 @@ function toggleAutoSend(checked) {
   if (typeof showAppNotification === 'function') {
     showAppNotification(checked ? t('autoSendOnNotif') : t('autoSendOffNotif'), 'info', null, 3000);
   }
+}
+
+// ── Hardware Acceleration (v0.2.8) ───────────────────────────────
+async function syncHardwareAccelToggle() {
+  if (!window.api || !window.api.bootFlags) return;
+  try {
+    const flags = await window.api.bootFlags.get();
+    const el = document.getElementById('hw-accel-toggle');
+    if (el) el.checked = flags.hardwareAcceleration !== false;
+  } catch {}
+}
+async function toggleHardwareAcceleration(checked) {
+  if (!window.api || !window.api.bootFlags) {
+    showAppNotification(t('hwAccelUnavailable'), 'warn'); return;
+  }
+  try {
+    await window.api.bootFlags.set({ hardwareAcceleration: !!checked });
+    const msg = checked ? t('hwAccelOnNotif') : t('hwAccelOffNotif');
+    if (typeof confirmModal === 'function') {
+      const ok = await confirmModal({
+        title: t('hwAccelRestartTitle'),
+        message: msg + '\n\n' + t('hwAccelRestartBody'),
+        okLabel: t('hwAccelRestartNow'),
+        cancelLabel: t('hwAccelRestartLater'),
+      });
+      if (ok && window.api.app && window.api.app.relaunch) window.api.app.relaunch();
+    } else {
+      showAppNotification(msg + ' - ' + t('hwAccelRestartLater'), 'info', null, 5000);
+    }
+  } catch (e) { showAppNotification('X ' + e.message, 'err'); }
+}
+
+// ── Extension repo link + how-to modal (v0.2.8) ────────────────────
+const EXT_REPO_URL = 'https://github.com/CodePhull/FreqPhull-realease/tree/main/freqpull-ext';
+function openExtensionPage() {
+  if (window.api && window.api.openExternal) window.api.openExternal(EXT_REPO_URL);
+  else window.open(EXT_REPO_URL, '_blank');
+}
+function openExtensionHowTo() {
+  let modal = document.getElementById('ext-howto-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'ext-howto-modal';
+    modal.className = 'setup-modal';
+    document.body.appendChild(modal);
+  }
+  modal.style.display = 'flex';
+  modal.innerHTML = `
+    <div class="setup-card ext-howto-card" style="max-width:640px;max-height:84vh;display:flex;flex-direction:column;padding:28px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px">
+        <div>
+          <div class="setup-title" style="font-size:24px;text-align:left;margin-bottom:4px">${t('extHowToTitle')}</div>
+          <div style="font-size:13px;color:var(--muted);max-width:480px">${t('extHowToSub')}</div>
+        </div>
+        <button class="btn xs" onclick="document.getElementById('ext-howto-modal').style.display='none'" aria-label="Close">✕</button>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding-right:6px">
+        <ol class="ext-howto-list">
+          <li><div class="ext-howto-step-num">1</div><div class="ext-howto-step-body">
+            <div class="ext-howto-step-title">${t('extHowToStep1Title')}</div>
+            <div class="ext-howto-step-desc">${t('extHowToStep1Desc')}</div>
+            <button class="btn sm pri" onclick="openExtensionPage()">${t('extHowToStep1Btn')}</button>
+          </div></li>
+          <li><div class="ext-howto-step-num">2</div><div class="ext-howto-step-body">
+            <div class="ext-howto-step-title">${t('extHowToStep2Title')}</div>
+            <div class="ext-howto-step-desc">${t('extHowToStep2Desc')}</div>
+            <code class="ext-howto-code">chrome://extensions</code>
+          </div></li>
+          <li><div class="ext-howto-step-num">3</div><div class="ext-howto-step-body">
+            <div class="ext-howto-step-title">${t('extHowToStep3Title')}</div>
+            <div class="ext-howto-step-desc">${t('extHowToStep3Desc')}</div>
+          </div></li>
+          <li><div class="ext-howto-step-num">4</div><div class="ext-howto-step-body">
+            <div class="ext-howto-step-title">${t('extHowToStep4Title')}</div>
+            <div class="ext-howto-step-desc">${t('extHowToStep4Desc')}</div>
+          </div></li>
+          <li><div class="ext-howto-step-num">5</div><div class="ext-howto-step-body">
+            <div class="ext-howto-step-title">${t('extHowToStep5Title')}</div>
+            <div class="ext-howto-step-desc">${t('extHowToStep5Desc')}</div>
+          </div></li>
+        </ol>
+        <div class="ext-howto-tip">${t('extHowToTip')}</div>
+      </div>
+      <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn" onclick="document.getElementById('ext-howto-modal').style.display='none'">${t('spCancel')}</button>
+        <button class="btn pri" onclick="openExtensionPage()">${t('extHowToOpenRepo')}</button>
+      </div>
+    </div>`;
 }
 
 function toggleCpuOnly(checked) {
@@ -8468,6 +8684,41 @@ function stepToHuman(step) {
 
 const T = {
   en: {
+    // ── v0.2.8: hardware acceleration ──
+    hwAccelName:'Hardware acceleration',
+    hwAccelDesc:"Uses the GPU for rendering, animations, and the analyzer canvases. Recommended ON for most users. Turn OFF only if you see graphical glitches, white flashes, or your laptop's fan ramps up just from idle scrolling - some integrated GPUs handle Electron poorly. Requires an app restart to take effect.",
+    hwAccelUnavailable:'Hardware acceleration toggle unavailable on this build',
+    hwAccelOnNotif:'Hardware acceleration: ON',
+    hwAccelOffNotif:'Hardware acceleration: OFF',
+    hwAccelRestartTitle:'Restart required',
+    hwAccelRestartBody:'This setting only takes effect after restarting Freq.Phull. Restart now?',
+    hwAccelRestartNow:'Restart now',
+    hwAccelRestartLater:'Restart later',
+    // ── v0.2.8: extension link + how-to ──
+    extLinkName:'Browser extension',
+    extLinkDesc:'A Chrome extension that adds a Grab button to YouTube so you can pull beats straight into Freq.Phull. Updated independently from the main app via the same GitHub repo.',
+    extLinkOpen:'Open page',
+    extLinkHowTo:'How to install',
+    extHowToTitle:'Install the browser extension',
+    extHowToSub:'Chrome, Edge, Brave, Opera, Arc - any Chromium-based browser. 1 minute setup.',
+    extHowToStep1Title:'Download the extension folder',
+    extHowToStep1Desc:'Open the repo and download the freqpull-ext folder as a ZIP, then unzip it somewhere you will not move it from (Documents works fine).',
+    extHowToStep1Btn:'Open GitHub repo',
+    extHowToStep2Title:'Open your extensions page',
+    extHowToStep2Desc:'Paste this in your browser address bar and hit Enter:',
+    extHowToStep3Title:'Enable Developer mode',
+    extHowToStep3Desc:'Top-right toggle on the extensions page. This lets you install local extensions; you only need to do it once.',
+    extHowToStep4Title:'Click "Load unpacked"',
+    extHowToStep4Desc:'Button appears once Developer mode is on. Select the freqpull-ext folder you unzipped in step 1.',
+    extHowToStep5Title:'Pin and use',
+    extHowToStep5Desc:'Click the puzzle-piece icon in your browser toolbar, then the pin next to Freq.Phull. The extension panel will open beside any YouTube video; press Grab to send it to the app.',
+    extHowToTip:'Tip: keep Freq.Phull desktop running. The extension talks to it on 127.0.0.1:47891 - downloads land in your library automatically.',
+    extHowToOpenRepo:'Open repo',
+
+    // ── Boot update check toasts (0.2.8) ──
+    updCheckingBoot:'Checking for updates...',
+    updUpToDate:"You're up to date",
+
     // ── Repair metadata (0.2.7) ──
     storRepairThumbs:'Fix missing thumbnails',
     storRepairScanning:'Scanning for rows with missing thumbnails or duration...',
@@ -8848,6 +9099,41 @@ const T = {
     close:'Close', by:'by', save:'Save', delete:'Delete',
   },
   fr: {
+    // ── v0.2.8: acceleration materielle ──
+    hwAccelName:'Acceleration materielle',
+    hwAccelDesc:"Utilise le GPU pour le rendu, les animations et les canvas de l'analyseur. Recommande ACTIVE pour la plupart des utilisateurs. Desactivez uniquement si vous voyez des artefacts graphiques, des flashs blancs, ou si le ventilateur de votre ordinateur s'emballe juste en faisant defiler la page - certains GPU integres gerent mal Electron. Un redemarrage de l'application est requis.",
+    hwAccelUnavailable:"Le toggle d'acceleration materielle est indisponible sur cette version",
+    hwAccelOnNotif:'Acceleration materielle : ACTIVEE',
+    hwAccelOffNotif:'Acceleration materielle : DESACTIVEE',
+    hwAccelRestartTitle:'Redemarrage requis',
+    hwAccelRestartBody:'Ce parametre ne prendra effet qu\'apres avoir redemarre Freq.Phull. Redemarrer maintenant ?',
+    hwAccelRestartNow:'Redemarrer maintenant',
+    hwAccelRestartLater:'Redemarrer plus tard',
+    // ── v0.2.8: lien extension + tutoriel ──
+    extLinkName:'Extension de navigateur',
+    extLinkDesc:'Une extension Chrome qui ajoute un bouton Grab sur YouTube pour envoyer les beats directement vers Freq.Phull. Mise a jour independamment de l\'app principale via le meme depot GitHub.',
+    extLinkOpen:'Ouvrir la page',
+    extLinkHowTo:'Comment installer',
+    extHowToTitle:'Installer l\'extension de navigateur',
+    extHowToSub:'Chrome, Edge, Brave, Opera, Arc - tout navigateur base sur Chromium. Installation en 1 minute.',
+    extHowToStep1Title:'Telechargez le dossier de l\'extension',
+    extHowToStep1Desc:'Ouvrez le depot et telechargez le dossier freqpull-ext en ZIP, puis decompressez-le quelque part ou vous ne le deplacerez pas (Documents convient).',
+    extHowToStep1Btn:'Ouvrir le depot GitHub',
+    extHowToStep2Title:'Ouvrez votre page d\'extensions',
+    extHowToStep2Desc:'Collez ceci dans la barre d\'adresse de votre navigateur et appuyez sur Entree :',
+    extHowToStep3Title:'Activez le Mode developpeur',
+    extHowToStep3Desc:'Bascule en haut a droite de la page des extensions. Permet d\'installer des extensions locales ; a faire une seule fois.',
+    extHowToStep4Title:'Cliquez sur "Charger l\'extension non empaquetee"',
+    extHowToStep4Desc:'Le bouton apparait une fois le Mode developpeur active. Selectionnez le dossier freqpull-ext decompresse a l\'etape 1.',
+    extHowToStep5Title:'Epinglez et utilisez',
+    extHowToStep5Desc:'Cliquez sur l\'icone de piece de puzzle dans la barre d\'outils du navigateur, puis sur l\'epingle a cote de Freq.Phull. Le panneau de l\'extension s\'ouvrira a cote de toute video YouTube ; appuyez sur Grab pour l\'envoyer a l\'app.',
+    extHowToTip:'Astuce : gardez Freq.Phull desktop ouvert. L\'extension communique avec sur 127.0.0.1:47891 - les telechargements arrivent automatiquement dans votre bibliotheque.',
+    extHowToOpenRepo:'Ouvrir le depot',
+
+    // ── Notifications de verification au demarrage (0.2.8) ──
+    updCheckingBoot:'Verification des mises a jour...',
+    updUpToDate:'Vous etes a jour',
+
     // ── Reparation des metadonnees (0.2.7) ──
     storRepairThumbs:'Reparer les miniatures manquantes',
     storRepairScanning:'Recherche des entrees avec miniatures ou duree manquantes...',
@@ -9519,6 +9805,26 @@ function renderSettings() {
     </div>
     <div class="setting-row">
       <div class="setting-info">
+        <div class="setting-name">${t('hwAccelName')}</div>
+        <div class="setting-desc">${t('hwAccelDesc')}</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="hw-accel-toggle" checked onchange="toggleHardwareAcceleration(this.checked)"/>
+        <span class="slider"></span>
+      </label>
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-name">${t('extLinkName')}</div>
+        <div class="setting-desc">${t('extLinkDesc')}</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+        <button class="btn sm" onclick="openExtensionPage()" title="GitHub">🌐 ${t('extLinkOpen')}</button>
+        <button class="btn sm pri" onclick="openExtensionHowTo()">📖 ${t('extLinkHowTo')}</button>
+      </div>
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
         <div class="setting-name">${t('writeTagsName')}</div>
         <div class="setting-desc">${t('writeTagsDesc')}</div>
       </div>
@@ -9574,6 +9880,7 @@ function renderSettings() {
   // dynamically instead of hardcoding so releases don't drift out of sync
   // with the displayed string.
   refreshYtdlpStatus();
+  syncHardwareAccelToggle();
   if (window.api && window.api.updater) {
     window.api.updater.getStatus().then(s => {
       const el = document.getElementById('about-version-desc');
@@ -10836,7 +11143,7 @@ function renderFolderTracks() {
       : '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="7,5 7,19 19,12"/></svg>';
     // Thumbnail: image if available, otherwise dim ♪ glyph in the slot
     const thumb = tr.thumbnail
-      ? `<img class="sp-fv-row-thumb" src="${escapeHtml(tr.thumbnail)}" onerror="this.outerHTML='<div class=\\'sp-fv-row-thumb fallback\\'>♪</div>'"/>`
+      ? `<img class="sp-fv-row-thumb" loading="lazy" decoding="async" src="${escapeHtml(resolveThumb(tr.thumbnail))}" onerror="window._thumbFail(this)"/>`
       : `<div class="sp-fv-row-thumb fallback">♪</div>`;
     // Clicking the title block opens the full analysis (waveform, sections,
     // chord progression, LUFS, dynamic range, etc.). The title is the
@@ -12532,11 +12839,26 @@ function _setupUpdater() {
     }
   });
 
+  // v0.2.8: surface the boot check so users see it happen instead of
+  // a silent network call. The toast auto-dismisses; users don't have
+  // to interact, they just get confirmation that we checked.
+  let _bootCheckToastShown = false;
   window.api.updater.onChecking(() => {
     if (typeof diagLog === 'function') diagLog('Updater: checking…', 'info');
+    if (!_bootCheckToastShown && typeof showAppNotification === 'function') {
+      _bootCheckToastShown = true;
+      showAppNotification(t('updCheckingBoot') || 'Checking for updates…', 'info', null, 2500);
+    }
   });
   window.api.updater.onNone(() => {
     if (typeof diagLog === 'function') diagLog('Updater: up to date', 'info');
+    // Only show "up to date" when triggered by the BOOT check, not on
+    // every 4-hour interval check (would be spammy). The boot check
+    // flag was set by onChecking above.
+    if (_bootCheckToastShown && typeof showAppNotification === 'function') {
+      showAppNotification('✓ ' + (t('updUpToDate') || "You're up to date"), 'ok', null, 2200);
+      _bootCheckToastShown = false;  // reset for next boot
+    }
   });
 
   // Pull-based catch-up: if the main process already found an update
@@ -12694,13 +13016,16 @@ function onUpdateBannerLater() {
 // the user clicked, so the ::before ripple in CSS originates there
 // instead of the geometric center. Composite-only — no DOM injection.
 (function installPrimaryButtonRipple(){
+  // v0.2.7: passive=true tells the browser we won't preventDefault,
+  // so it can dispatch this on the compositor thread without waiting
+  // for us. Free perf win.
   document.addEventListener('mousedown', (e) => {
     const t = e.target && e.target.closest && e.target.closest('.btn.pri');
     if (!t || t.disabled) return;
     const r = t.getBoundingClientRect();
     t.style.setProperty('--ripple-x', ((e.clientX - r.left) / r.width * 100) + '%');
     t.style.setProperty('--ripple-y', ((e.clientY - r.top)  / r.height * 100) + '%');
-  }, true);
+  }, { capture: true, passive: true });
 })();
 
 (function installInputBlurOnOutsideClick(){
