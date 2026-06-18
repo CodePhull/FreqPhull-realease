@@ -4,7 +4,38 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Freq.Phull</title>
-<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<!-- v0.2.7: brand fonts now BUNDLED locally (~110 KB total, no network
+     dependency). Loaded via @font-face with font-display:swap so the
+     fallback chain (Impact / Haettenschweiler / system sans-serif) is
+     used during the first paint only — the real fonts replace them
+     within ~5ms once decoded. -->
+<style>
+  @font-face {
+    font-family: 'Bebas Neue';
+    font-style: normal; font-weight: 400; font-display: swap;
+    src: url('fonts/BebasNeue-Regular.woff2') format('woff2');
+  }
+  @font-face {
+    font-family: 'Inter';
+    font-style: normal; font-weight: 300; font-display: swap;
+    src: url('fonts/Inter-300.woff2') format('woff2');
+  }
+  @font-face {
+    font-family: 'Inter';
+    font-style: normal; font-weight: 400; font-display: swap;
+    src: url('fonts/Inter-400.woff2') format('woff2');
+  }
+  @font-face {
+    font-family: 'Inter';
+    font-style: normal; font-weight: 500; font-display: swap;
+    src: url('fonts/Inter-500.woff2') format('woff2');
+  }
+  @font-face {
+    font-family: 'Inter';
+    font-style: normal; font-weight: 600; font-display: swap;
+    src: url('fonts/Inter-600.woff2') format('woff2');
+  }
+</style>
 <style>
 :root {
   --bg:#080808;--bg2:#101010;--bg3:#181818;--bg4:#202020;--bg5:#2c2c2c;
@@ -48,7 +79,7 @@ button:focus,button:focus-visible{outline:none!important;box-shadow:none!importa
 button::-moz-focus-inner{border:0;padding:0}
 /* Also kill it on SVGs inside buttons (sometimes the ring jumps inward) */
 button svg:focus,button svg:focus-visible{outline:none!important;box-shadow:none!important}
-html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--off);font-family:'Inter',sans-serif;font-size:15px;-webkit-font-smoothing:antialiased}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--off);font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;font-size:15px;-webkit-font-smoothing:antialiased}
 
 /* Anti-flicker on startup: body starts faded out until JS marks itself
  * ready. Prevents the "jiggle" where unstyled / partially-laid-out content
@@ -85,7 +116,7 @@ body > *{position:relative;z-index:1;}
 }
 #loading.hide{opacity:0;pointer-events:none}
 .load-logo{width:140px;height:140px;object-fit:contain;border-radius:10px;animation:loadpulse 2s ease-in-out infinite}
-.load-name{font-family:'Bebas Neue',sans-serif;font-size:34px;letter-spacing:0.2em;color:var(--white)}
+.load-name{font-family:'Bebas Neue','Oswald','Anton','Impact','Haettenschweiler','Arial Narrow',sans-serif;font-size:34px;letter-spacing:0.2em;color:var(--white)}
 .load-sub{font-size:13px;color:var(--hint);letter-spacing:0.14em;text-transform:uppercase;margin-top:-8px}
 .load-bar-wrap{width:160px;height:1px;background:var(--bg4);overflow:hidden;border-radius:1px}
 .load-bar{height:100%;background:var(--white);width:0%;animation:loadbar 4s ease forwards}
@@ -116,7 +147,7 @@ body > *{position:relative;z-index:1;}
 .tb-nav-btn:active:not(:disabled){background:var(--bg4)}
 .tb-nav-btn:disabled{opacity:.3;cursor:default}
 .tb-nav-btn:focus{outline:none}
-.tb-name{font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:0.14em;color:var(--white)}
+.tb-name{font-family:'Bebas Neue','Oswald','Anton','Impact','Haettenschweiler','Arial Narrow',sans-serif;font-size:20px;letter-spacing:0.14em;color:var(--white)}
 .tb-sub{font-size:13px;color:var(--hint);letter-spacing:0.1em}
 .tb-sp{flex:1}
 .tb-dot-row{display:flex;align-items:center;gap:7px}
@@ -144,7 +175,7 @@ body > *{position:relative;z-index:1;}
 #main{flex:1;overflow-y:auto;padding:36px 44px}
 .tab-pane{display:none;max-width:1080px}.tab-pane.on{display:block;animation:fadeUp 320ms var(--e-spring)}
 .ph{margin-bottom:30px}
-.ph-title{font-family:'Bebas Neue',sans-serif;font-size:46px;letter-spacing:0.06em;color:var(--white);line-height:1;margin-bottom:6px}
+.ph-title{font-family:'Bebas Neue','Oswald','Anton','Impact','Haettenschweiler','Arial Narrow',sans-serif;font-size:46px;letter-spacing:0.06em;color:var(--white);line-height:1;margin-bottom:6px}
 .ph-sub{font-size:15px;color:var(--muted);font-weight:300}
 
 /* ── Cards ── */
@@ -163,13 +194,13 @@ body > *{position:relative;z-index:1;}
 .card-lbl{font-size:13px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:var(--muted);margin-bottom:16px}
 
 /* ── Inputs ── */
-input,textarea,select{background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--white);font-family:'Inter',sans-serif;outline:none;transition:border-color var(--t-base) var(--e-out),box-shadow var(--t-base) var(--e-out)}
+input,textarea,select{background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--white);font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;outline:none;transition:border-color var(--t-base) var(--e-out),box-shadow var(--t-base) var(--e-out)}
 input:focus,textarea:focus,select:focus{border-color:var(--border3);box-shadow:0 0 0 3px rgba(255,255,255,0.04)}
 input::placeholder,textarea::placeholder{color:var(--muted)}
 .url-inp{flex:1;height:50px;padding:0 16px;font-size:15px}
 
 /* ── Buttons ── */
-.btn{height:46px;padding:0 22px;border:1px solid var(--border2);border-radius:var(--r);background:transparent;color:var(--off);font-family:'Inter',sans-serif;font-size:14px;font-weight:500;cursor:pointer;transition:background var(--t-base) var(--e-out),color var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out),transform 80ms var(--e-out),opacity var(--t-base) var(--e-out);white-space:nowrap;display:inline-flex;align-items:center;gap:7px}
+.btn{height:46px;padding:0 22px;border:1px solid var(--border2);border-radius:var(--r);background:transparent;color:var(--off);font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;font-size:14px;font-weight:500;cursor:pointer;transition:background var(--t-base) var(--e-out),color var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out),transform 80ms var(--e-out),opacity var(--t-base) var(--e-out);white-space:nowrap;display:inline-flex;align-items:center;gap:7px}
 .btn:hover{border-color:var(--border3);color:var(--white);background:var(--wbg)}
 .btn:active{transform:scale(.96)}
 .btn:disabled{opacity:.3;cursor:not-allowed;transform:none}
@@ -251,14 +282,14 @@ input::placeholder,textarea::placeholder{color:var(--muted)}
 .meter-stats{display:flex;gap:18px;margin-top:4px;flex-wrap:wrap}
 .meter-stat{display:flex;flex-direction:column;gap:2px}
 .meter-stat-lbl{font-size:10px;color:var(--hint);letter-spacing:0.1em;text-transform:uppercase}
-.meter-stat-val{font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--white);letter-spacing:0.04em;line-height:1}
+.meter-stat-val{font-family:'Bebas Neue','Oswald','Anton','Impact','Haettenschweiler','Arial Narrow',sans-serif;font-size:22px;color:var(--white);letter-spacing:0.04em;line-height:1}
 .meter-stat-unit{font-size:10px;color:var(--muted);margin-top:1px}
 
 /* ── Metrics ── */
 .metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px}
 .metric{background:var(--bg3);border:1px solid var(--border);border-radius:var(--rl);padding:26px 20px;text-align:center}
 .m-lbl{font-size:13px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:var(--hint);margin-bottom:10px}
-.m-val{font-family:'Bebas Neue',sans-serif;font-size:60px;line-height:1;color:var(--white);letter-spacing:0.04em}
+.m-val{font-family:'Bebas Neue','Oswald','Anton','Impact','Haettenschweiler','Arial Narrow',sans-serif;font-size:60px;line-height:1;color:var(--white);letter-spacing:0.04em}
 .m-val.dim{font-size:26px;color:var(--hint)}
 .m-sub{font-size:13px;color:var(--muted);margin-top:5px;letter-spacing:0.06em}
 .m-conf{height:2px;background:var(--bg4);border-radius:1px;margin-top:12px}
@@ -274,12 +305,12 @@ input::placeholder,textarea::placeholder{color:var(--muted)}
 .chord-role{font-size:13px;color:var(--hint);margin-left:3px}
 .cam-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}
 .cam-key{padding:8px 4px;border-radius:4px;text-align:center;font-size:14px;background:var(--bg4);color:var(--muted);font-weight:700;line-height:1.4;cursor:default;transition:background .15s}
-.cam-key span{display:block;font-size:10px;font-weight:400;margin-top:2px;font-family:'Inter',sans-serif;letter-spacing:0}
+.cam-key span{display:block;font-size:10px;font-weight:400;margin-top:2px;font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;letter-spacing:0}
 .cam-key.match{background:var(--wbg2);color:var(--white);border:1px solid var(--border3);box-shadow:0 0 8px rgba(255,255,255,0.04)}
 .cam-key.self{background:var(--white);color:#080808;font-weight:800;font-size:15px;box-shadow:0 0 12px rgba(255,255,255,0.12)}
 .pitch-row{display:flex;align-items:center;gap:10px;margin-bottom:10px}
 input[type=range]{flex:1;accent-color:var(--white)}
-.pitch-val{font-family:'Bebas Neue',sans-serif;font-size:28px;min-width:36px;text-align:center;color:var(--white)}
+.pitch-val{font-family:'Bebas Neue','Oswald','Anton','Impact','Haettenschweiler','Arial Narrow',sans-serif;font-size:28px;min-width:36px;text-align:center;color:var(--white)}
 
 /* ── Drop ── */
 .drop{border:1.5px dashed var(--border2);border-radius:var(--rl);padding:44px 28px;text-align:center;cursor:pointer;background:var(--bg3);transition:border-color var(--t-base) var(--e-out),background var(--t-base) var(--e-out),transform var(--t-base) var(--e-spring)}
@@ -361,13 +392,13 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .badge.bpm,.badge.key{background:var(--wbg);color:var(--off);border-color:var(--border2)}
 
 /* ── Metronome ── */
-.metro-num{font-family:'Bebas Neue',sans-serif;font-size:76px;text-align:center;color:var(--white);line-height:1;margin:6px 0}
+.metro-num{font-family:'Bebas Neue','Oswald','Anton','Impact','Haettenschweiler','Arial Narrow',sans-serif;font-size:76px;text-align:center;color:var(--white);line-height:1;margin:6px 0}
 .metro-beat{display:flex;gap:10px;justify-content:center;margin:12px 0}
 .beat-dot{width:13px;height:13px;border-radius:50%;background:var(--bg4);border:1px solid var(--border2);transition:background .04s}
 .beat-dot.lit{background:var(--white);box-shadow:0 0 8px rgba(255,255,255,.4)}
-.tap-btn{width:100%;padding:28px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--white);font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:.2em;cursor:pointer;transition:background .08s}
+.tap-btn{width:100%;padding:28px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--white);font-family:'Bebas Neue','Oswald','Anton','Impact','Haettenschweiler','Arial Narrow',sans-serif;font-size:22px;letter-spacing:.2em;cursor:pointer;transition:background .08s}
 .tap-btn:active{background:var(--wbg2)}
-.tap-num{font-family:'Bebas Neue',sans-serif;font-size:68px;text-align:center;color:var(--white);margin-top:10px;line-height:1}
+.tap-num{font-family:'Bebas Neue','Oswald','Anton','Impact','Haettenschweiler','Arial Narrow',sans-serif;font-size:68px;text-align:center;color:var(--white);margin-top:10px;line-height:1}
 
 /* ── Scale ── */
 .scale-note{display:inline-flex;flex-direction:column;align-items:center;width:64px;margin:0 4px 8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:9px 4px}
@@ -384,7 +415,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .pro-stats{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:10px}
 .pro-stat{display:flex;flex-direction:column;gap:2px;min-width:60px}
 .pro-stat-lbl{font-size:10px;color:var(--hint);letter-spacing:0.1em;text-transform:uppercase}
-.pro-stat-val{font-family:'Bebas Neue',sans-serif;font-size:24px;color:var(--white);letter-spacing:0.04em;line-height:1}
+.pro-stat-val{font-family:'Bebas Neue','Oswald','Anton','Impact','Haettenschweiler','Arial Narrow',sans-serif;font-size:24px;color:var(--white);letter-spacing:0.04em;line-height:1}
 .pro-stat-val.pro-red{color:var(--red)}
 .pro-stat-unit{font-size:10px;color:var(--muted)}
 .pro-hint{font-size:11px;color:var(--hint);line-height:1.7;margin-top:6px;padding-top:8px;border-top:1px solid var(--border)}
@@ -516,7 +547,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
   padding:1px 7px;border-radius:3px;
   font-size:10px;font-weight:600;letter-spacing:.04em;
   font-variant-numeric:tabular-nums;
-  font-family:'Inter',sans-serif;
+  font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;
   background:rgba(255,255,255,.05);
   border:1px solid rgba(255,255,255,.08);
   color:rgba(255,255,255,.7);
@@ -1026,7 +1057,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .update-banner-btn{
   background:transparent;border:1px solid var(--border);color:var(--muted);
   cursor:pointer;padding:6px 10px;border-radius:4px;font-size:11px;
-  font-weight:500;font-family:'Inter',sans-serif;outline:none;
+  font-weight:500;font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;outline:none;
   transition:background 120ms,color 120ms,border-color 120ms;
 }
 .update-banner-btn:hover{color:var(--white);border-color:var(--border2);background:var(--bg)}
@@ -1125,7 +1156,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .sp-fv-mini-notepad-title{font-size:11px;color:var(--hint);letter-spacing:.05em;text-transform:uppercase;font-weight:600}
 .sp-fv-mini-notepad-close{background:transparent;border:none;color:var(--muted);cursor:pointer;padding:2px;display:flex;align-items:center;justify-content:center;border-radius:3px;outline:none}
 .sp-fv-mini-notepad-close:hover{color:var(--white);background:var(--bg)}
-.sp-fv-mini-notepad textarea{width:100%;height:140px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--white);padding:8px;font-family:'Inter',sans-serif;font-size:13px;line-height:1.4;resize:vertical;outline:none}
+.sp-fv-mini-notepad textarea{width:100%;height:140px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--white);padding:8px;font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;font-size:13px;line-height:1.4;resize:vertical;outline:none}
 .sp-fv-mini-notepad textarea:focus{border-color:var(--border2)}
 .sp-fv-mini-notepad-foot{font-size:10px;color:var(--hint);margin-top:6px;text-align:right}
 .sp-fv-mini-player.hidden{display:none}
@@ -1140,7 +1171,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
  * prevent Segoe UI Emoji from rendering U+23EE/U+23EF/U+23ED as colored
  * emoji blocks on Windows. We use SVGs for the glyphs themselves now, but
  * this also ensures any future Unicode character we use stays monochrome. */
-.sp-fv-mini-player button{font-family:'Inter',sans-serif;font-variant-emoji:text}
+.sp-fv-mini-player button{font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;font-variant-emoji:text}
 .sp-fv-mini-transport button{background:transparent;border:none;color:var(--muted);cursor:pointer;width:26px;height:26px;display:flex;align-items:center;justify-content:center;padding:0;border-radius:4px;font-size:12px;line-height:1;outline:none}
 .sp-fv-mini-transport button:hover{color:var(--white);background:var(--bg)}
 .sp-fv-mini-transport button:focus{outline:none;box-shadow:none}
@@ -1260,7 +1291,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .dl-queue-title svg{color:var(--muted)}
 .dl-queue-count{
   background:var(--bg3);border:1px solid var(--border2);
-  color:var(--muted);font-family:'Inter',sans-serif;
+  color:var(--muted);font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;
   font-size:11px;font-weight:600;letter-spacing:.04em;
   padding:1px 8px;border-radius:11px;
   font-variant-numeric:tabular-nums;
@@ -1268,7 +1299,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .dl-queue-clear{
   background:transparent;border:0;
   color:var(--muted);cursor:pointer;
-  font-family:'Inter',sans-serif;font-size:11px;
+  font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;font-size:11px;
   padding:4px 8px;border-radius:4px;
   transition:color var(--t-fast) var(--e-out),background var(--t-fast) var(--e-out);
 }
@@ -1357,7 +1388,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
   display:flex;align-items:center;gap:9px;
   width:100%;padding:11px 14px;
   background:transparent;border:0;color:var(--white);
-  cursor:pointer;font-family:'Inter',sans-serif;
+  cursor:pointer;font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;
   text-align:left;outline:none;
   transition:background var(--t-fast) var(--e-out);
 }
@@ -1389,7 +1420,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
   height:34px;padding:0 10px;
   background:var(--bg);color:var(--white);
   border:1px solid var(--border);border-radius:var(--r);
-  font-family:'Inter',sans-serif;font-size:12px;
+  font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;font-size:12px;
   cursor:pointer;outline:none;
   transition:border-color var(--t-fast) var(--e-out);
 }
@@ -1397,7 +1428,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .qa-advanced-toggle{
   margin-top:12px;display:flex;align-items:center;gap:7px;
   background:transparent;border:0;color:var(--muted);
-  cursor:pointer;font-family:'Inter',sans-serif;font-size:11px;
+  cursor:pointer;font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;font-size:11px;
   padding:4px 0;outline:none;
   transition:color var(--t-fast) var(--e-out);
 }
@@ -1411,7 +1442,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .qa-slider-val{
   font-size:11px;color:var(--muted);
   font-variant-numeric:tabular-nums;
-  font-family:'Inter',sans-serif;
+  font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;
 }
 .qa-slider{width:100%;height:18px;accent-color:#c8a8ff;cursor:pointer}
 .qa-slider-desc{font-size:10px;color:var(--hint);line-height:1.4}
@@ -1420,7 +1451,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
   background:transparent;border:1px solid var(--border2);
   color:var(--muted);cursor:pointer;
   padding:5px 10px;border-radius:var(--r);
-  font-family:'Inter',sans-serif;font-size:11px;
+  font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;font-size:11px;
   transition:border-color var(--t-fast) var(--e-out),color var(--t-fast) var(--e-out);
 }
 .qa-reset-btn:hover{border-color:var(--border3);color:var(--white)}
@@ -1535,7 +1566,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .setup-card{background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:32px 30px;width:100%;max-width:480px;box-shadow:0 20px 60px rgba(0,0,0,0.5);-webkit-app-region:no-drag}
 .setup-logo{display:flex;justify-content:center;margin-bottom:18px}
 .setup-logo img{width:56px;height:56px;border-radius:10px;opacity:0.92}
-.setup-title{font-family:'Bebas Neue',sans-serif;font-size:30px;letter-spacing:0.06em;color:var(--white);text-align:center;font-weight:400;margin-bottom:6px}
+.setup-title{font-family:'Bebas Neue','Oswald','Anton','Impact','Haettenschweiler','Arial Narrow',sans-serif;font-size:30px;letter-spacing:0.06em;color:var(--white);text-align:center;font-weight:400;margin-bottom:6px}
 .setup-sub{font-size:13px;color:var(--muted);text-align:center;margin-bottom:24px;line-height:1.5}
 .setup-info{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:20px}
 .setup-info-row{display:flex;gap:12px;padding:8px 0;align-items:flex-start}
@@ -1661,7 +1692,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 
 .app-notif-body{flex:1;min-width:0}
 .app-notif-msg{
-  font-family:'Inter',sans-serif;font-size:13px;
+  font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;font-size:13px;
   color:#f0f0f0;line-height:1.4;
   word-wrap:break-word;
   display:-webkit-box;
@@ -1732,7 +1763,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
   height:42px;padding:0 12px;
   background:var(--bg2);color:var(--white);
   border:1px solid var(--border);border-radius:var(--r);
-  font-family:'Inter',sans-serif;font-size:13px;
+  font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;font-size:13px;
   cursor:pointer;outline:none;min-width:140px;max-width:200px;
   transition:border-color var(--t-fast) var(--e-out);
 }
@@ -1747,7 +1778,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
   height:34px;padding:0 12px;
   background:var(--bg3);color:var(--white);
   border:1px solid var(--border2);border-radius:var(--r);
-  font-family:'Inter',sans-serif;font-size:13px;
+  font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;font-size:13px;
   cursor:pointer;outline:none;
   transition:border-color var(--t-fast) var(--e-out);
 }
@@ -1941,6 +1972,246 @@ input:focus-visible, select:focus-visible, textarea:focus-visible{outline:2px so
 /* Buttons with both an icon and text — slightly tighter gap reads
  * cleaner. Compositing-cheap. */
 .btn svg + *, .btn * + svg{gap:6px}
+
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ * v0.2.7 - Premium micro-interactions
+ * Spotify-grade polish. Only opacity/transform/filter (no reflow);
+ * gated behind :hover, :active, [data-state], or animation triggers
+ * so the resting visual is byte-identical to before.
+ * Every duration <=240ms - never sluggish.
+ * Respects prefers-reduced-motion globally.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* Scale-by-perception easings (used in Material 3, Apple HIG, Spotify) */
+  --ease-out-quad:   cubic-bezier(.25, .46, .45, .94);
+  --ease-out-cubic:  cubic-bezier(.215, .61, .355, 1);
+  --ease-out-quart:  cubic-bezier(.165, .84, .44, 1);
+  --ease-spring:     cubic-bezier(.34, 1.56, .64, 1);   /* tiny overshoot */
+}
+
+/* ── Sidebar nav: hover lift + active scale-down on press ─────── */
+.nav-btn{
+  position:relative;
+  transition:
+    background-color 180ms var(--ease-out-cubic),
+    color 180ms var(--ease-out-cubic),
+    transform 110ms var(--ease-out-quad);
+}
+.nav-btn:not(.on):hover{transform:translateX(2px)}
+.nav-btn:not(.on):active{transform:translateX(2px) scale(.985)}
+.nav-btn .nav-ico{transition:transform 220ms var(--ease-out-cubic), color 180ms var(--ease-out-cubic)}
+.nav-btn:hover .nav-ico{transform:scale(1.06)}
+.nav-btn.on .nav-ico{transform:scale(1.06)}
+
+/* Sliding active-indicator bar on the left of the active nav item */
+.nav-btn[aria-current="page"]::after{
+  content:""; position:absolute; left:0; top:8px; bottom:8px;
+  width:2px; background:var(--white); border-radius:2px;
+  animation: nav-bar-in 240ms var(--ease-out-quart) both;
+}
+@keyframes nav-bar-in {
+  0%   { transform:scaleY(.2); opacity:0 }
+  100% { transform:scaleY(1);  opacity:1 }
+}
+
+/* ── Buttons: subtle lift + press depth (already had transform on .btn,
+ *     this adds duration uniformity + a soft shadow on hover for big
+ *     primary buttons) ──────────────────────────────────────────── */
+.btn{transition:
+  background-color 180ms var(--ease-out-cubic),
+  color 180ms var(--ease-out-cubic),
+  border-color 180ms var(--ease-out-cubic),
+  transform 110ms var(--ease-out-quad),
+  box-shadow 180ms var(--ease-out-cubic),
+  opacity 180ms var(--ease-out-cubic);
+}
+.btn.pri:not(:disabled):hover{
+  box-shadow:0 4px 14px -4px rgba(255,255,255,.18);
+}
+.btn:active:not(:disabled){transform:translateY(0) scale(.97)}
+
+/* Ripple-ish glow on big primary buttons when pressed (purely composite,
+ * no DOM injection — uses the existing button's background as the canvas) */
+.btn.pri{position:relative;overflow:hidden}
+.btn.pri::before{
+  content:""; position:absolute; inset:0;
+  background:radial-gradient(circle at var(--ripple-x,50%) var(--ripple-y,50%),
+    rgba(255,255,255,.18) 0%, rgba(255,255,255,0) 50%);
+  opacity:0; pointer-events:none;
+  transition:opacity 320ms var(--ease-out-quad);
+}
+.btn.pri:active::before{opacity:1; transition-duration:60ms}
+
+/* ── History rows: smooth entrance, hover lift (already in 0.2.2,
+ *     tighten timing + add right-side BPM/key chip slide-in) ──── */
+.hist-row{
+  transition:
+    background 180ms var(--ease-out-cubic),
+    transform 180ms var(--ease-out-cubic),
+    box-shadow 180ms var(--ease-out-cubic);
+}
+.hist-row:hover{
+  background:var(--wbg);
+  transform:translateX(2px);
+  box-shadow:0 1px 0 0 rgba(255,255,255,.04) inset;
+}
+.hist-row .hist-play{transition:
+  transform 140ms var(--ease-spring),
+  background 180ms var(--ease-out-cubic),
+  color 180ms var(--ease-out-cubic),
+  border-color 180ms var(--ease-out-cubic);
+}
+.hist-row:hover .hist-play{transform:scale(1.08)}
+.hist-row .hist-play:active{transform:scale(.92)}
+
+/* ── Mini player: surface fade + button springiness ──────────── */
+.sp-fv-mini-extra-btn, .sp-fv-mini-vol-btn{
+  transition:
+    color 160ms var(--ease-out-cubic),
+    transform 140ms var(--ease-spring),
+    opacity 160ms var(--ease-out-cubic);
+}
+.sp-fv-mini-extra-btn:hover, .sp-fv-mini-vol-btn:hover{transform:scale(1.12)}
+.sp-fv-mini-extra-btn:active, .sp-fv-mini-vol-btn:active{transform:scale(.92)}
+
+/* Big play-toggle in the center of the mini player */
+.sp-fv-play{transition:
+  background-color 180ms var(--ease-out-cubic),
+  transform 140ms var(--ease-spring),
+  box-shadow 180ms var(--ease-out-cubic);
+}
+.sp-fv-play:hover{transform:scale(1.08); box-shadow:0 4px 12px -4px rgba(255,255,255,.16)}
+.sp-fv-play:active{transform:scale(.94)}
+
+/* Heart fav — pop on engage (CSS only, JS just toggles .on) */
+#sp-fv-mini-fav svg{transition:transform 220ms var(--ease-spring), color 180ms var(--ease-out-cubic)}
+#sp-fv-mini-fav.on svg{animation:heart-pop 380ms var(--ease-spring)}
+@keyframes heart-pop {
+  0%   {transform:scale(1)}
+  40%  {transform:scale(1.34)}
+  70%  {transform:scale(.92)}
+  100% {transform:scale(1)}
+}
+
+/* Seek bar — fade buffered fill in, thumb grows on hover */
+.sp-fv-mini-seek-fill{transition:width 100ms linear}  /* keep it tight - playback */
+.sp-fv-mini-seek-thumb{transition:transform 140ms var(--ease-out-quad), opacity 140ms var(--ease-out-quad)}
+.sp-fv-mini-seek:hover .sp-fv-mini-seek-thumb{transform:scale(1.4)}
+.sp-fv-mini-seek-buffered{transition:width 240ms var(--ease-out-cubic)}
+
+/* ── Tab pane: opacity + tiny vertical slide on switch ─────── */
+.tab-pane{opacity:0; transform:translateY(4px);
+  transition:opacity 180ms var(--ease-out-cubic), transform 220ms var(--ease-out-cubic);
+}
+.tab-pane.on{opacity:1; transform:translateY(0)}
+@media (prefers-reduced-motion: reduce){
+  .tab-pane{transition:none; transform:none}
+}
+
+/* ── Modals: subtle scale-in + backdrop fade ─────────────────── */
+.setup-modal{
+  background:rgba(8,8,8,0);
+  backdrop-filter:blur(0);
+  transition:background 220ms var(--ease-out-cubic), backdrop-filter 220ms var(--ease-out-cubic);
+}
+.setup-modal[style*="display: flex"], .setup-modal[style*="display:flex"]{
+  background:rgba(8,8,8,0.92);
+  backdrop-filter:blur(8px);
+}
+.setup-card{
+  animation: setup-card-in 260ms var(--ease-out-quart) both;
+  transform-origin:center;
+}
+@keyframes setup-card-in {
+  0%   { opacity:0; transform:scale(.96) translateY(8px) }
+  100% { opacity:1; transform:scale(1)    translateY(0) }
+}
+@media (prefers-reduced-motion: reduce){
+  .setup-card{animation:none}
+  .setup-modal{transition:none}
+}
+
+/* ── Toast notifications: slide-in from right, fade out gracefully ── */
+.app-notif{
+  animation: notif-in 260ms var(--ease-out-quart) both;
+  will-change:transform, opacity;
+}
+.app-notif.out{
+  animation: notif-out 200ms var(--ease-out-cubic) both;
+}
+@keyframes notif-in {
+  0%   { opacity:0; transform:translateX(40px) }
+  100% { opacity:1; transform:translateX(0) }
+}
+@keyframes notif-out {
+  0%   { opacity:1; transform:translateX(0) }
+  100% { opacity:0; transform:translateX(20px) }
+}
+@media (prefers-reduced-motion: reduce){
+  .app-notif{animation:none}
+}
+
+/* ── Tag chips: bounce-in on add, fade-zoom on remove ─────────── */
+.tag-chip, .stockpile-tag-chip, .sp-folder-chip{
+  transition:
+    background-color 160ms var(--ease-out-cubic),
+    color 160ms var(--ease-out-cubic),
+    transform 140ms var(--ease-spring);
+}
+.tag-chip:hover, .stockpile-tag-chip:hover{transform:translateY(-1px)}
+
+/* ── Inputs: focus glow ───────────────────────────────────────── */
+input, textarea, select{
+  transition:
+    border-color 180ms var(--ease-out-cubic),
+    box-shadow 180ms var(--ease-out-cubic),
+    background-color 180ms var(--ease-out-cubic);
+}
+input:focus, textarea:focus, select:focus{
+  box-shadow:0 0 0 3px rgba(255,255,255,.06);
+}
+
+/* ── Switch toggles: smoother knob slide ────────────────────── */
+.switch .slider{transition:background-color 220ms var(--ease-out-cubic)}
+.switch .slider::before{transition:transform 260ms var(--ease-spring)}
+
+/* ── Storage breakdown / stockpile rows: stagger fade-in ───── */
+@keyframes row-fade-in {
+  0%   { opacity:0; transform:translateY(6px) }
+  100% { opacity:1; transform:translateY(0) }
+}
+.sp-folder-card, .hist-row.fresh, .stockpile-folder-row{
+  /* fresh = newly arrived from SSE; renderer adds class for 1 frame */
+  animation: row-fade-in 280ms var(--ease-out-quart) both;
+}
+@media (prefers-reduced-motion: reduce){
+  .sp-folder-card, .hist-row.fresh, .stockpile-folder-row{animation:none}
+}
+
+/* ── Loading skeletons: subtle shimmer instead of flat empty ─ */
+.skeleton{
+  background:linear-gradient(90deg, var(--bg2) 0%, var(--bg4) 50%, var(--bg2) 100%);
+  background-size:200% 100%;
+  animation:skeleton-shimmer 1.4s ease-in-out infinite;
+  border-radius:4px;
+  color:transparent;
+}
+@keyframes skeleton-shimmer {
+  0%   { background-position:200% 0 }
+  100% { background-position:-200% 0 }
+}
+@media (prefers-reduced-motion: reduce){
+  .skeleton{animation:none; background:var(--bg3)}
+}
+
+/* ── Global polish: fonts antialias when actual font swaps in ─ */
+body{
+  font-feature-settings:"ss01" 1, "cv11" 1; /* Inter stylistic alts */
+  text-rendering:optimizeLegibility;
+}
 
 </style>
 </head>

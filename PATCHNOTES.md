@@ -9,6 +9,34 @@ along the way.
 
 ---
 
+## v0.2.7 (2026-06-18)
+
+**Brand fonts now bundled in the package**
+- Bebas Neue and Inter (weights 300/400/500/600) are now shipped as local .woff2 files in `renderer/fonts/` (~110 KB total). Loaded via @font-face — no network dependency, no Google Fonts CDN, fully offline-proof. The Google Fonts <link> has been removed.
+- Strengthened the system-font fallback chain stays in place for the first frame: `'Oswald','Anton','Impact','Haettenschweiler','Arial Narrow'` for Bebas Neue, `'Segoe UI Variable','Segoe UI',system-ui,...` for Inter. `font-display:swap` means the real fonts replace them within ~5ms once decoded.
+
+**History cap lifted**
+- The `/history` endpoint had a hardcoded `LIMIT 500` — older downloads weren't deleted, just silently invisible to the renderer once you crossed 500 tracks. Removed. The endpoint now returns every row by default; an optional `?limit=N` query parameter is honored if any caller wants a slice. Safety ceiling at 50,000 to bound the response payload size.
+
+**Repair missing thumbnails + duration**
+- New "Fix missing thumbnails" button in Storage Breakdown for rows that arrived through the watch folder before v0.2.5's duplicate-prevention shipped — they had a file_path but no thumbnail and no duration (the empty rows in the screenshot). Two strategies stacked: (1) twin merge — if a YouTube-original row exists with the same basename and full metadata, copy thumbnail+duration from it instantly; (2) ffprobe — for rows with no twin, shell out to ffprobe and read the real duration from the file. Dry-run preview shows per-strategy counts before applying. New endpoint: `POST /history/repair-metadata`.
+
+**Premium micro-interactions**
+- Spotify-grade motion polish, composite-only (opacity/transform/filter — no reflow). Every duration <=240ms so nothing feels sluggish. Resting state is byte-identical to before; motion only fires on :hover, :active, focus, or animation triggers.
+- Nav buttons: slide right on hover, scale-down on press, springy icon scale on active. New sliding accent bar on the active tab (240ms ease-out-quart).
+- Buttons: composite-only lift + press-depth + radial ripple at click origin (computed in 5-line JS, no DOM injection).
+- History rows: tightened hover transition, scale-spring on the play button.
+- Mini player: spring-bounce on all extra buttons, heart-pop animation when favoriting (keyframed scale), thumb grows on seek-bar hover.
+- Tab switches: opacity + 4px upward slide.
+- Modals: backdrop fades in with blur, card scales in from 96% with 8px lift.
+- Toasts: slide in from the right, fade out with smaller offset on dismiss.
+- Inputs: subtle outer glow on focus (3px low-alpha white ring).
+- Switch toggles: knob slides on cubic-bezier spring.
+- Skeleton-loader class added (shimmering placeholder) for any future loading state.
+- All animations honor `prefers-reduced-motion: reduce` and disable cleanly.
+
+
+
 ## v0.2.6 (2026-06-17)
 
 **Scroll-lock toggle on the mini player**

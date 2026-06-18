@@ -8468,6 +8468,13 @@ function stepToHuman(step) {
 
 const T = {
   en: {
+    // ── Repair metadata (0.2.7) ──
+    storRepairThumbs:'Fix missing thumbnails',
+    storRepairScanning:'Scanning for rows with missing thumbnails or duration...',
+    storRepairNone:'All rows have complete metadata. Nothing to repair.',
+    storRepairConfirm:'Found {n} rows with missing metadata.\n\n{twin} can be fixed instantly by copying from a YouTube-original twin row.\n{probe} will be probed with ffmpeg (slower, ~50ms each).\n\nProceed?',
+    storRepairDone:'Repaired {n} rows ({twin} via twin merge, {probe} via ffprobe)',
+
     // ── Scroll-lock toggle (0.2.6) ──
     scrollLockOn:'Following playing track in History',
     scrollLockOff:'Browsing freely - track will change without scrolling',
@@ -8841,6 +8848,13 @@ const T = {
     close:'Close', by:'by', save:'Save', delete:'Delete',
   },
   fr: {
+    // ── Reparation des metadonnees (0.2.7) ──
+    storRepairThumbs:'Reparer les miniatures manquantes',
+    storRepairScanning:'Recherche des entrees avec miniatures ou duree manquantes...',
+    storRepairNone:'Toutes les entrees ont des metadonnees completes. Rien a reparer.',
+    storRepairConfirm:'{n} entrees ont des metadonnees manquantes.\n\n{twin} peuvent etre corrigees instantanement en copiant depuis une entree jumelle (YouTube original).\n{probe} seront analysees avec ffmpeg (plus lent, ~50ms chacune).\n\nContinuer ?',
+    storRepairDone:'{n} entrees reparees ({twin} par jumelage, {probe} via ffprobe)',
+
     // ── Verrouillage de defilement (0.2.6) ──
     scrollLockOn:'Suivi de la piste en lecture dans Historique',
     scrollLockOff:'Navigation libre - la piste change sans defilement',
@@ -10068,6 +10082,42 @@ async function storagePruneMissing() {
 // "Import N untagged files" — adopt orphan audio files in the stockpile
 // root into the library, then jump straight into Auto-organize so they
 // get folder suggestions in the same motion.
+// Repair-metadata (v0.2.7): fixes blank thumbnails + duration on rows
+// adopted by the watch folder before v0.2.5 prevented the duplicate
+// problem. Dry-run first to show a count; confirm to apply. Twin-merge
+// is instant; ffprobe takes ~50ms per row so we surface the per-strategy
+// count so the user knows what they're signing up for.
+async function storageRepairMetadata() {
+  showAppNotification(t('storRepairScanning'), 'info');
+  try {
+    const dry = await fetch(API + '/history/repair-metadata', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: false })
+    }).then(r => r.json());
+    if (!dry.affected) {
+      showAppNotification(t('storRepairNone'), 'info');
+      return;
+    }
+    const msg = t('storRepairConfirm')
+      .replace('{n}', dry.affected)
+      .replace('{twin}', dry.twin_merge)
+      .replace('{probe}', dry.ffprobe);
+    if (!confirm(msg)) return;
+    const r = await fetch(API + '/history/repair-metadata', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: true })
+    }).then(r => r.json());
+    showAppNotification('🖼 ' + t('storRepairDone')
+      .replace('{n}', r.affected)
+      .replace('{twin}', r.twin_merge)
+      .replace('{probe}', r.ffprobe), 'done');
+    if (typeof loadHistory === 'function') await loadHistory();
+    openStorageBreakdown();
+  } catch (e) {
+    showAppNotification('✕ ' + e.message, 'err');
+  }
+}
+
 async function storageAdoptOrphans() {
   const root = (typeof stockpileFolder !== 'undefined' && stockpileFolder) ? stockpileFolder : '';
   if (!root) { showAppNotification(t('setStockpileFirst'), 'warn'); return; }
@@ -10122,6 +10172,7 @@ function renderStorageBreakdown(data) {
   if (data.untracked && data.untracked.files > 0) {
     fixActions.push(`<button class="btn xs" onclick="storageAdoptOrphans()">📥 ${t('storImportBtn')} (${data.untracked.files})</button>`);
   }
+  fixActions.push(`<button class="btn xs" onclick="storageRepairMetadata()">🖼 ${t('storRepairThumbs')}</button>`);
   fixActions.push(`<button class="btn xs" onclick="closeStorageBreakdown();openAutoOrganize()">✨ ${t('aoTitle')}</button>`);
   const actionsHTML = `<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap" id="storage-fix-actions">${fixActions.join('')}</div>`;
 
@@ -12639,6 +12690,19 @@ function onUpdateBannerLater() {
 // live in that one place. Also: a body-level mousedown handler below
 // drops focus from stuck input fields so Space/arrows work after the
 // very first click outside the URL field.)
+// v0.2.7: tiny mousedown handler that records where on a primary button
+// the user clicked, so the ::before ripple in CSS originates there
+// instead of the geometric center. Composite-only — no DOM injection.
+(function installPrimaryButtonRipple(){
+  document.addEventListener('mousedown', (e) => {
+    const t = e.target && e.target.closest && e.target.closest('.btn.pri');
+    if (!t || t.disabled) return;
+    const r = t.getBoundingClientRect();
+    t.style.setProperty('--ripple-x', ((e.clientX - r.left) / r.width * 100) + '%');
+    t.style.setProperty('--ripple-y', ((e.clientY - r.top)  / r.height * 100) + '%');
+  }, true);
+})();
+
 (function installInputBlurOnOutsideClick(){
   document.addEventListener('mousedown', (e) => {
     const ae = document.activeElement;

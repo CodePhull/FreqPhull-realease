@@ -1007,7 +1007,19 @@ app.post('/history/:id/user-notes', (req, res) => {
   dbRun('UPDATE history SET user_notes=? WHERE id=?', [notes, id]);
   res.json({ ok: true });
 });
-app.get('/history',  (_, res) => res.json(dbAll('SELECT * FROM history ORDER BY created_at DESC LIMIT 500')));
+// History fetch — no fixed cap (v0.2.7 fix). The old LIMIT 500 was
+// silently hiding older rows; users with bigger libraries thought
+// their downloads had vanished. We still apply an optional ?limit=N
+// query param for callers that want a slice, AND a safety ceiling
+// of 50,000 to prevent a runaway response if the DB ever balloons
+// to insane sizes. At 50k rows the JSON is ~50 MB on localhost —
+// the renderer's rAF-coalesced render (v0.2.5) handles bursts fine,
+// but render time scales with row count so we keep an escape hatch.
+app.get('/history', (req, res) => {
+  const rawLimit = req.query && req.query.limit;
+  const limit = rawLimit ? Math.max(1, Math.min(50000, parseInt(rawLimit, 10) || 50000)) : 50000;
+  res.json(dbAll('SELECT * FROM history ORDER BY created_at DESC LIMIT ' + limit));
+});
 
 // ── Duplicate detection via perceptual audio hash ───────────────────────
 // Walks all history rows that have an audio_hash, groups them by hamming
@@ -3146,6 +3158,105 @@ app.get('/tracks/:id/similar', (req, res) => {
     slog('similar failed: ' + e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+
+// ════════════════════════════════════════════════════════════════════
+// /history/repair-metadata (v0.2.7)
+// ════════════════════════════════════════════════════════════════════
+// Fills in missing duration + thumbnail for rows adopted by the watch
+// folder BEFORE v0.2.5's duplicate-prevention. Two strategies:
+//
+//   1. Twin merge - if there's another history row with the same
+//      BASENAME that DOES have a thumbnail and duration (the YouTube
+//      download original), copy those fields to the broken row. Files
+//      moved into stockpile folders keep their filename, so the twin
+//      pair is easy to spot.
+//
+//   2. ffprobe fallback - for rows with no twin (or where the twin is
+//      also blank), shell out to ffprobe and read duration from the
+//      actual file. No thumbnail recovery here (we have no source) but
+//      at least the row stops showing "-" for duration.
+//
+// Dry-run by default so the UI can preview the affected count first.
+app.post('/history/repair-metadata', (req, res) => {
+  const confirmDo = !!(req.body && req.body.confirm);
+  const ffprobeBin = bin('ffprobe');
+
+  const broken = dbAll(
+    "SELECT id, title, file_path, duration, thumbnail FROM history " +
+    "WHERE file_path IS NOT NULL " +
+    "AND (duration IS NULL OR thumbnail IS NULL OR thumbnail = '')");
+
+  if (!broken.length) {
+    return res.json({ ok: true, dry_run: !confirmDo, affected: 0, twin_merge: 0, ffprobe: 0 });
+  }
+
+  let twinMerged = 0, ffprobed = 0, failed = 0;
+  const plan = [];
+  const winLike = (process.platform === 'win32');
+
+  for (const row of broken) {
+    if (!fs.existsSync(row.file_path)) { failed++; continue; }
+    const base = path.basename(row.file_path);
+    const escapedBase = base.replace(/[%_\\\\]/g, ch => '\\\\' + ch);
+
+    // Strategy 1: twin merge
+    const twinSql = "SELECT id, duration, thumbnail FROM history " +
+      "WHERE id != ? " +
+      "AND duration IS NOT NULL " +
+      "AND thumbnail IS NOT NULL AND thumbnail != '' " +
+      "AND " + (winLike ? "LOWER(file_path) LIKE LOWER(?) ESCAPE '\\\\'"
+                        : "file_path LIKE ? ESCAPE '\\\\'") +
+      " LIMIT 1";
+    const twin = dbAll(twinSql, [row.id, '%' + escapedBase + '%']);
+    if (twin.length) {
+      plan.push({ id: row.id, source: 'twin', dur: twin[0].duration, thumb: twin[0].thumbnail });
+      twinMerged++;
+      continue;
+    }
+
+    // Strategy 2: ffprobe (only if confirmed - it's an out-of-process
+    // call per row, slow on large lists. Dry-run just counts them.)
+    if (confirmDo) {
+      try {
+        const out = require('child_process').execFileSync(ffprobeBin,
+          ['-v', 'quiet', '-print_format', 'json', '-show_format', row.file_path],
+          { timeout: 8000, windowsHide: true }).toString();
+        const j = JSON.parse(out);
+        const dur = j && j.format && parseFloat(j.format.duration);
+        if (dur && isFinite(dur)) {
+          plan.push({ id: row.id, source: 'ffprobe', dur, thumb: null });
+          ffprobed++;
+          continue;
+        }
+      } catch (e) {
+        slog('repair-metadata ffprobe id=' + row.id + ' failed: ' + e.message);
+      }
+      failed++;
+    } else {
+      ffprobed++;
+    }
+  }
+
+  if (!confirmDo) {
+    return res.json({ ok: true, dry_run: true,
+      affected: twinMerged + ffprobed, twin_merge: twinMerged, ffprobe: ffprobed });
+  }
+
+  for (const p of plan) {
+    if (p.thumb !== null && p.thumb !== undefined) {
+      dbRun("UPDATE history SET duration=COALESCE(duration,?), thumbnail=COALESCE(NULLIF(thumbnail,''),?) WHERE id=?",
+        [p.dur, p.thumb, p.id]);
+    } else {
+      dbRun("UPDATE history SET duration=COALESCE(duration,?) WHERE id=?", [p.dur, p.id]);
+    }
+  }
+  saveDB();
+  broadcastEvent('history-changed', { reason: 'repair-metadata' });
+  slog('repair-metadata: twin=' + twinMerged + ' ffprobe=' + ffprobed + ' failed=' + failed);
+  res.json({ ok: true, dry_run: false, affected: plan.length,
+    twin_merge: twinMerged, ffprobe: ffprobed, failed });
 });
 
 
