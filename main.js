@@ -4,6 +4,84 @@ const fs    = require('fs');
 const { fork } = require('child_process');
 const { setupUpdater } = require('./updater.js');
 
+// v0.2.8: branded standalone updater window. Replaces the inline banner
+// for users who want the dedicated experience. The banner still works
+// (small, non-intrusive); this is opened either programmatically when
+// an update arrives, or when the renderer asks via 'updater:openWindow'.
+let updaterWindow = null;
+function openUpdaterWindow(initialState) {
+  if (updaterWindow && !updaterWindow.isDestroyed()) {
+    try { updaterWindow.focus(); updaterWindow.show(); } catch {}
+    if (initialState) updaterWindow.webContents.send('updater-state', initialState);
+    return updaterWindow;
+  }
+  // v0.3.0: when initialState.installing is true we open this as a
+  // takeover screen — bigger, no minimize/close, always on top so the
+  // user never accidentally focuses the main window during the quit.
+  const isInstalling = !!(initialState && initialState.installing);
+  updaterWindow = new BrowserWindow({
+    width: isInstalling ? 720 : 620,
+    height: isInstalling ? 520 : 720,
+    minWidth: 540, minHeight: 480,
+    resizable: !isInstalling, minimizable: !isInstalling, maximizable: false,
+    closable: !isInstalling,    // can't close mid-install
+    alwaysOnTop: isInstalling,
+    center: true,
+    show: false, frame: false, titleBarStyle: 'hidden',
+    backgroundColor: '#0a0a0a', icon: 'assets/icon.ico',
+    webPreferences: {
+      preload: require('path').join(__dirname, 'updater-preload.js'),
+      contextIsolation: true, nodeIntegration: false, sandbox: false,
+    },
+  });
+  updaterWindow.removeMenu();
+  updaterWindow.loadFile('renderer/updater/updater.html');
+  updaterWindow.once('ready-to-show', () => {
+    try { updaterWindow.show(); } catch {}
+    if (initialState) {
+      // v0.3.0: special pass-through for installing mode
+      if (initialState.installing) {
+        updaterWindow.webContents.send('updater-state', {
+          phase: 'installing',
+          update: initialState.version || '?',
+        });
+      } else {
+        updaterWindow.webContents.send('updater-state', initialState);
+      }
+    }
+  });
+  updaterWindow.on('closed', () => { updaterWindow = null; });
+  return updaterWindow;
+}
+ipcMain.handle('updater:openWindow', (_e, initial) => {
+  openUpdaterWindow(initial);
+  return { ok: true };
+});
+ipcMain.on('updater-window-close', () => {
+  if (updaterWindow && !updaterWindow.isDestroyed()) { try { updaterWindow.close(); } catch {} }
+});
+ipcMain.on('updater-window-minimize', () => {
+  if (updaterWindow && !updaterWindow.isDestroyed()) { try { updaterWindow.minimize(); } catch {} }
+});
+ipcMain.on('updater-window-install', () => {
+  // Forward to the main updater autoUpdater (registered via setupUpdater)
+  const { autoUpdater } = require('electron-updater');
+  try { autoUpdater.quitAndInstall(false, true); } catch (e) { log('[updater-window] install failed: ' + e.message); }
+});
+ipcMain.on('updater-window-ready', () => {
+  // The renderer is ready; ask updater.js for the latest snapshot via
+  // its existing getPending IPC. If the autoUpdater already broadcast,
+  // the renderer in updater-preload.js will translate the events.
+});
+
+// Bridge: forward main-process updater events to the updater window if open
+function _fwdToUpdater(state) {
+  if (updaterWindow && !updaterWindow.isDestroyed()) {
+    try { updaterWindow.webContents.send('updater-state', state); } catch {}
+  }
+}
+ipcMain.handle('updater:bridge-state', (_e, state) => { _fwdToUpdater(state); return { ok: true }; });
+
 let mainWindow, backendProcess, backendReady = false;
 let logFile = null;
 let tray = null;
@@ -34,13 +112,46 @@ function setupLog() {
   log('isPackaged: ' + app.isPackaged);
 }
 
+// v0.2.8 hotfix: same EPIPE-safety as server.js's slog. The main
+// process logs through console.log, which throws EPIPE if Electron's
+// stdout is closed (rare but happens during quit/relaunch sequences,
+// or when the parent process detached after spawning). Without this
+// guard a single throw kills the main process - which kills the whole
+// app, including the in-flight update install.
+let _mainStdoutDead = false;
 function log(msg) {
-  const line = '[' + new Date().toISOString() + '] ' + msg;
-  console.log(line);
+  let line;
+  try { line = '[' + new Date().toISOString() + '] ' + msg; }
+  catch { line = '[' + new Date().toISOString() + '] <unprintable>'; }
+  if (!_mainStdoutDead) {
+    try { console.log(line); }
+    catch (e) {
+      if (e && e.code === 'EPIPE') _mainStdoutDead = true;
+      // Any other error: ignore. The on-disk log is the durable record.
+    }
+  }
   if (logFile) {
     try { fs.appendFileSync(logFile, line + '\n'); } catch {}
   }
 }
+process.stdout.on('error', (e) => { if (e && e.code === 'EPIPE') _mainStdoutDead = true; });
+process.stderr.on('error', (e) => { if (e && e.code === 'EPIPE') _mainStdoutDead = true; });
+// Global handlers - main.js had NONE before, meaning any unhandled
+// exception silently killed the entire app (including kicking the user
+// out of a download or update install). Now: log it, keep running.
+// EPIPE filtered to prevent the feedback loop that hosed server.js.
+process.on('uncaughtException', (e) => {
+  try {
+    if (e && e.code === 'EPIPE') { _mainStdoutDead = true; return; }
+    log('[main] UNCAUGHT: ' + (e && e.message) + '\n' + (e && e.stack));
+  } catch {}
+});
+process.on('unhandledRejection', (e) => {
+  try {
+    if (e && e.code === 'EPIPE') { _mainStdoutDead = true; return; }
+    log('[main] UNHANDLED REJECTION: ' + (e && (e.message || e)));
+  } catch {}
+});
 
 // ── Check if launched with --background flag ──────────────────────────────────
 const launchMinimized = process.argv.includes('--background') || process.argv.includes('--tray');

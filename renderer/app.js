@@ -4765,15 +4765,12 @@ function requestRenderHistory(){
 // synchronous render can still call _renderHistoryImpl() directly.
 function renderHistory() { requestRenderHistory(); }
 
-// v0.2.8: HK-logo fallback as inline SVG. Used whenever a thumbnail URL
-// is missing OR fails to load. Generated once at module load; cheap.
-const HK_FALLBACK_THUMB = 'data:image/svg+xml;base64,' + btoa(
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">' +
-  '<rect width="100" height="100" fill="#161616"/>' +
-  '<g transform="translate(50,50)" fill="none" stroke="#3a3a3a" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">' +
-  '<path d="M -22 -22 L -22 22 M -22 0 L 4 0 M 4 -22 L 4 22 M 4 0 L 22 -22 M 4 0 L 22 22"/>' +
-  '</g></svg>'
-);
+// v0.2.9: real Hood Knights gothic HK monogram as the fallback thumb.
+// PNG composite (256x256, dark tile + desaturated brand mark at 45%
+// alpha) encoded as base64 so it lives entirely in the JS bundle —
+// no network request, no file path resolution, decodes once and the
+// browser caches the bitmap for every row that uses it. ~10 KB total.
+const HK_FALLBACK_THUMB = 'data:image/png;base64,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';
 
 function resolveThumb(url) {
   if (!url || typeof url !== 'string') return HK_FALLBACK_THUMB;
@@ -4910,7 +4907,7 @@ function _renderHistoryImpl(){
     // by the cleanup pass below so subsequent re-renders don't re-flash.
     const isNew = prevSeenHistId > 0 && (h.id || 0) > prevSeenHistId;
     const pulseClass = isNew ? ' row-pulse' : '';
-    return `<div class="${rowClass}${pulseClass}" data-id="${h.id}"${rowTitle} ${onclick} draggable="true" ondragstart="dragHistoryRowToExternal(event, ${h.id})">${checkbox}${playBtn}<img class="hist-thumb" loading="lazy" decoding="async" src="${resolveThumb(h.thumbnail)}" onerror="window._thumbFail(this)" alt=""/>${favBtn}<div class="hist-info"><div class="hist-title">${h.title||'(untitled)'}</div><div class="hist-meta">${[h.channel,h.created_at?.slice(0,16),fmtSec(h.duration)].filter(Boolean).join(' · ')}</div>${tagStrip}</div><div class="hist-badges">${h.bpm?`<span class="badge bpm">${Math.round(h.bpm)} BPM</span>`:''}${h.key_note?`<span class="badge key">${h.key_note} ${h.key_mode||''}</span>`:''}${h.format?`<span class="badge">${h.format.toUpperCase()}</span>`:''}</div>${selectMode?'':`<button class="btn xs" tabindex="-1" onmousedown="this.blur()" onclick="event.stopPropagation();openSimilarTracks(${h.id});this.blur()" title="${t('simBtn')}">≈</button><button class="btn xs danger" onclick="event.stopPropagation();deleteHistory(${h.id})">Remove</button>`}</div>`;
+    return `<div class="${rowClass}${pulseClass}" data-id="${h.id}"${rowTitle} ${onclick} draggable="true" ondragstart="dragHistoryRowToExternal(event, ${h.id})">${checkbox}${playBtn}<img class="hist-thumb" loading="lazy" decoding="async" src="${resolveThumb(h.thumbnail)}" onerror="window._thumbFail(this)" alt=""/>${favBtn}<div class="hist-info"><div class="hist-title">${h.title||'(untitled)'}</div><div class="hist-meta">${[h.channel,h.created_at?.slice(0,16),fmtSec(h.duration)].filter(Boolean).join(' · ')}</div>${tagStrip}</div><div class="hist-badges">${h.bpm?`<span class="badge bpm">${Math.round(h.bpm)} BPM</span>`:''}${h.key_note?`<span class="badge key">${h.key_note} ${h.key_mode||''}</span>`:''}${h.format?`<span class="badge">${h.format.toUpperCase()}</span>`:''}</div>${selectMode?`<button class="btn xs danger" onclick="event.stopPropagation();deleteHistory(${h.id})">${t('histRemove')}</button>`:`<button class="btn xs" tabindex="-1" onmousedown="this.blur()" onclick="event.stopPropagation();openSimilarTracks(${h.id});this.blur()" title="${t('simBtn')}">≈</button>`}</div>`;
   } // end buildHistoryRowHTML
 
   // Build a fingerprint for each row so we can detect which ones
@@ -5965,7 +5962,12 @@ async function toggleHardwareAcceleration(checked) {
 }
 
 // ── Extension repo link + how-to modal (v0.2.8) ────────────────────
-const EXT_REPO_URL = 'https://github.com/CodePhull/FreqPhull-realease/tree/main/freqpull-ext';
+// v0.2.9: corrected — the extension folder doesn't live on /tree/main.
+// It's published as a .zip on the Releases page (per the repo README).
+// "Open repo" goes to the Releases page so users can download the latest
+// version immediately.
+const EXT_REPO_URL = 'https://github.com/CodePhull/FreqPhull-realease/releases';
+const EXT_REPO_ROOT = 'https://github.com/CodePhull/FreqPhull-realease';
 function openExtensionPage() {
   if (window.api && window.api.openExternal) window.api.openExternal(EXT_REPO_URL);
   else window.open(EXT_REPO_URL, '_blank');
@@ -8684,6 +8686,11 @@ function stepToHuman(step) {
 
 const T = {
   en: {
+    // ── v0.2.9: row-level Remove (only in select mode now) ──
+    histRemove:'Remove',
+
+    // ── v0.2.8: branded updater window button ──
+
     // ── v0.2.8: hardware acceleration ──
     hwAccelName:'Hardware acceleration',
     hwAccelDesc:"Uses the GPU for rendering, animations, and the analyzer canvases. Recommended ON for most users. Turn OFF only if you see graphical glitches, white flashes, or your laptop's fan ramps up just from idle scrolling - some integrated GPUs handle Electron poorly. Requires an app restart to take effect.",
@@ -8702,14 +8709,14 @@ const T = {
     extHowToTitle:'Install the browser extension',
     extHowToSub:'Chrome, Edge, Brave, Opera, Arc - any Chromium-based browser. 1 minute setup.',
     extHowToStep1Title:'Download the extension folder',
-    extHowToStep1Desc:'Open the repo and download the freqpull-ext folder as a ZIP, then unzip it somewhere you will not move it from (Documents works fine).',
-    extHowToStep1Btn:'Open GitHub repo',
+    extHowToStep1Desc:'Open the Releases page and download the latest freqpull-ext zip, then unzip it somewhere you will not move it from (Documents works fine).',
+    extHowToStep1Btn:'Open Releases page',
     extHowToStep2Title:'Open your extensions page',
     extHowToStep2Desc:'Paste this in your browser address bar and hit Enter:',
     extHowToStep3Title:'Enable Developer mode',
     extHowToStep3Desc:'Top-right toggle on the extensions page. This lets you install local extensions; you only need to do it once.',
     extHowToStep4Title:'Click "Load unpacked"',
-    extHowToStep4Desc:'Button appears once Developer mode is on. Select the freqpull-ext folder you unzipped in step 1.',
+    extHowToStep4Desc:'Button appears once Developer mode is on. Select the folder you unzipped in step 1 (the one with manifest.json inside).',
     extHowToStep5Title:'Pin and use',
     extHowToStep5Desc:'Click the puzzle-piece icon in your browser toolbar, then the pin next to Freq.Phull. The extension panel will open beside any YouTube video; press Grab to send it to the app.',
     extHowToTip:'Tip: keep Freq.Phull desktop running. The extension talks to it on 127.0.0.1:47891 - downloads land in your library automatically.',
@@ -9053,7 +9060,7 @@ const T = {
     tapHint:'tap at least 4 times', reset:'Reset',
     // History tab
     histTitle:'History', histSub:'Every track downloaded — BPM and key saved automatically',
-    searchTracks:'Search tracks…', select:'☐ Select', cancel:'✕ Cancel',
+    searchTracks:'Search tracks…', select:'Select', cancel:'✕ Cancel',
     selectAll:'Select All', selected:'selected',
     toStockpile:'📦 To Stockpile', moveTo:'📁 Move to…',
     stockpile:'Stockpile', stockpileNotSet:'Not set — click to choose',
@@ -9099,6 +9106,11 @@ const T = {
     close:'Close', by:'by', save:'Save', delete:'Delete',
   },
   fr: {
+    // ── v0.2.9: Bouton Supprimer par ligne (mode selection uniquement) ──
+    histRemove:'Supprimer',
+
+    // ── v0.2.8: bouton fenetre de mise a jour ──
+
     // ── v0.2.8: acceleration materielle ──
     hwAccelName:'Acceleration materielle',
     hwAccelDesc:"Utilise le GPU pour le rendu, les animations et les canvas de l'analyseur. Recommande ACTIVE pour la plupart des utilisateurs. Desactivez uniquement si vous voyez des artefacts graphiques, des flashs blancs, ou si le ventilateur de votre ordinateur s'emballe juste en faisant defiler la page - certains GPU integres gerent mal Electron. Un redemarrage de l'application est requis.",
@@ -9117,14 +9129,14 @@ const T = {
     extHowToTitle:'Installer l\'extension de navigateur',
     extHowToSub:'Chrome, Edge, Brave, Opera, Arc - tout navigateur base sur Chromium. Installation en 1 minute.',
     extHowToStep1Title:'Telechargez le dossier de l\'extension',
-    extHowToStep1Desc:'Ouvrez le depot et telechargez le dossier freqpull-ext en ZIP, puis decompressez-le quelque part ou vous ne le deplacerez pas (Documents convient).',
-    extHowToStep1Btn:'Ouvrir le depot GitHub',
+    extHowToStep1Desc:'Ouvrez la page Releases et telechargez le dernier zip freqpull-ext, puis decompressez-le quelque part ou vous ne le deplacerez pas (Documents convient).',
+    extHowToStep1Btn:'Ouvrir les Releases',
     extHowToStep2Title:'Ouvrez votre page d\'extensions',
     extHowToStep2Desc:'Collez ceci dans la barre d\'adresse de votre navigateur et appuyez sur Entree :',
     extHowToStep3Title:'Activez le Mode developpeur',
     extHowToStep3Desc:'Bascule en haut a droite de la page des extensions. Permet d\'installer des extensions locales ; a faire une seule fois.',
     extHowToStep4Title:'Cliquez sur "Charger l\'extension non empaquetee"',
-    extHowToStep4Desc:'Le bouton apparait une fois le Mode developpeur active. Selectionnez le dossier freqpull-ext decompresse a l\'etape 1.',
+    extHowToStep4Desc:'Le bouton apparait une fois le Mode developpeur active. Selectionnez le dossier decompresse a l\'etape 1 (celui qui contient manifest.json).',
     extHowToStep5Title:'Epinglez et utilisez',
     extHowToStep5Desc:'Cliquez sur l\'icone de piece de puzzle dans la barre d\'outils du navigateur, puis sur l\'epingle a cote de Freq.Phull. Le panneau de l\'extension s\'ouvrira a cote de toute video YouTube ; appuyez sur Grab pour l\'envoyer a l\'app.',
     extHowToTip:'Astuce : gardez Freq.Phull desktop ouvert. L\'extension communique avec sur 127.0.0.1:47891 - les telechargements arrivent automatiquement dans votre bibliotheque.',
@@ -9467,7 +9479,7 @@ const T = {
     tapHint:'tapez au moins 4 fois', reset:'Réinitialiser',
     // History tab
     histTitle:'Historique', histSub:'Toutes les pistes téléchargées — BPM et tonalité enregistrés automatiquement',
-    searchTracks:'Rechercher des pistes…', select:'☐ Sélectionner', cancel:'✕ Annuler',
+    searchTracks:'Rechercher des pistes…', select:'Sélectionner', cancel:'✕ Annuler',
     selectAll:'Tout sélectionner', selected:'sélectionnée(s)',
     toStockpile:'📦 Vers le stockage', moveTo:'📁 Déplacer vers…',
     stockpile:'Stockage', stockpileNotSet:'Non défini — cliquez pour choisir',
@@ -9793,6 +9805,7 @@ function renderSettings() {
       </div>
       <button class="btn sm" id="btn-ytdlp-update" onclick="manualUpdateYtdlp()">⬆ ${t('btnCheckNow')}</button>
     </div>
+
     <div class="setting-row">
       <div class="setting-info">
         <div class="setting-name">${t('cpuOnlyName')}</div>
@@ -12809,6 +12822,7 @@ function _setupUpdater() {
   // Update available → switch to AVAILABLE state and surface the banner
   // (unless user already dismissed for this session).
   window.api.updater.onAvailable(info => {
+
     _updateInfo = info;
     _updateState = 'AVAILABLE';
     if (!_updateDismissedSession) _showUpdateBanner();
@@ -12983,9 +12997,24 @@ async function onUpdateBannerPrimary() {
       _renderUpdateBanner();
     }
   } else if (_updateState === 'READY') {
-    // User wants to install now → main process quits + installs + restarts.
-    // This is point of no return; the app will disappear in a moment.
+    // v0.3.0: branded install handoff. Instead of calling install()
+    // directly (which would surrender the screen to NSIS), we open
+    // the HK updater window in INSTALLING state first. It shows a
+    // full-screen branded "installing update X.X.X..." overlay with
+    // a progress indicator. Once that window is visible we ask main
+    // process to call quitAndInstall() — which (with oneClick: true)
+    // runs NSIS silently in the background. The branded window stays
+    // up until the app quits, so the user never sees a Windows
+    // wizard dialog. They see HK branding → app reappears on new
+    // version. Clean handoff.
     try {
+      if (window.api.updater.openWindow) {
+        await window.api.updater.openWindow({ installing: true, version: _updateInfo && _updateInfo.version });
+        // Tiny delay so the window is ready-to-show before we tell
+        // electron-updater to quit + install. Without this beat, the
+        // app sometimes quits before the BrowserWindow has rendered.
+        await new Promise(r => setTimeout(r, 250));
+      }
       await window.api.updater.install();
     } catch (e) {
       if (typeof showAppNotification === 'function') {
@@ -13026,6 +13055,42 @@ function onUpdateBannerLater() {
     t.style.setProperty('--ripple-x', ((e.clientX - r.left) / r.width * 100) + '%');
     t.style.setProperty('--ripple-y', ((e.clientY - r.top)  / r.height * 100) + '%');
   }, { capture: true, passive: true });
+})();
+
+// v0.3.0: Back-to-top floating button. Observes scroll on #main and
+// toggles a .show class past 400px. Click smooth-scrolls to top.
+// Reduced-motion users get an instant jump.
+(function installBackToTopButton(){
+  const btn = document.getElementById('back-to-top');
+  const main = document.getElementById('main');
+  if (!btn || !main) return;
+  const THRESHOLD = 400;
+  let visible = false;
+  // rAF-throttle so high-frequency wheel events don't thrash the class
+  let queued = false;
+  function check(){
+    queued = false;
+    const should = main.scrollTop > THRESHOLD;
+    if (should !== visible) {
+      visible = should;
+      btn.classList.toggle('show', visible);
+    }
+  }
+  main.addEventListener('scroll', () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(check);
+  }, { passive: true });
+  btn.addEventListener('click', () => {
+    const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    try {
+      main.scrollTo({ top: 0, behavior: reduce ? 'auto' : 'smooth' });
+    } catch {
+      main.scrollTop = 0;
+    }
+    // Move focus to skip-link / main so screen readers announce arrival
+    try { main.focus({ preventScroll: true }); } catch {}
+  });
 })();
 
 (function installInputBlurOnOutsideClick(){

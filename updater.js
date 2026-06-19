@@ -40,6 +40,53 @@ function send(channel, payload) {
   if (mainWin && !mainWin.isDestroyed() && mainWin.webContents) {
     try { mainWin.webContents.send(channel, payload); } catch {}
   }
+  // v0.2.8: also forward to the branded updater window if open.
+  try { bridgeToUpdaterWindow(channel, payload); } catch {}
+}
+
+// Translate the autoUpdater IPC channels into the dedicated updater
+// window's state vocabulary (checking/none/available/downloading/ready)
+// and push directly to the updater window. Decoupled from the main
+// renderer's banner so the two UIs can coexist.
+function bridgeToUpdaterWindow(channel, payload) {
+  const { BrowserWindow, app } = require('electron');
+  const installed = app.getVersion();
+  let phase = null;
+  let extra = {};
+  if (channel === 'checking-for-update') phase = 'checking';
+  else if (channel === 'update-available') {
+    phase = 'available';
+    extra.update = (payload && payload.version) || '?';
+    let notes = (payload && payload.releaseNotes) || '';
+    if (typeof notes === 'string') {
+      const items = notes.split(/\r?\n/).map(s => s.replace(/^[-*\s]+/, '').trim()).filter(Boolean).slice(0, 12);
+      extra.notes = items.length ? items : [notes];
+    } else if (Array.isArray(notes)) {
+      extra.notes = notes.flat().map(n => (n && n.note) || n).filter(Boolean).slice(0, 12);
+    }
+  }
+  else if (channel === 'update-not-available') { phase = 'none'; extra.update = installed; }
+  else if (channel === 'download-progress') {
+    phase = 'downloading';
+    extra.progress = (payload && payload.percent) || 0;
+    extra.speed = (payload && payload.bytesPerSecond) || 0;
+  }
+  else if (channel === 'update-downloaded') {
+    phase = 'ready';
+    extra.update = (payload && payload.version) || '?';
+  }
+  if (phase === null) return;
+  const state = Object.assign({ installed, phase }, extra);
+  for (const w of BrowserWindow.getAllWindows()) {
+    try {
+      if (!w.isDestroyed() && w.webContents) {
+        const url = w.webContents.getURL();
+        if (url && url.indexOf('updater.html') !== -1) {
+          w.webContents.send('updater-state', state);
+        }
+      }
+    } catch {}
+  }
 }
 
 function setupUpdater(opts) {

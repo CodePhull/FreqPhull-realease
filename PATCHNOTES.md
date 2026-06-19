@@ -9,7 +9,63 @@ along the way.
 
 ---
 
+## v0.3.0 (2026-06-19)
+
+**Branded updater now fronts the install-restart sequence (the actual ask)**
+- v0.2.8 misread the request and built the branded updater as a Settings-launched preview window. That entry point is gone. The branded window now appears at the **exact moment that used to show a Windows-y "1988 wizard"** — between the user clicking INSTALL NOW and the app quitting to relaunch on the new version.
+- Flow: Update banner -> INSTALL NOW -> branded HK takeover window opens (720x520, `alwaysOnTop`, `closable:false`, no minimize) -> 250ms beat so it's actually visible -> `autoUpdater.quitAndInstall(false, true)` runs silent NSIS in the background -> app relaunches on new version. The user never sees a Windows dialog.
+- Takeover screen shows: pulsing HK monogram tile, big "INSTALLING UPDATE" title in Bebas Neue, version subtitle, indeterminate progress shimmer, and "PLEASE DO NOT CLOSE THIS WINDOW" hint. Fully translated EN/FR. Honors `prefers-reduced-motion`.
+- Removed: Settings "Open updater" row, the `openBrandedUpdaterFromSettings` helper, and the auto-open-on-update-available behavior (the existing corner banner stays as the "an update is available" surface — it's small and unobtrusive, which is what users want for the *notification*; the full branded window is reserved for the *install moment*).
+
+**Back-to-top arrow on History (accessibility)**
+- Floating button bottom-right of #main, fades in past 400px scroll. Click smooth-scrolls to top; reduced-motion users get an instant jump. Sits at `bottom:96px` so it's always above the mini player without overlap. Proper `aria-label="Back to top"`, keyboard-focusable, focus ring meets WCAG contrast. Scroll observation is `passive: true` + rAF-throttled so it doesn't thrash on high-DPI wheel events.
+
+
+## v0.2.9 (2026-06-19)
+
+**Remove button hidden outside Select mode**
+- Row layout is cleaner now: in normal browsing mode every row shows play, thumb, info, badges, and the similar (≈) button — no Remove. Remove appears only when Select mode is active, so it's there when you're actually about to delete things. Stops cluttering the right edge during normal scrolling.
+
+**Cleaner Select button**
+- Dropped the empty-checkbox glyph that was sitting next to "Select" (looked like a tiny outlined square; the user called it "ugly", they were right). Plain "Select" text now. The i18n strings lost their leading "☐" too.
+
+**Real HK monogram as the fallback thumbnail**
+- Previous fallback was a crude line drawing of "HK" in stroke. Replaced with the actual gothic Hood Knights brand mark from `assets/hk-logo.png`, composited onto a 256x256 dark tile at 45% alpha so it reads as a quiet placeholder rather than shouting brand on every empty row. Encoded as base64 PNG inside the JS bundle (~10 KB) so there's no network request, no file resolution, and the browser caches one decoded bitmap that every row reuses.
+
+**Extension repo link fixed**
+- `https://github.com/CodePhull/FreqPhull-realease/tree/main/freqpull-ext` was 404ing — that folder doesn't live on the main branch. The extension is published as a .zip on the Releases page (per the repo README). All references updated:
+  - Settings -> "Open page" button now goes to `/releases`
+  - "How to install" step 1 text updated to "Open the Releases page and download the latest freqpull-ext zip" (EN + FR)
+  - Step 1 button label flipped from "Open GitHub repo" to "Open Releases page"
+  - Step 4 description tweaked since users now extract a versioned zip
+- Extension self-update check also fixed (was polling `/commits?path=freqpull-ext` which 404'd) — now polls `/releases/latest` and tracks the release tag instead of a commit SHA. Banner shows the tag name instead of the SHA short hash.
+
+
 ## v0.2.8 (2026-06-18)
+
+**Notifications: monochrome polish**
+- Toasts redesigned to feel less "popup ad" and more "product chrome":
+  - Removed every bright color washes from `ok`/`info`/`warn` — they share the same UI-white left accent line, white-tinted icon bubble, and white progress strip as the rest of the app.
+  - `err` is the only type that keeps a color (`#ff5e5e` red) so failures still stand out instantly — same intent as the rest of the interface (red is reserved for "something is wrong").
+  - Background now has a subtle internal gradient sheen (top-to-transparent rgba white at 2.2%) instead of a flat tile — catches light without adding chroma.
+  - Drop shadow deepened slightly (12px -> 16px on hover) and gains an inset black ring for the floating glass feel.
+  - Spring entry softened: 380ms ease-out-quart with a slight scale-from-0.985, no aggressive overshoot. Hover lifts the surface with a quick background brightness bump and tighter shadow.
+  - Exit collapses with a 32px drift right + scale-down so the stack reflow looks smooth, not snappy.
+  - Icon glyphs (check / cross / i / triangle) carry the type recognition load now that color isn't doing it.
+
+**Branded updater window restored**
+- The screenshot the user had been showing (HK logo, "FREQ.PHULL Updater" header, big "SOFTWARE UPDATE" title, EN/FR toggle, INSTALLED → THIS UPDATE version cards with arrow, status badge, WHAT'S NEW section, INSTALL NOW / CLOSE buttons) wasn't in the codebase anywhere — somewhere along the way it had been lost. Rebuilt as a dedicated 620x720 frameless BrowserWindow with full HK styling, drag-to-move topbar, EN/FR language toggle, bundled Bebas Neue font (no network dep), composite-only hover animations.
+- Bridge between `updater.js` and the new window: every autoUpdater event (`checking-for-update`, `update-available`, `update-not-available`, `download-progress`, `update-downloaded`) gets translated into the window's state vocabulary (`checking`/`none`/`available`/`downloading`/`ready`) and pushed via `webContents.send`. Release notes get split into bullet items for the "WHAT'S NEW" list. Progress bar with speed (MB/s) during download.
+- Auto-opens once when an update is detected. Also available manually from a new Settings row ("🔔 Open updater"). Window closes with the existing in-app banner still working in parallel for users who prefer that.
+- Install button calls `autoUpdater.quitAndInstall(false, true)` — same code path as the banner, so the actual NSIS install step (already `oneClick: true` since v0.2.8) takes over silently. End-to-end: branded window → progress bar → small NSIS progress dialog → app relaunches. No 1988 wizard at any step.
+
+**Main process hardened against EPIPE too**
+- Same audit applied to `main.js` which had the IDENTICAL vulnerability: `log()` called `console.log()` unguarded, and there was NO `uncaughtException` handler at all (any thrown error silently killed the entire app, including the in-flight update install). Now: wrapped `console.log` in try/catch with the dead-stream flag pattern, added `process.stdout.on('error')` and `process.stderr.on('error')` listeners, added global `uncaughtException` and `unhandledRejection` handlers that filter EPIPE specifically. The on-disk log path continues working when stdout is dead.
+
+**EPIPE feedback loop fixed**
+- Catastrophic server crash discovered post-release: when Electron closed our stdout pipe (window closed, app quitting), the next call to `slog()` threw EPIPE. The global `uncaughtException` handler caught it and called `slog()` again to log the error - which threw EPIPE again - which the handler caught - looping forever at ~5000 iterations per second, filling the on-disk log file until the process was killed. Several users had multi-gigabyte log files after a few seconds.
+- Three layers of fix: (1) `slog()` no longer calls `process.stdout.write` unguarded - wrapped in `_safeWrite()` which catches EPIPE and flags the stream dead so we don't bother trying again; (2) added stream-level `error` listeners on stdout/stderr so EPIPE errors that arrive asynchronously don't reach uncaughtException at all; (3) the uncaughtException handler now filters EPIPE errors and never tries to log their stack trace - it just marks the stream dead and returns. File logging path (which was already wrapped in try/catch) continues working, so logs are preserved on disk even when stdout is dead.
+- Smoke-tested: simulated a dead stdout by overriding `process.stdout.write` to throw EPIPE, called slog 5 times - no exceptions thrown, no recursion, all 5 messages reached the log file.
 
 **Hardware acceleration toggle**
 - New Settings row. Stored in a tiny `boot-flags.json` next to the app's userData, read SYNCHRONOUSLY at main.js startup before `app.ready` (which is when Electron requires `disableHardwareAcceleration()` to be called). Toggling pops a restart-now confirm; the change is invisible until restart so we make that explicit. Honors EN/FR.

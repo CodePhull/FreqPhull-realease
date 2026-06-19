@@ -87,27 +87,31 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 // Rate-limited generously (every 6h) so we stay well under GitHub's
 // 60 req/hr unauthenticated limit even with many concurrent users.
 
+// v4.3.1: switched from /commits?path=freqpull-ext (404'd — folder
+// doesn't live on the main branch) to /releases/latest which is the
+// actual extension publishing channel per the repo README. We track
+// the release tag instead of a commit SHA.
 const EXT_REPO_OWNER = 'CodePhull';
 const EXT_REPO_NAME  = 'FreqPhull-realease';
-const EXT_FOLDER     = 'freqpull-ext';
 const EXT_CHECK_INTERVAL_MS = 6 * 3600 * 1000;
-const EXT_CHECK_KEY_SHA  = 'extLatestSha';
-const EXT_CHECK_KEY_SEEN = 'extLastSeenSha';
+const EXT_CHECK_KEY_TAG  = 'extLatestTag';
+const EXT_CHECK_KEY_SEEN = 'extLastSeenTag';
 const EXT_CHECK_KEY_AT   = 'extLastCheckedAt';
 
 async function checkExtensionUpdates() {
   try {
     const url = 'https://api.github.com/repos/' + EXT_REPO_OWNER + '/' + EXT_REPO_NAME +
-                '/commits?path=' + encodeURIComponent(EXT_FOLDER) + '&per_page=1';
+                '/releases/latest';
     const r = await fetch(url, { headers: { 'Accept': 'application/vnd.github+json' } });
-    if (!r.ok) return; // rate-limited or transient — try next interval
-    const arr = await r.json();
-    if (!Array.isArray(arr) || !arr.length) return;
-    const latestSha = arr[0].sha;
-    const latestUrl = arr[0].html_url;
-    const latestMsg = (arr[0].commit && arr[0].commit.message || '').split('\n')[0].slice(0, 120);
+    if (!r.ok) return; // rate-limited, no release yet, or transient — retry next interval
+    const rel = await r.json();
+    if (!rel || !rel.tag_name) return;
+    const latestTag = rel.tag_name;
+    const latestUrl = rel.html_url ||
+      ('https://github.com/' + EXT_REPO_OWNER + '/' + EXT_REPO_NAME + '/releases');
+    const latestMsg = (rel.name || rel.tag_name || '').slice(0, 120);
     chrome.storage.local.set({
-      [EXT_CHECK_KEY_SHA]: latestSha,
+      [EXT_CHECK_KEY_TAG]: latestTag,
       extLatestUrl: latestUrl,
       extLatestMsg: latestMsg,
       [EXT_CHECK_KEY_AT]: Date.now(),

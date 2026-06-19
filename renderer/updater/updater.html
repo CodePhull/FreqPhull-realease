@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>Freq.Phull Updater</title>
+<style>
+  :root {
+    --bg:#0a0a0a; --bg2:#141414; --bg3:#1c1c1c; --bg4:#252525;
+    --white:#fff; --off:#e8e8e8; --muted:#9a9a9a; --hint:#666;
+    --border:#222; --border2:#2c2c2c; --accent:#7ed982;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--white);
+    font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,sans-serif;
+    -webkit-app-region:drag; user-select:none; overflow:hidden;
+    height:100vh; display:flex; flex-direction:column;
+  }
+  @font-face {
+    font-family:'Bebas Neue'; src:url('fonts/BebasNeue-Regular.woff2') format('woff2');
+    font-display:swap;
+  }
+  /* Topbar */
+  .topbar {
+    display:flex; align-items:center; gap:14px;
+    padding:10px 16px; background:var(--bg2);
+    border-bottom:1px solid var(--border);
+    flex-shrink:0;
+  }
+  .topbar-logo {
+    width:28px; height:28px; background:var(--white); color:var(--bg);
+    border-radius:6px; display:flex; align-items:center; justify-content:center;
+    font-family:'Bebas Neue','Oswald','Impact',sans-serif; font-size:18px; font-weight:700;
+    letter-spacing:0.5px;
+  }
+  .topbar-title {
+    font-family:'Bebas Neue','Oswald','Impact','Haettenschweiler','Arial Narrow',sans-serif;
+    font-size:18px; letter-spacing:2px; color:var(--white);
+  }
+  .topbar-sub { color:var(--muted); font-size:12px; margin-left:-4px; letter-spacing:0.5px; }
+  .topbar-spacer { flex:1; }
+  .topbar-btn {
+    -webkit-app-region:no-drag; cursor:pointer;
+    width:32px; height:24px; background:transparent; border:none;
+    color:var(--muted); font-size:14px; border-radius:4px;
+    transition:background 140ms, color 140ms;
+  }
+  .topbar-btn:hover{background:var(--bg3);color:var(--white)}
+  /* Body */
+  .body {
+    flex:1; overflow-y:auto; padding:32px 40px; -webkit-app-region:no-drag;
+    display:flex; flex-direction:column; align-items:center;
+  }
+  .lang-toggle {
+    display:flex; gap:0; background:var(--bg3); border-radius:6px;
+    padding:2px; margin-top:6px;
+  }
+  .lang-toggle button {
+    background:transparent; border:none; color:var(--muted); cursor:pointer;
+    padding:5px 14px; font-size:11px; font-weight:600; border-radius:4px;
+    letter-spacing:0.5px; transition:all 160ms;
+  }
+  .lang-toggle button.on { background:var(--white); color:var(--bg); }
+  .hero-title {
+    font-family:'Bebas Neue','Oswald','Anton','Impact','Haettenschweiler',sans-serif;
+    font-size:34px; letter-spacing:4px; margin:18px 0 8px;
+  }
+  .hero-sub {
+    color:var(--muted); font-size:14px; text-align:center;
+    margin-bottom:24px; max-width:420px; line-height:1.5;
+  }
+  /* Version cards */
+  .versions {
+    display:flex; align-items:center; gap:16px; margin:16px 0 22px;
+  }
+  .vcard {
+    background:var(--bg2); border:1px solid var(--border2); border-radius:8px;
+    padding:14px 28px; text-align:center; min-width:140px;
+  }
+  .vcard-label {
+    font-size:9px; letter-spacing:2px; color:var(--muted); margin-bottom:6px;
+  }
+  .vcard-num {
+    font-family:'Bebas Neue','Oswald','Anton','Impact',sans-serif;
+    font-size:30px; letter-spacing:2px;
+  }
+  .vcard.new .vcard-num { color:#6ab0ff; }
+  .varrow { color:var(--muted); font-size:18px; }
+  /* Status badge */
+  .status-badge {
+    display:inline-flex; align-items:center; gap:6px;
+    background:rgba(126,217,130,.1); border:1px solid rgba(126,217,130,.4);
+    color:var(--accent); padding:6px 14px; border-radius:14px;
+    font-size:11px; font-weight:600; letter-spacing:1px;
+  }
+  .status-badge.update {
+    background:rgba(106,176,255,.1); border-color:rgba(106,176,255,.4); color:#6ab0ff;
+  }
+  /* What's New */
+  .whats-new {
+    margin-top:32px; width:100%; max-width:540px;
+    background:var(--bg2); border:1px solid var(--border); border-radius:8px;
+    padding:16px;
+  }
+  .whats-new-title {
+    font-size:10px; letter-spacing:2px; color:var(--muted); margin-bottom:10px;
+  }
+  .whats-new-list {
+    list-style:none; padding:0; margin:0;
+    display:flex; flex-direction:column; gap:6px;
+  }
+  .whats-new-list li {
+    font-size:13px; color:var(--off); padding:6px 10px;
+    background:var(--bg3); border-radius:5px; line-height:1.4;
+    border-left:2px solid var(--bg4);
+  }
+  .whats-new-list li::before { content:"-> "; color:var(--muted); margin-right:4px; }
+  /* Footer */
+  .footer {
+    display:flex; gap:10px; padding:14px 20px;
+    background:var(--bg2); border-top:1px solid var(--border);
+    -webkit-app-region:no-drag; flex-shrink:0;
+  }
+  .footer button {
+    flex:1; padding:12px; border-radius:6px; font-size:13px; font-weight:600;
+    letter-spacing:1px; cursor:pointer; border:none;
+    transition:all 160ms cubic-bezier(.215,.61,.355,1);
+  }
+  .btn-primary { background:var(--white); color:var(--bg); }
+  .btn-primary:hover { background:#f0f0f0; transform:translateY(-1px); }
+  .btn-secondary {
+    background:var(--bg3); color:var(--off); border:1px solid var(--border2);
+  }
+  .btn-secondary:hover { background:var(--bg4); }
+  .progress-wrap {
+    width:100%; max-width:540px; margin-top:16px; display:none;
+  }
+  .progress-bar {
+    width:100%; height:6px; background:var(--bg3); border-radius:3px;
+    overflow:hidden; margin-top:8px;
+  }
+  .progress-fill {
+    height:100%; background:linear-gradient(90deg,#6ab0ff,#7ed982);
+    width:0%; transition:width 300ms ease;
+  }
+  .progress-text { font-size:11px; color:var(--muted); text-align:center; margin-top:6px; }
+  .progress-wrap.on { display:block; }
+
+  /* ── INSTALLING TAKEOVER (v0.3.0) ─────────────────────────────────
+   * Full-screen branded "installing update X.X.X..." view that sits
+   * between the user clicking INSTALL NOW and the app actually quitting
+   * for NSIS to run. The window is closable:false, alwaysOnTop:true in
+   * main.js for this mode, so the user can't accidentally focus the
+   * main window during the quit beat. Indeterminate progress bar +
+   * pulsing HK monogram so it feels alive even though the install
+   * itself is silent and very brief. */
+  body.installing .body { justify-content:center; padding-top:0; }
+  body.installing .hero-title { font-size:42px; letter-spacing:6px; margin:24px 0 14px; }
+  body.installing .hero-sub { font-size:15px; max-width:520px; }
+  body.installing .versions,
+  body.installing .status-badge,
+  body.installing .whats-new,
+  body.installing .lang-toggle,
+  body.installing .topbar-btn,
+  body.installing .footer { display:none !important; }
+  body.installing .topbar { border-bottom-color:transparent; background:transparent; }
+
+  .install-mark {
+    width:88px; height:88px; margin:0 auto 14px;
+    display:flex; align-items:center; justify-content:center;
+    font-family:'Bebas Neue','Oswald','Impact',sans-serif;
+    font-size:54px; letter-spacing:2px;
+    background:linear-gradient(180deg, var(--bg3) 0%, var(--bg2) 100%);
+    border:1px solid var(--border2); border-radius:18px;
+    color:var(--white);
+    animation: install-mark-pulse 1.6s ease-in-out infinite;
+    box-shadow:0 12px 36px rgba(0,0,0,.5), 0 1px 0 rgba(255,255,255,.04) inset;
+  }
+  @keyframes install-mark-pulse {
+    0%, 100% { transform:scale(1);     box-shadow:0 12px 36px rgba(0,0,0,.5), 0 0 0 rgba(255,255,255,0) inset; }
+    50%      { transform:scale(1.04);  box-shadow:0 16px 44px rgba(0,0,0,.6), 0 0 0 2px rgba(255,255,255,.06) inset; }
+  }
+  .install-progress {
+    width:100%; max-width:420px; height:3px;
+    background:var(--bg3); border-radius:2px;
+    overflow:hidden; margin:24px auto 8px;
+    position:relative;
+  }
+  .install-progress::after {
+    content:""; position:absolute; top:0; left:-40%;
+    width:40%; height:100%;
+    background:linear-gradient(90deg, transparent 0%, rgba(255,255,255,.7) 50%, transparent 100%);
+    animation: install-progress-slide 1.4s ease-in-out infinite;
+  }
+  @keyframes install-progress-slide {
+    0%   { left:-40%; }
+    100% { left:100%; }
+  }
+  .install-hint {
+    font-size:11px; color:var(--muted); letter-spacing:1px;
+    margin-top:18px; text-transform:uppercase;
+  }
+  body.installing .install-mark,
+  body.installing .install-progress,
+  body.installing .install-hint { display:flex; }
+  body:not(.installing) .install-mark,
+  body:not(.installing) .install-progress,
+  body:not(.installing) .install-hint { display:none; }
+  .install-mark, .install-progress, .install-hint { display:none; }
+  @media (prefers-reduced-motion: reduce){
+    .install-mark { animation:none; }
+    .install-progress::after { animation:none; left:0; width:100%;
+      background:rgba(255,255,255,.6); }
+  }
+
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="topbar-logo">HK</div>
+    <div class="topbar-title">FREQ.PHULL</div>
+    <div class="topbar-sub" id="topbar-sub">Updater</div>
+    <div class="topbar-spacer"></div>
+    <button class="topbar-btn" id="btn-min" title="Minimize">_</button>
+    <button class="topbar-btn" id="btn-close" title="Close">X</button>
+  </div>
+
+  <div class="body">
+    <div class="lang-toggle">
+      <button id="lang-en" class="on">EN</button>
+      <button id="lang-fr">FR</button>
+    </div>
+    <div class="hero-title" id="hero-title">SOFTWARE UPDATE</div>
+    <div class="hero-sub" id="hero-sub">Checking for updates...</div>
+
+    <div class="install-mark" id="install-mark">HK</div>
+    <div class="install-progress" id="install-progress"></div>
+    <div class="install-hint" id="install-hint">PLEASE DO NOT CLOSE THIS WINDOW</div>
+
+    <div class="versions">
+      <div class="vcard">
+        <div class="vcard-label" id="lbl-installed">INSTALLED</div>
+        <div class="vcard-num" id="ver-installed">-</div>
+      </div>
+      <div class="varrow">-></div>
+      <div class="vcard new">
+        <div class="vcard-label" id="lbl-update">THIS UPDATE</div>
+        <div class="vcard-num" id="ver-update">-</div>
+      </div>
+    </div>
+
+    <div class="status-badge" id="status-badge">UP TO DATE</div>
+
+    <div class="progress-wrap" id="progress-wrap">
+      <div class="progress-text" id="progress-text">Downloading 0%</div>
+      <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+    </div>
+
+    <div class="whats-new" id="whats-new" style="display:none">
+      <div class="whats-new-title" id="lbl-whats-new">WHAT'S NEW</div>
+      <ul class="whats-new-list" id="whats-new-list"></ul>
+    </div>
+  </div>
+
+  <div class="footer">
+    <button class="btn-secondary" id="btn-close-2">CLOSE</button>
+    <button class="btn-primary" id="btn-install" style="display:none">INSTALL NOW</button>
+  </div>
+
+<script>
+  // Minimal i18n - just labels for this window
+  const I = {
+    en: {
+      sub: 'Updater', heroTitleUpd: 'SOFTWARE UPDATE', heroTitleOk: 'YOU ARE UP TO DATE',
+      heroSubOk: "You're running the latest version.",
+      heroSubUpd: 'Version {v} is ready to install.',
+      installed: 'INSTALLED', update: 'THIS UPDATE',
+      badgeOk: 'UP TO DATE', badgeUpd: 'UPDATE AVAILABLE', badgeDl: 'DOWNLOADING', badgeReady: 'READY TO INSTALL',
+      whatsNew: "WHAT'S NEW", close: 'CLOSE', install: 'INSTALL NOW',
+      progressPct: 'Downloading {p}% - {sp} MB/s',
+      heroTitleInstalling: 'INSTALLING UPDATE',
+      heroSubInstalling: 'Updating Freq.Phull to version {v}. This will only take a moment...',
+      installHint: 'PLEASE DO NOT CLOSE THIS WINDOW',
+    },
+    fr: {
+      sub: 'Mise a jour', heroTitleUpd: 'MISE A JOUR LOGICIELLE', heroTitleOk: 'VOUS ETES A JOUR',
+      heroSubOk: "Vous utilisez la derniere version.",
+      heroSubUpd: 'La version {v} est prete a etre installee.',
+      installed: 'INSTALLEE', update: 'CETTE MAJ',
+      badgeOk: 'A JOUR', badgeUpd: 'MAJ DISPONIBLE', badgeDl: 'TELECHARGEMENT', badgeReady: 'PRET A INSTALLER',
+      whatsNew: 'NOUVEAUTES', close: 'FERMER', install: 'INSTALLER',
+      progressPct: 'Telechargement {p}% - {sp} Mo/s',
+      heroTitleInstalling: 'INSTALLATION DE LA MISE A JOUR',
+      heroSubInstalling: 'Mise a jour de Freq.Phull vers la version {v}. Cela ne prendra qu\'un instant...',
+      installHint: 'NE FERMEZ PAS CETTE FENETRE',
+    }
+  };
+  let lang = 'en';
+  let state = { installed: '-', update: '-', notes: [], phase: 'checking', progress: 0, speed: 0 };
+
+  function applyLang() {
+    const T = I[lang];
+    document.getElementById('topbar-sub').textContent = T.sub;
+    document.getElementById('lbl-installed').textContent = T.installed;
+    document.getElementById('lbl-update').textContent = T.update;
+    document.getElementById('lbl-whats-new').textContent = T.whatsNew;
+    document.getElementById('btn-close-2').textContent = T.close;
+    document.getElementById('btn-install').textContent = T.install;
+    render();
+  }
+  function render() {
+    const T = I[lang];
+    const $ = (id) => document.getElementById(id);
+    $('ver-installed').textContent = state.installed;
+    $('ver-update').textContent = state.update;
+    const badge = $('status-badge');
+    const installBtn = $('btn-install');
+    const whatsNew = $('whats-new');
+    const progressWrap = $('progress-wrap');
+
+    // v0.3.0: full takeover screen — replaces what would otherwise
+    // be the Windows NSIS dialog. The body.installing class is set on
+    // first render in this phase and never removed; window itself
+    // closes when the app quits.
+    if (state.phase === 'installing') {
+      document.body.classList.add('installing');
+      $('hero-title').textContent = T.heroTitleInstalling;
+      $('hero-sub').textContent = T.heroSubInstalling.replace('{v}', state.update || '');
+      $('install-hint').textContent = T.installHint;
+      return;
+    }
+    document.body.classList.remove('installing');
+
+    if (state.phase === 'checking') {
+      $('hero-title').textContent = T.heroTitleUpd;
+      $('hero-sub').textContent = lang === 'en' ? 'Checking for updates...' : 'Recherche de mises a jour...';
+      badge.textContent = lang === 'en' ? 'CHECKING' : 'VERIFICATION';
+      badge.className = 'status-badge update';
+      installBtn.style.display = 'none';
+      whatsNew.style.display = 'none';
+      progressWrap.classList.remove('on');
+    } else if (state.phase === 'none') {
+      $('hero-title').textContent = T.heroTitleOk;
+      $('hero-sub').textContent = T.heroSubOk;
+      badge.textContent = T.badgeOk;
+      badge.className = 'status-badge';
+      installBtn.style.display = 'none';
+      whatsNew.style.display = 'none';
+      progressWrap.classList.remove('on');
+    } else if (state.phase === 'available' || state.phase === 'downloading' || state.phase === 'ready') {
+      $('hero-title').textContent = T.heroTitleUpd;
+      $('hero-sub').textContent = T.heroSubUpd.replace('{v}', state.update);
+      const map = { available: T.badgeUpd, downloading: T.badgeDl, ready: T.badgeReady };
+      badge.textContent = map[state.phase];
+      badge.className = 'status-badge update';
+      installBtn.style.display = state.phase === 'ready' ? '' : 'none';
+      if (state.notes && state.notes.length) {
+        whatsNew.style.display = '';
+        $('whats-new-list').innerHTML = state.notes.map(n =>
+          '<li>' + (n + '').replace(/[<>&]/g, c => ({ '<':'&lt;','>':'&gt;','&':'&amp;' }[c])) + '</li>').join('');
+      } else {
+        whatsNew.style.display = 'none';
+      }
+      if (state.phase === 'downloading') {
+        progressWrap.classList.add('on');
+        $('progress-fill').style.width = Math.max(0, Math.min(100, state.progress)) + '%';
+        $('progress-text').textContent = T.progressPct
+          .replace('{p}', Math.round(state.progress))
+          .replace('{sp}', (state.speed / 1048576).toFixed(2));
+      } else {
+        progressWrap.classList.remove('on');
+      }
+    }
+  }
+
+  document.getElementById('lang-en').onclick = () => { lang = 'en';
+    document.getElementById('lang-en').classList.add('on');
+    document.getElementById('lang-fr').classList.remove('on');
+    applyLang(); };
+  document.getElementById('lang-fr').onclick = () => { lang = 'fr';
+    document.getElementById('lang-fr').classList.add('on');
+    document.getElementById('lang-en').classList.remove('on');
+    applyLang(); };
+  document.getElementById('btn-close').onclick = () => window.updaterAPI && window.updaterAPI.close();
+  document.getElementById('btn-close-2').onclick = () => window.updaterAPI && window.updaterAPI.close();
+  document.getElementById('btn-min').onclick = () => window.updaterAPI && window.updaterAPI.minimize();
+  document.getElementById('btn-install').onclick = () => window.updaterAPI && window.updaterAPI.install();
+
+  // Receive state from main process
+  if (window.updaterAPI) {
+    window.updaterAPI.onState((s) => { Object.assign(state, s); render(); });
+    window.updaterAPI.ready();
+  }
+  applyLang();
+</script>
+</body>
+</html>

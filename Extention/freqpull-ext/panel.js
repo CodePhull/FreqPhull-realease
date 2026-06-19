@@ -775,16 +775,17 @@ let notifTimer=null;
 // SHA. If they differ, we render a soft banner at the top of the panel
 // with a "View update" link and a "Dismiss" button (marks seen).
 function checkExtensionUpdateBanner(){
+  // v4.3.1: switched from SHA to release tag (see background.js).
   try {
-    chrome.storage.local.get(['extLatestSha','extLastSeenSha','extLatestUrl','extLatestMsg'], (r) => {
-      if (!r || !r.extLatestSha) return;
-      if (r.extLastSeenSha === r.extLatestSha) return; // already dismissed
-      renderExtUpdateBanner(r.extLatestSha, r.extLatestUrl, r.extLatestMsg);
+    chrome.storage.local.get(['extLatestTag','extLastSeenTag','extLatestUrl','extLatestMsg'], (r) => {
+      if (!r || !r.extLatestTag) return;
+      if (r.extLastSeenTag === r.extLatestTag) return; // already dismissed
+      renderExtUpdateBanner(r.extLatestTag, r.extLatestUrl, r.extLatestMsg);
     });
   } catch {}
 }
 
-function renderExtUpdateBanner(sha, url, msg){
+function renderExtUpdateBanner(tag, url, msg){
   let b = document.getElementById('ext-update-banner');
   if (!b) {
     b = document.createElement('div');
@@ -792,20 +793,20 @@ function renderExtUpdateBanner(sha, url, msg){
     b.className = 'ext-update-banner';
     document.body.insertBefore(b, document.body.firstChild);
   }
-  const short = (sha || '').slice(0,7);
+  const tagShort = (tag || '').slice(0, 12);
   b.innerHTML = '<span class="ext-update-text">A new version of the extension is available' +
     (msg ? ' &mdash; <em>' + msg.replace(/[<&]/g, c => c==='<' ? '&lt;' : '&amp;') + '</em>' : '') +
     '</span>' +
-    '<a href="#" class="ext-update-view" data-url="' + (url || '') + '">View update (' + short + ')</a>' +
+    '<a href="#" class="ext-update-view" data-url="' + (url || '') + '">View ' + tagShort + '</a>' +
     '<button class="ext-update-dismiss" title="Dismiss until next change">&times;</button>';
   b.querySelector('.ext-update-view').addEventListener('click', (e) => {
     e.preventDefault();
     const dest = e.target.dataset.url ||
-      'https://github.com/CodePhull/FreqPhull-realease/tree/main/freqpull-ext';
+      'https://github.com/CodePhull/FreqPhull-realease/releases';
     chrome.tabs.create({ url: dest });
   });
   b.querySelector('.ext-update-dismiss').addEventListener('click', () => {
-    chrome.storage.local.set({ extLastSeenSha: sha });
+    chrome.storage.local.set({ extLastSeenTag: tag });
     b.classList.add('out');
     setTimeout(() => b.remove(), 260);
   });

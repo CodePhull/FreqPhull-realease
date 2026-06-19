@@ -43,6 +43,9 @@ contextBridge.exposeInMainWorld('api', {
     // Cached 'update-available' payload from a check that ran before the
     // renderer's listeners attached (or null). See updater.js.
     getPending:  () => ipcRenderer.invoke('updater:getPending'),
+    // v0.2.8: open the branded updater BrowserWindow (the screen with
+    // version cards, EN/FR toggle, what's new, install button).
+    openWindow:  () => ipcRenderer.invoke('updater:openWindow'),
     // Event subscriptions. Each returns an unsubscribe function so callers
     // can clean up if they ever need to (currently nobody does, the banner
     // lives forever).

@@ -1641,53 +1641,88 @@ input[type=range]{flex:1;accent-color:var(--white)}
   pointer-events:none;
   transition:top 240ms cubic-bezier(.4,0,.2,1); /* slides down/up as the update banner appears/leaves */
 }
+/* ── Notifications redesigned v0.2.8 ─────────────────────────────
+ *  • Monochrome: white-on-dark for every type (ok / info / warn).
+ *    Only errors keep the red accent for instant recognition.
+ *  • Subtle internal sheen via gradient — no flat color washes.
+ *  • Spring entry is smoother (slightly slower, less overshoot, more
+ *    "premium product" than "popup ad").
+ *  • Bottom progress strip is white, depleting cleanly.
+ *  • Lift on hover for a tactile feel.
+ */
 .app-notif{
   position:relative;
   display:flex;align-items:flex-start;gap:11px;
-  padding:12px 14px 12px 16px;
-  background:rgba(20,20,20,.92);
-  border:1px solid rgba(255,255,255,.08);
-  border-left:3px solid var(--muted);
-  border-radius:10px;
-  box-shadow:0 10px 32px rgba(0,0,0,.5),0 1px 0 rgba(255,255,255,.04) inset;
-  backdrop-filter:blur(14px) saturate(140%);
-  -webkit-backdrop-filter:blur(14px) saturate(140%);
-  /* Initial off-screen state — sliding in handled by .show class.
-   * cubic-bezier(.22,1.2,.36,1) is a gentle overshoot spring; reads as
-   * "polished iOS / macOS" rather than "linear web 2010". */
-  transform:translateX(30px);opacity:0;
-  transition:transform 320ms cubic-bezier(.22,1.2,.36,1),
-             opacity 240ms cubic-bezier(.22,1,.36,1),
-             margin-top 220ms ease,
-             max-height 220ms ease;
+  padding:13px 16px 13px 18px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.022) 0%, transparent 60%),
+    rgba(18,18,18,.94);
+  border:1px solid rgba(255,255,255,.07);
+  border-left:2px solid rgba(255,255,255,.85);
+  border-radius:11px;
+  box-shadow:
+    0 12px 36px rgba(0,0,0,.55),
+    0 1px 0 rgba(255,255,255,.045) inset,
+    0 0 0 1px rgba(0,0,0,.2);
+  backdrop-filter:blur(18px) saturate(140%);
+  -webkit-backdrop-filter:blur(18px) saturate(140%);
+  /* Spring entry: easier on the eyes than aggressive overshoot.
+   * Same family as the rest of the v0.2.7 polish (ease-out-quart). */
+  transform:translateX(28px) scale(.985);opacity:0;
+  transition:
+    transform 380ms cubic-bezier(.16,1,.3,1),
+    opacity 280ms cubic-bezier(.4,0,.2,1),
+    box-shadow 220ms ease,
+    background 220ms ease,
+    margin-top 260ms cubic-bezier(.4,0,.2,1),
+    max-height 260ms cubic-bezier(.4,0,.2,1);
   pointer-events:auto;cursor:pointer;
   overflow:hidden;
   will-change:transform,opacity;
 }
-.app-notif.show{transform:translateX(0);opacity:1}
-/* Exit: fly right + shrink the gap so the stack collapses smoothly */
+.app-notif.show{transform:translateX(0) scale(1);opacity:1}
+.app-notif:hover{
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.035) 0%, transparent 60%),
+    rgba(22,22,22,.96);
+  box-shadow:
+    0 16px 44px rgba(0,0,0,.62),
+    0 1px 0 rgba(255,255,255,.06) inset,
+    0 0 0 1px rgba(0,0,0,.2);
+}
+/* Exit: small drift right + smooth collapse so the stack reflows
+ * cleanly without a "snap" between rows. */
 .app-notif.out{
-  transform:translateX(40px);opacity:0;
+  transform:translateX(32px) scale(.98);opacity:0;
   max-height:0;margin-top:-10px;padding-top:0;padding-bottom:0;
   border-top-width:0;border-bottom-width:0;
 }
-/* Type-specific accent + icon background. Each accent color is muted so
- * the toast doesn't scream "ERROR" — modern apps use restrained color
- * with a clear icon doing the heavy lifting for type recognition. */
-.app-notif.ok{border-left-color:#7ed982}
-.app-notif.err{border-left-color:#ff6b6b}
-.app-notif.info{border-left-color:#6ab0ff}
-.app-notif.warn{border-left-color:#ffb84d}
+/* Type-specific accent line.
+ *   • ok / info / warn  → white (matches the UI)
+ *   • err               → red (the only color that survives)
+ * Icon bubbles share the same monochrome treatment for ok/info/warn;
+ * the icon glyph itself differentiates them at a glance. */
+.app-notif.ok,
+.app-notif.info,
+.app-notif.warn { border-left-color:rgba(255,255,255,.88); }
+.app-notif.err  { border-left-color:#ff5e5e; }
 
 .app-notif-icon{
   flex-shrink:0;width:22px;height:22px;border-radius:50%;
   display:flex;align-items:center;justify-content:center;
   margin-top:1px;
+  transition:background 200ms ease, color 200ms ease;
 }
-.app-notif.ok   .app-notif-icon{background:rgba(126,217,130,.16);color:#7ed982}
-.app-notif.err  .app-notif-icon{background:rgba(255,107,107,.16);color:#ff8585}
-.app-notif.info .app-notif-icon{background:rgba(106,176,255,.16);color:#85b9ff}
-.app-notif.warn .app-notif-icon{background:rgba(255,184,77,.16);color:#ffc875}
+.app-notif.ok   .app-notif-icon,
+.app-notif.info .app-notif-icon,
+.app-notif.warn .app-notif-icon{
+  background:rgba(255,255,255,.08);
+  color:rgba(255,255,255,.92);
+}
+.app-notif.err  .app-notif-icon{
+  background:rgba(255,94,94,.14);
+  color:#ff8585;
+}
 .app-notif-icon svg{display:block}
 
 .app-notif-body{flex:1;min-width:0}
@@ -1724,10 +1759,10 @@ input[type=range]{flex:1;accent-color:var(--white)}
   animation-play-state:running;
 }
 .app-notif.paused .app-notif-timer-fill{animation-play-state:paused}
-.app-notif.ok   .app-notif-timer-fill{background:#7ed982}
-.app-notif.err  .app-notif-timer-fill{background:#ff6b6b}
-.app-notif.info .app-notif-timer-fill{background:#6ab0ff}
-.app-notif.warn .app-notif-timer-fill{background:#ffb84d}
+.app-notif.ok   .app-notif-timer-fill,
+.app-notif.info .app-notif-timer-fill,
+.app-notif.warn .app-notif-timer-fill { background:rgba(255,255,255,.7); }
+.app-notif.err  .app-notif-timer-fill { background:#ff5e5e; }
 @keyframes notifTimerShrink{from{transform:scaleX(1)}to{transform:scaleX(0)}}
 
 /* Reduce-motion users get instant fades, no spring. */
@@ -2418,6 +2453,63 @@ img.thumb-fallback {
   .hist-row-leaving { animation:none; }
 }
 
+
+
+/* ── Back-to-top button (v0.3.0) ─────────────────────────────────────
+ * Floating arrow bottom-right. Hidden until #main is scrolled past a
+ * threshold; smooth fade-scale in. Sits at bottom:96px so it lives
+ * above the mini player without ever overlapping. Composite-only:
+ * opacity + transform, never causes reflow. */
+.back-to-top {
+  position:fixed;
+  right:20px; bottom:96px;
+  width:44px; height:44px;
+  border-radius:50%;
+  background:rgba(28,28,28,.92);
+  border:1px solid rgba(255,255,255,.08);
+  color:rgba(255,255,255,.78);
+  cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  z-index:9000;
+  opacity:0; pointer-events:none;
+  transform:translateY(8px) scale(.9);
+  transition:
+    opacity 220ms cubic-bezier(.4,0,.2,1),
+    transform 280ms cubic-bezier(.16,1,.3,1),
+    background 200ms ease, color 200ms ease,
+    border-color 200ms ease, box-shadow 200ms ease;
+  backdrop-filter:blur(14px) saturate(140%);
+  -webkit-backdrop-filter:blur(14px) saturate(140%);
+  box-shadow:
+    0 8px 24px rgba(0,0,0,.45),
+    0 1px 0 rgba(255,255,255,.04) inset;
+  will-change:transform, opacity;
+}
+.back-to-top.show {
+  opacity:1; pointer-events:auto;
+  transform:translateY(0) scale(1);
+}
+.back-to-top:hover {
+  background:rgba(40,40,40,.96);
+  color:#fff;
+  border-color:rgba(255,255,255,.16);
+  transform:translateY(-2px) scale(1.04);
+  box-shadow:
+    0 12px 32px rgba(0,0,0,.55),
+    0 1px 0 rgba(255,255,255,.06) inset;
+}
+.back-to-top:active { transform:translateY(0) scale(.96); }
+.back-to-top:focus-visible {
+  outline:none;
+  box-shadow:
+    0 0 0 3px rgba(255,255,255,.18),
+    0 8px 24px rgba(0,0,0,.45);
+}
+@media (prefers-reduced-motion: reduce) {
+  .back-to-top { transition:opacity 120ms linear; transform:none !important; }
+  .back-to-top.show { transform:none !important; }
+}
+
 </style>
 </head>
 <body>
@@ -3075,8 +3167,7 @@ img.thumb-fallback {
         <select id="hist-filter" class="hist-filter-sel" onchange="renderHistory()" title="Filter by folder">
           <option value="all">All tracks</option>
         </select>
-        <button class="btn" id="hist-select-btn" onclick="toggleSelectMode()" style="height:42px;padding:0 14px;font-size:12px;white-space:nowrap;display:inline-flex;align-items:center;gap:6px">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/></svg>
+        <button class="btn" id="hist-select-btn" onclick="toggleSelectMode()" style="height:42px;padding:0 18px;font-size:12px;white-space:nowrap">
           <span id="hist-select-lbl">Select</span>
         </button>
       </div>
@@ -3463,6 +3554,16 @@ img.thumb-fallback {
     <button class="update-banner-btn" id="update-banner-later" onclick="onUpdateBannerLater()">Later</button>
   </div>
 </div>
+
+<!-- v0.3.0: Back-to-top floating button. Appears when scrolled past
+     ~400px inside #main; click smooth-scrolls back to top. Sits above
+     the mini player so it never overlaps. Composite-only animation. -->
+<button id="back-to-top" class="back-to-top" aria-label="Back to top" title="Back to top" tabindex="0">
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <polyline points="18 15 12 9 6 15"/>
+  </svg>
+</button>
 
 <script src="app.js"></script>
 <script src="daw.js"></script>

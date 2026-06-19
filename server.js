@@ -14,14 +14,57 @@ const DATA = process.env.USER_DATA || path.join(os.homedir(), '.freqphull');
 const logDir  = path.join(DATA, 'logs');
 const logPath = path.join(logDir, 'server-' + new Date().toISOString().slice(0,10) + '.log');
 
+// v0.2.8 hotfix: slog must NEVER throw. The old version called
+// process.stdout.write() unguarded. When the parent Electron process
+// closed the pipe (window closed, app quitting, dev tools detached),
+// the write threw EPIPE. The uncaughtException handler called slog
+// again -> slog threw EPIPE again -> infinite loop, log file grew at
+// 5000 lines/sec until the process was killed.
+//
+// Now: stdout/stderr writes are wrapped in try/catch; if stdout dies
+// once we flag it and never try again (file logging continues - that
+// path was already safe). Any throw from the file write is also
+// swallowed. End of feedback loop.
+let _stdoutDead = false;
+let _stderrDead = false;
+function _safeWrite(stream, line) {
+  if (!stream) return;
+  try {
+    stream.write(line + '\n');
+  } catch (e) {
+    if (e && e.code === 'EPIPE') {
+      if (stream === process.stdout) _stdoutDead = true;
+      else if (stream === process.stderr) _stderrDead = true;
+    }
+    // Any other error: silently ignore - the on-disk log is the
+    // durable record. Never re-throw from inside the logger.
+  }
+}
 function slog(msg) {
-  const line = '[' + new Date().toISOString() + '] [server] ' + msg;
-  process.stdout.write(line + '\n');
+  let line;
+  try {
+    line = '[' + new Date().toISOString() + '] [server] ' + msg;
+  } catch {
+    // Defensive: even building the line shouldn't throw, but if it
+    // does (e.g. msg is a circular object), don't propagate.
+    line = '[' + new Date().toISOString() + '] [server] <unprintable log message>';
+  }
+  if (!_stdoutDead) _safeWrite(process.stdout, line);
   try {
     if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
     fs.appendFileSync(logPath, line + '\n');
   } catch {}
 }
+
+// Also catch EPIPE on stdout/stderr at the stream level - some Node
+// versions emit 'error' on the stream before the synchronous write
+// throws. Without these listeners those become uncaughtExceptions.
+process.stdout.on('error', (e) => {
+  if (e && e.code === 'EPIPE') _stdoutDead = true;
+});
+process.stderr.on('error', (e) => {
+  if (e && e.code === 'EPIPE') _stderrDead = true;
+});
 
 slog('Server process starting');
 slog('Node: ' + process.version);
@@ -4975,5 +5018,25 @@ app.listen(PORT, '127.0.0.1', () => {
   }, 6 * 3600 * 1000);
 });
 
-process.on('uncaughtException', e => slog('UNCAUGHT: ' + e.message + '\n' + e.stack));
-process.on('unhandledRejection', e => slog('UNHANDLED REJECTION: ' + e));
+// Global handlers - belt and suspenders. Even if slog ever throws
+// (it shouldn't anymore), the try/catch here prevents recursion.
+// EPIPE errors are filtered: they mean our output pipe was closed,
+// not that the server is actually broken; logging is enough.
+process.on('uncaughtException', (e) => {
+  try {
+    if (e && e.code === 'EPIPE') {
+      // Mark the relevant stream dead and don't bother logging the
+      // stack - it'd be the same EPIPE every time and the log file
+      // would grow unbounded (this is what hosed v0.2.8).
+      _stdoutDead = true;
+      return;
+    }
+    slog('UNCAUGHT: ' + (e && e.message) + '\n' + (e && e.stack));
+  } catch {}
+});
+process.on('unhandledRejection', (e) => {
+  try {
+    if (e && e.code === 'EPIPE') { _stdoutDead = true; return; }
+    slog('UNHANDLED REJECTION: ' + e);
+  } catch {}
+});
