@@ -66,7 +66,11 @@ ipcMain.on('updater-window-minimize', () => {
 ipcMain.on('updater-window-install', () => {
   // Forward to the main updater autoUpdater (registered via setupUpdater)
   const { autoUpdater } = require('electron-updater');
-  try { autoUpdater.quitAndInstall(false, true); } catch (e) { log('[updater-window] install failed: ' + e.message); }
+  // v0.3.2: silent install (isSilent=true) so NSIS doesn't show its
+  // own "Installing, please wait..." dialog. Our branded HK window is
+  // the only visible UI from click → relaunch.
+  try { autoUpdater.quitAndInstall(true, true); }
+  catch (e) { log('[updater-window] install failed: ' + e.message); }
 });
 ipcMain.on('updater-window-ready', () => {
   // The renderer is ready; ask updater.js for the latest snapshot via

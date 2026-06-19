@@ -9,6 +9,19 @@ along the way.
 
 ---
 
+## v0.3.2 (2026-06-19)
+
+**Settings sections actually collapse now**
+- The Grid `grid-template-rows: 1fr -> 0fr` trick only works on ONE grid child. The previous markup had multiple `<div class="setting-row">` siblings directly inside `.settings-section-body`, so the grid auto-generated extra rows for them that didn't respond to the 0fr collapse — that's the giant empty black gap under the collapsed "Performance" header in the screenshot. Now every section's rows live inside one `.settings-section-body-inner` wrapper, which IS the lone grid child, and collapses cleanly.
+- Result: a collapsed section shrinks to just its header height. No residual padding, no dangling border, no wasted scroll space.
+
+**NSIS install dialog killed — branded window is now the only visible UI**
+- `quitAndInstall(false, true)` was the smoking gun. `false` means "run installer non-silently" — that's what spawned the standard Windows "Freq.Phull Setup / Installing, please wait..." dialog with the green progress bar (the one in the screenshot). Switched both call sites (`updater.js` line 208 and `main.js` line 69) to `quitAndInstall(true, true)`:
+  - `true` (isSilent) — NSIS runs completely silently in the background, no install dialog at all
+  - `true` (isForceRunAfter) — app relaunches automatically on the new version when install completes
+- Combined with our branded "INSTALLING UPDATE" window from v0.3.0, the user now sees: small in-app banner -> click INSTALL NOW -> branded HK takeover screen with pulsing logo + indeterminate progress -> app reappears on new version. NSIS dialog: gone.
+- Also bumped the click->install handoff beat from 250ms -> 500ms so the branded window's hero title + pulse animation have fully rendered before the app quits. Avoids a quick flash where the user might catch the window mid-render.
+
 ## v0.3.1 (2026-06-19)
 
 **Build config: electron pinned**

@@ -9746,7 +9746,7 @@ function renderSettings() {
         <span class="settings-section-count">${t('settingsSec_generalDesc')}</span>
         <svg class="settings-section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
       </button>
-      <div class="settings-section-body" id="settings-body-general">
+      <div class="settings-section-body" id="settings-body-general"><div class="settings-section-body-inner">
         <div class="setting-row">
               <div class="setting-info">
                 <div class="setting-name">${t('langLabel')}</div>
@@ -9764,7 +9764,7 @@ function renderSettings() {
               </div>
               <button class="btn sm" onclick="pickStockpileFolder()">${t('change')}</button>
             </div>
-      </div>
+      </div></div>
     </div>
     <div class="settings-section" data-section="library">
       <button class="settings-section-header" type="button" onclick="toggleSettingsSection('library')" aria-expanded="true" aria-controls="settings-body-library">
@@ -9773,7 +9773,7 @@ function renderSettings() {
         <span class="settings-section-count">${t('settingsSec_libraryDesc')}</span>
         <svg class="settings-section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
       </button>
-      <div class="settings-section-body" id="settings-body-library">
+      <div class="settings-section-body" id="settings-body-library"><div class="settings-section-body-inner">
         <div class="setting-row">
               <div class="setting-info">
                 <div class="setting-name">${t('autoLabel')}</div>
@@ -9837,7 +9837,7 @@ function renderSettings() {
                 <option value="72">${t('optHours72')}</option>
               </select>
             </div>
-      </div>
+      </div></div>
     </div>
     <div class="settings-section" data-section="maintenance">
       <button class="settings-section-header" type="button" onclick="toggleSettingsSection('maintenance')" aria-expanded="true" aria-controls="settings-body-maintenance">
@@ -9846,7 +9846,7 @@ function renderSettings() {
         <span class="settings-section-count">${t('settingsSec_maintenanceDesc')}</span>
         <svg class="settings-section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
       </button>
-      <div class="settings-section-body" id="settings-body-maintenance">
+      <div class="settings-section-body" id="settings-body-maintenance"><div class="settings-section-body-inner">
         <div class="setting-row">
               <div class="setting-info">
                 <div class="setting-name">${t('storName')}</div>
@@ -9882,7 +9882,7 @@ function renderSettings() {
               </div>
               <button class="btn sm" id="btn-clean-temp" onclick="cleanTempFiles()">🧹 ${t('btnCleanNow')}</button>
             </div>
-      </div>
+      </div></div>
     </div>
     <div class="settings-section" data-section="performance">
       <button class="settings-section-header" type="button" onclick="toggleSettingsSection('performance')" aria-expanded="true" aria-controls="settings-body-performance">
@@ -9891,7 +9891,7 @@ function renderSettings() {
         <span class="settings-section-count">${t('settingsSec_performanceDesc')}</span>
         <svg class="settings-section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
       </button>
-      <div class="settings-section-body" id="settings-body-performance">
+      <div class="settings-section-body" id="settings-body-performance"><div class="settings-section-body-inner">
         <div class="setting-row">
               <div class="setting-info">
                 <div class="setting-name">${t('cpuOnlyName')}</div>
@@ -9912,7 +9912,7 @@ function renderSettings() {
                 <span class="slider"></span>
               </label>
             </div>
-      </div>
+      </div></div>
     </div>
     <div class="settings-section" data-section="engines">
       <button class="settings-section-header" type="button" onclick="toggleSettingsSection('engines')" aria-expanded="true" aria-controls="settings-body-engines">
@@ -9921,7 +9921,7 @@ function renderSettings() {
         <span class="settings-section-count">${t('settingsSec_enginesDesc')}</span>
         <svg class="settings-section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
       </button>
-      <div class="settings-section-body" id="settings-body-engines">
+      <div class="settings-section-body" id="settings-body-engines"><div class="settings-section-body-inner">
         <div class="setting-row">
               <div class="setting-info">
                 <div class="setting-name">${t('enginesName')}</div>
@@ -9929,7 +9929,7 @@ function renderSettings() {
               </div>
               <button class="btn sm" id="btn-run-setup" onclick="showSetupModal()">${t('runSetupBtn')}</button>
             </div>
-      </div>
+      </div></div>
     </div>
     <div class="settings-section" data-section="updates">
       <button class="settings-section-header" type="button" onclick="toggleSettingsSection('updates')" aria-expanded="true" aria-controls="settings-body-updates">
@@ -9938,7 +9938,7 @@ function renderSettings() {
         <span class="settings-section-count">${t('settingsSec_updatesDesc')}</span>
         <svg class="settings-section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
       </button>
-      <div class="settings-section-body" id="settings-body-updates">
+      <div class="settings-section-body" id="settings-body-updates"><div class="settings-section-body-inner">
         <div class="setting-row">
               <div class="setting-info">
                 <div class="setting-name">${t('updName')}</div>
@@ -9953,7 +9953,7 @@ function renderSettings() {
               </div>
               <button class="btn sm" id="btn-ytdlp-update" onclick="manualUpdateYtdlp()">⬆ ${t('btnCheckNow')}</button>
             </div>
-      </div>
+      </div></div>
     </div>
     <div class="settings-section" data-section="extension">
       <button class="settings-section-header" type="button" onclick="toggleSettingsSection('extension')" aria-expanded="true" aria-controls="settings-body-extension">
@@ -9962,7 +9962,7 @@ function renderSettings() {
         <span class="settings-section-count">${t('settingsSec_extensionDesc')}</span>
         <svg class="settings-section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
       </button>
-      <div class="settings-section-body" id="settings-body-extension">
+      <div class="settings-section-body" id="settings-body-extension"><div class="settings-section-body-inner">
         <div class="setting-row">
               <div class="setting-info">
                 <div class="setting-name">${t('extLinkName')}</div>
@@ -9973,7 +9973,7 @@ function renderSettings() {
                 <button class="btn sm pri" onclick="openExtensionHowTo()">📖 ${t('extLinkHowTo')}</button>
               </div>
             </div>
-      </div>
+      </div></div>
     </div>
     <div class="settings-section" data-section="diagnostics">
       <button class="settings-section-header" type="button" onclick="toggleSettingsSection('diagnostics')" aria-expanded="true" aria-controls="settings-body-diagnostics">
@@ -9982,7 +9982,7 @@ function renderSettings() {
         <span class="settings-section-count">${t('settingsSec_diagnosticsDesc')}</span>
         <svg class="settings-section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
       </button>
-      <div class="settings-section-body" id="settings-body-diagnostics">
+      <div class="settings-section-body" id="settings-body-diagnostics"><div class="settings-section-body-inner">
         <div class="setting-row">
               <div class="setting-info">
                 <div class="setting-name">${t('diagName')}</div>
@@ -9997,7 +9997,7 @@ function renderSettings() {
               </div>
               <button class="btn sm" onclick="viewLogs()">${t('logsName')}</button>
             </div>
-      </div>
+      </div></div>
     </div>
     <div class="settings-section" data-section="about">
       <button class="settings-section-header" type="button" onclick="toggleSettingsSection('about')" aria-expanded="true" aria-controls="settings-body-about">
@@ -10006,7 +10006,7 @@ function renderSettings() {
         <span class="settings-section-count">${t('settingsSec_aboutDesc')}</span>
         <svg class="settings-section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
       </button>
-      <div class="settings-section-body" id="settings-body-about">
+      <div class="settings-section-body" id="settings-body-about"><div class="settings-section-body-inner">
         <div class="setting-row" style="border:none">
               <div class="setting-info">
                 <div class="setting-name">Freq.Phull</div>
@@ -13161,7 +13161,11 @@ async function onUpdateBannerPrimary() {
         // Tiny delay so the window is ready-to-show before we tell
         // electron-updater to quit + install. Without this beat, the
         // app sometimes quits before the BrowserWindow has rendered.
-        await new Promise(r => setTimeout(r, 250));
+        // v0.3.2: longer beat so the branded INSTALLING UPDATE screen
+        // is fully rendered (hero title + pulse animation visible)
+        // before the app actually quits. With silent NSIS the user
+        // sees HK branding from click through to relaunch.
+        await new Promise(r => setTimeout(r, 500));
       }
       await window.api.updater.install();
     } catch (e) {

@@ -205,7 +205,7 @@ function setupUpdater(opts) {
     // window shows briefly (helpful for users to know what's happening).
     // Set isForceRunAfter=true so app comes back up automatically.
     try {
-      autoUpdater.quitAndInstall(false, true);
+      autoUpdater.quitAndInstall(true, true);  // v0.3.2: silent install — NSIS dialog suppressed so our branded HK window is the only visible UI during the update handoff
       return { ok: true };
     } catch (e) {
       mainLog('[updater] install failed: ' + e.message);

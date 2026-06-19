@@ -2595,21 +2595,32 @@ img.thumb-fallback {
 /* The CSS Grid trick: animate grid-template-rows from 0fr to 1fr on
  * a single child wrapper. Buttery smooth, no JS measurement of heights,
  * works on dynamic content. */
+/* v0.3.2 fix: the grid-template-rows collapse trick only works on
+ * ONE grid child. With multiple setting-row siblings, the grid auto-
+ * generates extra rows that don't respond to the 0fr collapse, leaving
+ * a huge empty black gap. We now wrap all rows in a single inner div
+ * (.settings-section-body-inner) which IS the lone grid child. */
 .settings-section-body {
   display:grid;
   grid-template-rows:1fr;
-  transition:grid-template-rows 320ms var(--ease-out-cubic),
-             opacity 220ms var(--ease-out-cubic);
-  opacity:1;
+  transition:grid-template-rows 320ms var(--ease-out-cubic);
 }
 .settings-section.collapsed .settings-section-body {
   grid-template-rows:0fr;
-  opacity:0;
 }
-.settings-section-body > * {
+.settings-section-body-inner {
   min-height:0;
   overflow:hidden;
+  transition:opacity 220ms var(--ease-out-cubic);
+  opacity:1;
 }
+.settings-section.collapsed .settings-section-body-inner {
+  opacity:0;
+}
+/* Collapsed sections shrink visually to just their header — no
+ * dangling padding, no residual margin. */
+.settings-section.collapsed { background:var(--bg2); }
+
 /* Tighten the inner row spacing now that sections give visual structure.
  * Last row in a section drops its bottom border. */
 .settings-section-body .setting-row {
