@@ -8686,6 +8686,26 @@ function stepToHuman(step) {
 
 const T = {
   en: {
+    // ── v0.3.1: Settings sections ──
+    settingsSec_general:'General',
+    settingsSec_generalDesc:'Language and library location',
+    settingsSec_library:'Library',
+    settingsSec_libraryDesc:'How tracks are organized and tagged',
+    settingsSec_maintenance:'Maintenance',
+    settingsSec_maintenanceDesc:'Storage cleanup and library repair',
+    settingsSec_performance:'Performance',
+    settingsSec_performanceDesc:'CPU / GPU and rendering',
+    settingsSec_engines:'AI engines',
+    settingsSec_enginesDesc:'Python, Demucs, Whisper setup',
+    settingsSec_updates:'Updates',
+    settingsSec_updatesDesc:'App and yt-dlp version checks',
+    settingsSec_extension:'Browser extension',
+    settingsSec_extensionDesc:'Chrome / Edge / Brave companion',
+    settingsSec_diagnostics:'Diagnostics',
+    settingsSec_diagnosticsDesc:'Path checks and logs',
+    settingsSec_about:'About',
+    settingsSec_aboutDesc:'Version and credits',
+
     // ── v0.2.9: row-level Remove (only in select mode now) ──
     histRemove:'Remove',
 
@@ -9106,6 +9126,26 @@ const T = {
     close:'Close', by:'by', save:'Save', delete:'Delete',
   },
   fr: {
+    // ── v0.3.1: Sections de parametres ──
+    settingsSec_general:'General',
+    settingsSec_generalDesc:'Langue et emplacement de la bibliotheque',
+    settingsSec_library:'Bibliotheque',
+    settingsSec_libraryDesc:'Organisation et etiquetage des pistes',
+    settingsSec_maintenance:'Maintenance',
+    settingsSec_maintenanceDesc:'Nettoyage du stockage et reparation',
+    settingsSec_performance:'Performance',
+    settingsSec_performanceDesc:'CPU / GPU et rendu',
+    settingsSec_engines:'Moteurs IA',
+    settingsSec_enginesDesc:'Installation Python, Demucs, Whisper',
+    settingsSec_updates:'Mises a jour',
+    settingsSec_updatesDesc:"Verification de l'app et de yt-dlp",
+    settingsSec_extension:'Extension de navigateur',
+    settingsSec_extensionDesc:'Compagnon Chrome / Edge / Brave',
+    settingsSec_diagnostics:'Diagnostics',
+    settingsSec_diagnosticsDesc:'Verifications de chemins et journaux',
+    settingsSec_about:'A propos',
+    settingsSec_aboutDesc:'Version et credits',
+
     // ── v0.2.9: Bouton Supprimer par ligne (mode selection uniquement) ──
     histRemove:'Supprimer',
 
@@ -9699,191 +9739,280 @@ function renderSettings() {
   const el = document.getElementById('settings-content');
   if (!el) return;
   el.innerHTML = `
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-name">${t('langLabel')}</div>
-        <div class="setting-desc">${t('langDesc')}</div>
-      </div>
-      <div class="setting-toggle lang-toggle">
-        <button class="lt ${lang==='en'?'on':''}" onclick="setLang('en')">EN</button>
-        <button class="lt ${lang==='fr'?'on':''}" onclick="setLang('fr')">FR</button>
-      </div>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-name">${t('autoLabel')}</div>
-        <div class="setting-desc">${t('autoDesc')}</div>
-      </div>
-      <label class="switch">
-        <input type="checkbox" ${autoAnalyze?'checked':''} onchange="toggleAutoAnalyze(this.checked)"/>
-        <span class="slider"></span>
-      </label>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-name">${t('stockLabel')}</div>
-        <div class="setting-desc">${stockpileFolder||t('stockpileNotSet')}</div>
-      </div>
-      <button class="btn sm" onclick="pickStockpileFolder()">${t('change')}</button>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-name">${t('repairLabel')}</div>
-        <div class="setting-desc" id="repair-desc">${t('repairDesc')}</div>
-      </div>
-      <button class="btn sm" id="btn-repair" onclick="repairHistory(false)">🔍 ${t('repairBtn')}</button>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-name">${t('fixFilesName')}</div>
-        <div class="setting-desc" id="fix-files-desc">${t('fixFilesDesc')}</div>
-      </div>
-      <button class="btn sm" id="btn-fix-files" onclick="repairFileLocations()">📁 ${t('btnFixFiles')}</button>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-name">${t('cleanTempName')}</div>
-        <div class="setting-desc" id="clean-temp-desc">${t('cleanTempDesc')}</div>
-      </div>
-      <button class="btn sm" id="btn-clean-temp" onclick="cleanTempFiles()">🧹 ${t('btnCleanNow')}</button>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-name">${t('autoTagName')}</div>
-        <div class="setting-desc">${t('autoTagDesc')}</div>
-      </div>
-      <label class="switch">
-        <input type="checkbox" ${autoTagEnabled() ? 'checked' : ''} onchange="toggleAutoTag(this.checked)"/>
-        <span class="slider"></span>
-      </label>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-name">${t('autoSendName')}</div>
-        <div class="setting-desc">${t('autoSendDesc')}</div>
-      </div>
-      <label class="switch">
-        <input type="checkbox" ${(localStorage.getItem('freqphull.autoSend')==='1')?'checked':''} onchange="toggleAutoSend(this.checked)"/>
-        <span class="slider"></span>
-      </label>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-name">${t('watchName')}</div>
-        <div class="setting-desc">${t('watchDesc')}</div>
-      </div>
-      <label class="switch">
-        <input type="checkbox" ${(localStorage.getItem('freqphull.watchFolder')==='1')?'checked':''} onchange="toggleWatchFolder(this.checked)"/>
-        <span class="slider"></span>
-      </label>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-name">${t('storName')}</div>
-        <div class="setting-desc" id="storage-breakdown-desc">${t('storDesc')}</div>
-      </div>
-      <button class="btn sm" onclick="openStorageBreakdown()">💾 ${t('btnViewStorage')}</button>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-name">${t('dupName')}</div>
-        <div class="setting-desc">${t('dupDesc')}</div>
-      </div>
-      <button class="btn sm" onclick="openDuplicateFinder()">🔁 ${t('btnFindDupes')}</button>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-name">${t('updName')}</div>
-        <div class="setting-desc" id="update-check-desc">${t('updDesc')}</div>
-      </div>
-      <button class="btn sm" id="btn-check-updates" onclick="manualCheckForUpdates()">🔄 ${t('btnCheckNow')}</button>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-name">yt-dlp</div>
-        <div class="setting-desc" id="ytdlp-status-desc">${t('checking')}</div>
-      </div>
-      <button class="btn sm" id="btn-ytdlp-update" onclick="manualUpdateYtdlp()">⬆ ${t('btnCheckNow')}</button>
-    </div>
-
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-name">${t('cpuOnlyName')}</div>
-        <div class="setting-desc">${t('cpuOnlyDesc')}</div>
-      </div>
-      <label class="switch">
-        <input type="checkbox" ${(localStorage.getItem('freqphull.cpuOnly')==='1')?'checked':''} onchange="toggleCpuOnly(this.checked)"/>
-        <span class="slider"></span>
-      </label>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-name">${t('hwAccelName')}</div>
-        <div class="setting-desc">${t('hwAccelDesc')}</div>
-      </div>
-      <label class="switch">
-        <input type="checkbox" id="hw-accel-toggle" checked onchange="toggleHardwareAcceleration(this.checked)"/>
-        <span class="slider"></span>
-      </label>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-name">${t('extLinkName')}</div>
-        <div class="setting-desc">${t('extLinkDesc')}</div>
-      </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
-        <button class="btn sm" onclick="openExtensionPage()" title="GitHub">🌐 ${t('extLinkOpen')}</button>
-        <button class="btn sm pri" onclick="openExtensionHowTo()">📖 ${t('extLinkHowTo')}</button>
+    <div class="settings-section" data-section="general">
+      <button class="settings-section-header" type="button" onclick="toggleSettingsSection('general')" aria-expanded="true" aria-controls="settings-body-general">
+        <span class="settings-section-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></svg></span>
+        <span class="settings-section-title">${t('settingsSec_general')}</span>
+        <span class="settings-section-count">${t('settingsSec_generalDesc')}</span>
+        <svg class="settings-section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+      <div class="settings-section-body" id="settings-body-general">
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('langLabel')}</div>
+                <div class="setting-desc">${t('langDesc')}</div>
+              </div>
+              <div class="setting-toggle lang-toggle">
+                <button class="lt ${lang==='en'?'on':''}" onclick="setLang('en')">EN</button>
+                <button class="lt ${lang==='fr'?'on':''}" onclick="setLang('fr')">FR</button>
+              </div>
+            </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('stockLabel')}</div>
+                <div class="setting-desc">${stockpileFolder||t('stockpileNotSet')}</div>
+              </div>
+              <button class="btn sm" onclick="pickStockpileFolder()">${t('change')}</button>
+            </div>
       </div>
     </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-name">${t('writeTagsName')}</div>
-        <div class="setting-desc">${t('writeTagsDesc')}</div>
+    <div class="settings-section" data-section="library">
+      <button class="settings-section-header" type="button" onclick="toggleSettingsSection('library')" aria-expanded="true" aria-controls="settings-body-library">
+        <span class="settings-section-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h4v16H3zM10 4h4v16h-4z"/><path d="M17 5l4 14"/></svg></span>
+        <span class="settings-section-title">${t('settingsSec_library')}</span>
+        <span class="settings-section-count">${t('settingsSec_libraryDesc')}</span>
+        <svg class="settings-section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+      <div class="settings-section-body" id="settings-body-library">
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('autoLabel')}</div>
+                <div class="setting-desc">${t('autoDesc')}</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" ${autoAnalyze?'checked':''} onchange="toggleAutoAnalyze(this.checked)"/>
+                <span class="slider"></span>
+              </label>
+            </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('autoTagName')}</div>
+                <div class="setting-desc">${t('autoTagDesc')}</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" ${autoTagEnabled() ? 'checked' : ''} onchange="toggleAutoTag(this.checked)"/>
+                <span class="slider"></span>
+              </label>
+            </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('autoSendName')}</div>
+                <div class="setting-desc">${t('autoSendDesc')}</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" ${(localStorage.getItem('freqphull.autoSend')==='1')?'checked':''} onchange="toggleAutoSend(this.checked)"/>
+                <span class="slider"></span>
+              </label>
+            </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('watchName')}</div>
+                <div class="setting-desc">${t('watchDesc')}</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" ${(localStorage.getItem('freqphull.watchFolder')==='1')?'checked':''} onchange="toggleWatchFolder(this.checked)"/>
+                <span class="slider"></span>
+              </label>
+            </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('writeTagsName')}</div>
+                <div class="setting-desc">${t('writeTagsDesc')}</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" ${(localStorage.getItem('freqphull.writeTags')!=='0')?'checked':''} onchange="toggleWriteTags(this.checked)"/>
+                <span class="slider"></span>
+              </label>
+            </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('dlClearName')}</div>
+                <div class="setting-desc">${t('dlClearDesc')}</div>
+              </div>
+              <select class="setting-select" id="dl-autoclear-sel" onchange="setDlAutoclear(this.value)">
+                <option value="0">${t('optOff')}</option>
+                <option value="1">${t('optHour1')}</option>
+                <option value="12">${t('optHours12')}</option>
+                <option value="24">${t('optHours24')}</option>
+                <option value="72">${t('optHours72')}</option>
+              </select>
+            </div>
       </div>
-      <label class="switch">
-        <input type="checkbox" ${(localStorage.getItem('freqphull.writeTags')!=='0')?'checked':''} onchange="toggleWriteTags(this.checked)"/>
-        <span class="slider"></span>
-      </label>
     </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-name">${t('dlClearName')}</div>
-        <div class="setting-desc">${t('dlClearDesc')}</div>
+    <div class="settings-section" data-section="maintenance">
+      <button class="settings-section-header" type="button" onclick="toggleSettingsSection('maintenance')" aria-expanded="true" aria-controls="settings-body-maintenance">
+        <span class="settings-section-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-7 7 2 2 7-7a4 4 0 0 0 5.4-5.4l-2.5 2.5-2-2 2.5-2.5z"/></svg></span>
+        <span class="settings-section-title">${t('settingsSec_maintenance')}</span>
+        <span class="settings-section-count">${t('settingsSec_maintenanceDesc')}</span>
+        <svg class="settings-section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+      <div class="settings-section-body" id="settings-body-maintenance">
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('storName')}</div>
+                <div class="setting-desc" id="storage-breakdown-desc">${t('storDesc')}</div>
+              </div>
+              <button class="btn sm" onclick="openStorageBreakdown()">💾 ${t('btnViewStorage')}</button>
+            </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('dupName')}</div>
+                <div class="setting-desc">${t('dupDesc')}</div>
+              </div>
+              <button class="btn sm" onclick="openDuplicateFinder()">🔁 ${t('btnFindDupes')}</button>
+            </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('repairLabel')}</div>
+                <div class="setting-desc" id="repair-desc">${t('repairDesc')}</div>
+              </div>
+              <button class="btn sm" id="btn-repair" onclick="repairHistory(false)">🔍 ${t('repairBtn')}</button>
+            </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('fixFilesName')}</div>
+                <div class="setting-desc" id="fix-files-desc">${t('fixFilesDesc')}</div>
+              </div>
+              <button class="btn sm" id="btn-fix-files" onclick="repairFileLocations()">📁 ${t('btnFixFiles')}</button>
+            </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('cleanTempName')}</div>
+                <div class="setting-desc" id="clean-temp-desc">${t('cleanTempDesc')}</div>
+              </div>
+              <button class="btn sm" id="btn-clean-temp" onclick="cleanTempFiles()">🧹 ${t('btnCleanNow')}</button>
+            </div>
       </div>
-      <select class="setting-select" id="dl-autoclear-sel" onchange="setDlAutoclear(this.value)">
-        <option value="0">${t('optOff')}</option>
-        <option value="1">${t('optHour1')}</option>
-        <option value="12">${t('optHours12')}</option>
-        <option value="24">${t('optHours24')}</option>
-        <option value="72">${t('optHours72')}</option>
-      </select>
     </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-name">${t('enginesName')}</div>
-        <div class="setting-desc" id="engines-status-desc">${t('checking')}</div>
+    <div class="settings-section" data-section="performance">
+      <button class="settings-section-header" type="button" onclick="toggleSettingsSection('performance')" aria-expanded="true" aria-controls="settings-body-performance">
+        <span class="settings-section-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>
+        <span class="settings-section-title">${t('settingsSec_performance')}</span>
+        <span class="settings-section-count">${t('settingsSec_performanceDesc')}</span>
+        <svg class="settings-section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+      <div class="settings-section-body" id="settings-body-performance">
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('cpuOnlyName')}</div>
+                <div class="setting-desc">${t('cpuOnlyDesc')}</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" ${(localStorage.getItem('freqphull.cpuOnly')==='1')?'checked':''} onchange="toggleCpuOnly(this.checked)"/>
+                <span class="slider"></span>
+              </label>
+            </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('hwAccelName')}</div>
+                <div class="setting-desc">${t('hwAccelDesc')}</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="hw-accel-toggle" checked onchange="toggleHardwareAcceleration(this.checked)"/>
+                <span class="slider"></span>
+              </label>
+            </div>
       </div>
-      <button class="btn sm" id="btn-run-setup" onclick="showSetupModal()">${t('runSetupBtn')}</button>
     </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-name">${t('diagName')}</div>
-        <div class="setting-desc" id="diag-paths-desc">${t('diagDesc')}</div>
+    <div class="settings-section" data-section="engines">
+      <button class="settings-section-header" type="button" onclick="toggleSettingsSection('engines')" aria-expanded="true" aria-controls="settings-body-engines">
+        <span class="settings-section-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3"/></svg></span>
+        <span class="settings-section-title">${t('settingsSec_engines')}</span>
+        <span class="settings-section-count">${t('settingsSec_enginesDesc')}</span>
+        <svg class="settings-section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+      <div class="settings-section-body" id="settings-body-engines">
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('enginesName')}</div>
+                <div class="setting-desc" id="engines-status-desc">${t('checking')}</div>
+              </div>
+              <button class="btn sm" id="btn-run-setup" onclick="showSetupModal()">${t('runSetupBtn')}</button>
+            </div>
       </div>
-      <button class="btn sm" onclick="diagnosePaths()">${t('btnDiagnose')}</button>
     </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-name">${t('logsName')}</div>
-        <div class="setting-desc">${t('logsDesc')}</div>
+    <div class="settings-section" data-section="updates">
+      <button class="settings-section-header" type="button" onclick="toggleSettingsSection('updates')" aria-expanded="true" aria-controls="settings-body-updates">
+        <span class="settings-section-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v14M5 11l7 7 7-7"/></svg></span>
+        <span class="settings-section-title">${t('settingsSec_updates')}</span>
+        <span class="settings-section-count">${t('settingsSec_updatesDesc')}</span>
+        <svg class="settings-section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+      <div class="settings-section-body" id="settings-body-updates">
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('updName')}</div>
+                <div class="setting-desc" id="update-check-desc">${t('updDesc')}</div>
+              </div>
+              <button class="btn sm" id="btn-check-updates" onclick="manualCheckForUpdates()">🔄 ${t('btnCheckNow')}</button>
+            </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">yt-dlp</div>
+                <div class="setting-desc" id="ytdlp-status-desc">${t('checking')}</div>
+              </div>
+              <button class="btn sm" id="btn-ytdlp-update" onclick="manualUpdateYtdlp()">⬆ ${t('btnCheckNow')}</button>
+            </div>
       </div>
-      <button class="btn sm" onclick="viewLogs()">${t('logsName')}</button>
     </div>
-    <div class="setting-row" style="border:none">
-      <div class="setting-info">
-        <div class="setting-name">Freq.Phull</div>
-        <div class="setting-desc" id="about-version-desc">${t('by')} Cynphull / Hood Knights</div>
+    <div class="settings-section" data-section="extension">
+      <button class="settings-section-header" type="button" onclick="toggleSettingsSection('extension')" aria-expanded="true" aria-controls="settings-body-extension">
+        <span class="settings-section-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 11h-1V8a2 2 0 0 0-2-2h-3V5a2 2 0 1 0-4 0v1H6a2 2 0 0 0-2 2v3H3a2 2 0 1 0 0 4h1v3a2 2 0 0 0 2 2h3v-1a2 2 0 1 1 4 0v1h3a2 2 0 0 0 2-2v-3h1a2 2 0 1 0 0-4z"/></svg></span>
+        <span class="settings-section-title">${t('settingsSec_extension')}</span>
+        <span class="settings-section-count">${t('settingsSec_extensionDesc')}</span>
+        <svg class="settings-section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+      <div class="settings-section-body" id="settings-body-extension">
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('extLinkName')}</div>
+                <div class="setting-desc">${t('extLinkDesc')}</div>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+                <button class="btn sm" onclick="openExtensionPage()" title="GitHub">🌐 ${t('extLinkOpen')}</button>
+                <button class="btn sm pri" onclick="openExtensionHowTo()">📖 ${t('extLinkHowTo')}</button>
+              </div>
+            </div>
+      </div>
+    </div>
+    <div class="settings-section" data-section="diagnostics">
+      <button class="settings-section-header" type="button" onclick="toggleSettingsSection('diagnostics')" aria-expanded="true" aria-controls="settings-body-diagnostics">
+        <span class="settings-section-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 3v6a4 4 0 0 0 8 0V3M8 13v3a5 5 0 0 0 10 0v-1"/><circle cx="18" cy="13" r="2"/></svg></span>
+        <span class="settings-section-title">${t('settingsSec_diagnostics')}</span>
+        <span class="settings-section-count">${t('settingsSec_diagnosticsDesc')}</span>
+        <svg class="settings-section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+      <div class="settings-section-body" id="settings-body-diagnostics">
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('diagName')}</div>
+                <div class="setting-desc" id="diag-paths-desc">${t('diagDesc')}</div>
+              </div>
+              <button class="btn sm" onclick="diagnosePaths()">${t('btnDiagnose')}</button>
+            </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('logsName')}</div>
+                <div class="setting-desc">${t('logsDesc')}</div>
+              </div>
+              <button class="btn sm" onclick="viewLogs()">${t('logsName')}</button>
+            </div>
+      </div>
+    </div>
+    <div class="settings-section" data-section="about">
+      <button class="settings-section-header" type="button" onclick="toggleSettingsSection('about')" aria-expanded="true" aria-controls="settings-body-about">
+        <span class="settings-section-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg></span>
+        <span class="settings-section-title">${t('settingsSec_about')}</span>
+        <span class="settings-section-count">${t('settingsSec_aboutDesc')}</span>
+        <svg class="settings-section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+      <div class="settings-section-body" id="settings-body-about">
+        <div class="setting-row" style="border:none">
+              <div class="setting-info">
+                <div class="setting-name">Freq.Phull</div>
+                <div class="setting-desc" id="about-version-desc">${t('by')} Cynphull / Hood Knights</div>
+              </div>
+            </div>
       </div>
     </div>
   `;
@@ -9894,6 +10023,7 @@ function renderSettings() {
   // with the displayed string.
   refreshYtdlpStatus();
   syncHardwareAccelToggle();
+  _applySettingsSectionState();
   if (window.api && window.api.updater) {
     window.api.updater.getStatus().then(s => {
       const el = document.getElementById('about-version-desc');
@@ -10251,6 +10381,17 @@ async function manualCheckForUpdates() {
   const desc = document.getElementById('update-check-desc');
   const origDesc = desc ? desc.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = '⏳ ' + t('checkingBtn'); }
+  // v0.3.0: known-benign updater errors get treated as "up to date"
+  // here too — match what updater.js does on the main side. Without
+  // this, the user clicked "Check now" and saw a red error toast even
+  // for non-problems (missing latest.yml, offline, etc.).
+  const isBenignUpdateError = (msg) => {
+    if (!msg) return false;
+    return /no published versions/i.test(msg)
+        || /cannot find latest\.yml/i.test(msg)
+        || /ENOTFOUND|EAI_AGAIN|ETIMEDOUT/i.test(msg)
+        || /net::ERR_(INTERNET_DISCONNECTED|NAME_NOT_RESOLVED|CONNECTION_REFUSED)/i.test(msg);
+  };
   try {
     if (!window.api || !window.api.updater) {
       throw new Error(t('updApiUnavailable'));
@@ -10263,8 +10404,15 @@ async function manualCheckForUpdates() {
         if (desc) desc.textContent = t('updDevOnlyLong');
       } else {
         const errMsg = (result && result.error) || 'Update check failed';
-        showAppNotification('✕ ' + errMsg, 'err');
-        if (desc) desc.textContent = '✕ ' + errMsg;
+        // Benign? Pretend we're up to date — that's functionally true.
+        if (isBenignUpdateError(errMsg)) {
+          showAppNotification('✓ ' + t('updUpToDate'), 'ok');
+          if (desc) desc.textContent = t('updUpToDate');
+          if (typeof diagLog === 'function') diagLog('Updater (benign): ' + errMsg, 'info');
+        } else {
+          showAppNotification('✕ ' + errMsg, 'err');
+          if (desc) desc.textContent = '✕ ' + errMsg;
+        }
       }
       return;
     }
@@ -13056,6 +13204,46 @@ function onUpdateBannerLater() {
     t.style.setProperty('--ripple-y', ((e.clientY - r.top)  / r.height * 100) + '%');
   }, { capture: true, passive: true });
 })();
+
+// v0.3.1: Settings sections — collapsible categories. Persisted state
+// in localStorage so user choices survive across sessions. Defaults are
+// opinionated: "general", "library", "maintenance", "updates" open;
+// the rest collapsed so the page isn't overwhelming on first load.
+const SETTINGS_SEC_KEY = 'freqphull.settingsSections';
+const SETTINGS_SEC_DEFAULT_OPEN = new Set(['general', 'library', 'maintenance', 'updates']);
+function _loadSettingsSectionState() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_SEC_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch { return null; }
+}
+function _saveSettingsSectionState(state) {
+  try { localStorage.setItem(SETTINGS_SEC_KEY, JSON.stringify(state)); } catch {}
+}
+function _applySettingsSectionState() {
+  const stored = _loadSettingsSectionState();
+  const wraps = document.querySelectorAll('.settings-section');
+  wraps.forEach(w => {
+    const id = w.dataset.section;
+    let open;
+    if (stored && id in stored) open = !!stored[id];
+    else open = SETTINGS_SEC_DEFAULT_OPEN.has(id);
+    w.classList.toggle('collapsed', !open);
+    const btn = w.querySelector('.settings-section-header');
+    if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+}
+function toggleSettingsSection(id) {
+  const wrap = document.querySelector('.settings-section[data-section="' + id + '"]');
+  if (!wrap) return;
+  const collapsed = wrap.classList.toggle('collapsed');
+  const btn = wrap.querySelector('.settings-section-header');
+  if (btn) btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  const state = _loadSettingsSectionState() || {};
+  state[id] = !collapsed;
+  _saveSettingsSectionState(state);
+}
 
 // v0.3.0: Back-to-top floating button. Observes scroll on #main and
 // toggles a .show class past 400px. Click smooth-scrolls to top.

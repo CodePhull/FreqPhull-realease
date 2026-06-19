@@ -143,8 +143,17 @@ function setupUpdater(opts) {
     manualCheckInProgress = false;
   });
   autoUpdater.on('error', (err) => {
-    mainLog('[updater][err] ' + (err && err.message));
-    send('update-error', { message: (err && err.message) || 'Unknown updater error' });
+    // v0.3.0: benign errors get downgraded to "up to date" so users
+    // don't see scary red toasts for things that aren't actionable
+    // (missing latest.yml, offline, dev-mode no-releases). Still
+    // logged for diagnostics.
+    if (isBenignUpdaterError(err)) {
+      mainLog('[updater] benign error (treated as no-update): ' + (err && err.message));
+      send('update-not-available', { version: require('electron').app.getVersion() });
+    } else {
+      mainLog('[updater][err] ' + (err && err.message));
+      send('update-error', { message: (err && err.message) || 'Unknown updater error' });
+    }
     manualCheckInProgress = false;
   });
   autoUpdater.on('download-progress', (p) => {
@@ -236,8 +245,27 @@ function setupUpdater(opts) {
   // info-level (verbose log only) instead of error-level so the logs
   // don't fill up with red flags for a non-problem. Same for the interval
   // check below. All other errors still log as errors.
-  const isNoReleasesError = (e) =>
-    e && e.message && /no published versions/i.test(e.message);
+  // v0.3.0: classify "benign" updater errors — conditions where there's
+  // genuinely no update the user can install, even though electron-updater
+  // technically raised an error. Treating these as errors spams users
+  // with red toasts that mean nothing actionable. Instead we downgrade
+  // them to "up to date".
+  //   • "no published versions" — release page is empty (dev only)
+  //   • "Cannot find latest.yml" — release exists but the YAML manifest
+  //     electron-builder uses is missing from the assets. Common when
+  //     a release is published manually (e.g. just the .exe attached).
+  //   • Net::ERR_INTERNET_DISCONNECTED / ENOTFOUND — user is offline; not
+  //     a problem with the app, will retry on next interval.
+  const isBenignUpdaterError = (e) => {
+    const m = e && e.message;
+    if (!m) return false;
+    return /no published versions/i.test(m)
+        || /cannot find latest\.yml/i.test(m)
+        || /ENOTFOUND|EAI_AGAIN|ETIMEDOUT/i.test(m)
+        || /net::ERR_(INTERNET_DISCONNECTED|NAME_NOT_RESOLVED|CONNECTION_REFUSED)/i.test(m);
+  };
+  // Backward compat alias (used below at every check site)
+  const isNoReleasesError = isBenignUpdaterError;
   // v0.2.8: boot check fires SOONER (1500ms vs 8s) so users see the
   // update prompt almost immediately on launch. A 'checking' event is
   // also sent to the renderer for a brief status indicator so it's

@@ -9,7 +9,40 @@ along the way.
 
 ---
 
+## v0.3.1 (2026-06-19)
+
+**Build config: electron pinned**
+- `electron-builder --publish` was failing with `Electron version "^28.0.0" is a range, not a fixed version`. The caret range works for `npm install` (gets you the latest 28.x) but electron-builder needs an EXACT version because it downloads platform-specific binaries for one specific release — a range can't be resolved without electron installed in node_modules (which the publish step doesn't necessarily have at that point).
+- Pinned `devDependencies.electron` to `28.3.3` (the latest stable in the 28.x line) and added `build.electronVersion: "28.3.3"` to electron-builder config as a fallback so even if someone touches the devDep range later, the builder still has a fixed reference.
+- After pulling this fix: `rm -rf node_modules package-lock.json && npm install` to make sure the exact version is downloaded, then `npx electron-builder --win --x64 --publish always` should run clean.
+
+
+**Settings page reorganized into categories**
+- 22 flat rows replaced with 9 collapsible sections, each with an icon, title, and short description on the header. Sections persist their open/collapsed state in localStorage so the user's layout choices survive across sessions. Default opens: General, Library, Maintenance, Updates — the high-traffic ones. Default collapsed: Performance, AI engines, Extension, Diagnostics, About — present but not in the way.
+- The categories:
+  - **General** — Language, Stockpile folder
+  - **Library** — Auto-analyze, Auto-tag, Auto-send to folder, Watch folder, Write tags to files, Download autoclear
+  - **Maintenance** — Storage breakdown, Find duplicates, Repair history, Fix file locations, Clean temp files
+  - **Performance** — CPU-only for stem separation, Hardware acceleration
+  - **AI engines** — Engines setup (Python, Demucs, Whisper)
+  - **Updates** — Check for app updates, yt-dlp version
+  - **Browser extension** — Link to repo + how-to-install modal
+  - **Diagnostics** — Diagnose paths, View logs
+  - **About** — Version, Cynphull / Hood Knights credit
+- Open/close uses the CSS Grid `grid-template-rows: 0fr -> 1fr` trick — buttery smooth animation on dynamic content with no JS height measurement. Chevron rotates 90 degrees on toggle. Honors `prefers-reduced-motion`.
+- Each section header has a 30x30 bordered icon tile that brightens on hover; whole header is keyboard-accessible with focus ring meeting WCAG contrast, `aria-expanded` and `aria-controls` properly wired.
+- Section icons: globe (general), stacked-books (library), wrench (maintenance), lightning (performance), CPU chip (engines), down-arrow (updates), puzzle piece (extension), stethoscope (diagnostics), info-circle (about). All monochrome stroke SVG, inherit current color, ~150 bytes each.
+- EN/FR parity 487/487; new keys translated for all 9 sections + their subtitles.
+
+
 ## v0.3.0 (2026-06-19)
+
+**Updater stops crying wolf on benign errors**
+- The "Cannot find latest.yml in the latest release artifacts" toast in the screenshot was electron-updater complaining that the GitHub release exists but doesn't ship the YAML manifest electron-updater uses to detect new versions. Common when a release is published manually (just the .exe attached, no auto-generated assets). Functionally there's no update the user can install, but we were surfacing it as a scary red error.
+- New benign-error classifier in both `updater.js` (main side) and `app.js` (renderer side). Matches: "no published versions", "Cannot find latest.yml", `ENOTFOUND`/`ETIMEDOUT`/`EAI_AGAIN`, and `net::ERR_INTERNET_DISCONNECTED`/`NAME_NOT_RESOLVED`/`CONNECTION_REFUSED`. When any of these fire:
+  - Main: `autoUpdater.on('error')` downgrades the event from `update-error` to `update-not-available`, so the renderer treats it as "up to date" everywhere automatically.
+  - Renderer manual-check button now shows `✓ You're up to date` for benign errors instead of `✕ Cannot find latest.yml...`. Still logged to the diag panel as `info` for diagnostics.
+- Genuine errors (auth failures, malformed updates, signature mismatches) still surface as `err` toasts so real problems aren't masked.
 
 **Branded updater now fronts the install-restart sequence (the actual ask)**
 - v0.2.8 misread the request and built the branded updater as a Settings-launched preview window. That entry point is gone. The branded window now appears at the **exact moment that used to show a Windows-y "1988 wizard"** — between the user clicking INSTALL NOW and the app quitting to relaunch on the new version.
