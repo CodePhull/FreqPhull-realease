@@ -114,9 +114,30 @@ async function initDB() {
     slog('sql.js loaded, initializing...');
     const sqlJs = await initSqlJs();
     slog('sql.js initialized');
-    db = fs.existsSync(DB_PATH)
-      ? new sqlJs.Database(fs.readFileSync(DB_PATH))
-      : new sqlJs.Database();
+    // v0.3.3: corruption-resilient open. If the SQLite file is malformed,
+    // backup the bad bytes for forensics and create a fresh empty DB.
+    // Better to lose history once than to fail-to-start forever.
+    if (fs.existsSync(DB_PATH)) {
+      try {
+        const buf = fs.readFileSync(DB_PATH);
+        // sql.js validates the header on construction; throws on bad file
+        db = new sqlJs.Database(buf);
+      } catch (corruptErr) {
+        slog('DB CORRUPTION DETECTED: ' + corruptErr.message);
+        const backupPath = DB_PATH + '.corrupt.' + Date.now() + '.bak';
+        try {
+          fs.copyFileSync(DB_PATH, backupPath);
+          slog('Corrupted DB backed up to: ' + backupPath);
+        } catch (bErr) {
+          slog('Backup failed: ' + bErr.message);
+        }
+        try { fs.unlinkSync(DB_PATH); } catch {}
+        db = new sqlJs.Database();
+        slog('DB recovery: started fresh empty database');
+      }
+    } else {
+      db = new sqlJs.Database();
+    }
     db.run(`CREATE TABLE IF NOT EXISTS history (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT, channel TEXT, youtube_url TEXT,
@@ -488,19 +509,171 @@ function repairMarkerOnce() {
 }
 repairMarkerOnce();
 
-// Read the engines marker file to get the Python command that setup verified.
-// Falls back to 'python' if marker absent or unreadable.
-function getPythonCmd() {
-  const markerPath = path.join(os.homedir(), 'AppData', 'Roaming', 'freqphull', 'engines-ready.json');
+// Cached Python command for this server session. Reset only on
+// /engines/setup or app restart so we don't pay the discovery cost
+// every spawn.
+let _cachedPythonCmd = null;
+let _cachedPythonCheckedAt = 0;
+
+// v0.3.3: robust Python discovery. The old version returned a bare
+// 'python' as fallback, which on most Windows machines resolves to
+// the Microsoft Store ALIAS — a fake python.exe at
+// %LOCALAPPDATA%\\Microsoft\\WindowsApps\\python.exe that prints
+// "Python was not found; install from MS Store" and exits 9009.
+// That's the bug in the user's log.
+//
+// New discovery order:
+//   1. engines-ready.json marker (post-setup, full path)
+//   2. py launcher (`py -3` — official Python launcher, never the alias)
+//   3. Common install dirs:
+//        %LOCALAPPDATA%\\Programs\\Python\\Python3*\\python.exe
+//        C:\\Python3*\\python.exe
+//        %PROGRAMFILES%\\Python3*\\python.exe
+//        %PROGRAMFILES(X86)%\\Python3*\\python.exe
+//   4. PATH scan with alias filter (skip anything under \\WindowsApps\\)
+//   5. Last resort: bare 'python' (will fail but at least we tried)
+//
+// Each candidate is validated with a quick `python -c "import sys; print(sys.version_info[:2])"`
+// so we don't return a path that exists but is broken.
+function isMicrosoftStoreAlias(pyPath) {
+  if (!pyPath) return false;
+  // The MS Store alias lives under WindowsApps and is a 0-byte (or
+  // very small) reparse point. Real python.exe is multi-MB.
+  const lower = pyPath.toLowerCase();
+  if (lower.indexOf('windowsapps') !== -1) return true;
   try {
+    const st = fs.statSync(pyPath);
+    // Real python.exe is >100KB. Aliases are typically <10KB.
+    if (st.size < 50000) return true;
+  } catch {}
+  return false;
+}
+
+function validatePythonCmd(pyCmd, args) {
+  // Spawn synchronously with a tight timeout; expect output like (3, 10).
+  args = args || [];
+  try {
+    const result = require('child_process').spawnSync(
+      pyCmd,
+      args.concat(['-c', 'import sys; print(sys.version_info[0], sys.version_info[1])']),
+      { timeout: 3500, windowsHide: true, encoding: 'utf8' });
+    if (result.status !== 0) return null;
+    const out = (result.stdout || '').trim();
+    const m = out.match(/^(\d+)\s+(\d+)/);
+    if (!m) return null;
+    const major = parseInt(m[1], 10);
+    const minor = parseInt(m[2], 10);
+    if (major !== 3 || minor < 9) return null; // need 3.9+
+    return { major, minor };
+  } catch { return null; }
+}
+
+function discoverPython() {
+  // Re-check at most every 60s if cached (so re-installs are picked up).
+  if (_cachedPythonCmd && Date.now() - _cachedPythonCheckedAt < 60000) {
+    return _cachedPythonCmd;
+  }
+
+  const tryCmds = []; // ordered list of candidates
+
+  // 1. Marker file from our setup script
+  try {
+    const markerPath = path.join(os.homedir(), 'AppData', 'Roaming', 'freqphull', 'engines-ready.json');
     if (fs.existsSync(markerPath)) {
       const info = JSON.parse(readUtf8(markerPath));
-      if (info && info.python) return info.python;
+      if (info && info.python && fs.existsSync(info.python)) {
+        if (!isMicrosoftStoreAlias(info.python)) {
+          tryCmds.push({ cmd: info.python, args: [], source: 'marker' });
+        }
+      }
     }
-  } catch (e) {
-    slog('getPythonCmd: marker read failed: ' + e.message);
+  } catch {}
+
+  // 2. py launcher (Windows official Python launcher — NEVER the alias)
+  if (process.platform === 'win32') {
+    tryCmds.push({ cmd: 'py', args: ['-3'], source: 'py-launcher' });
   }
-  return 'python';
+
+  // 3. Common install locations on Windows
+  if (process.platform === 'win32') {
+    const home = os.homedir();
+    const candidates = [];
+    const versions = ['313', '312', '311', '310', '39'];
+    for (const v of versions) {
+      candidates.push(path.join(home, 'AppData', 'Local', 'Programs', 'Python', 'Python' + v, 'python.exe'));
+      candidates.push('C:\\Python' + v + '\\python.exe');
+      if (process.env.PROGRAMFILES) {
+        candidates.push(path.join(process.env.PROGRAMFILES, 'Python' + v, 'python.exe'));
+      }
+      if (process.env['PROGRAMFILES(X86)']) {
+        candidates.push(path.join(process.env['PROGRAMFILES(X86)'], 'Python' + v, 'python.exe'));
+      }
+    }
+    for (const c of candidates) {
+      try {
+        if (fs.existsSync(c) && !isMicrosoftStoreAlias(c)) {
+          tryCmds.push({ cmd: c, args: [], source: 'common-path' });
+        }
+      } catch {}
+    }
+  }
+
+  // 4. PATH scan via `where python` with alias filter
+  if (process.platform === 'win32') {
+    try {
+      const r = require('child_process').spawnSync('where', ['python'],
+        { timeout: 2000, windowsHide: true, encoding: 'utf8' });
+      if (r.status === 0 && r.stdout) {
+        for (const line of r.stdout.split(/\r?\n/)) {
+          const p = line.trim();
+          if (p && !isMicrosoftStoreAlias(p)) {
+            tryCmds.push({ cmd: p, args: [], source: 'PATH' });
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // 5. Final fallback (will likely fail, but documented)
+  tryCmds.push({ cmd: process.platform === 'win32' ? 'python' : 'python3', args: [], source: 'fallback' });
+
+  // Validate each in order
+  for (const c of tryCmds) {
+    const v = validatePythonCmd(c.cmd, c.args);
+    if (v) {
+      slog('discoverPython: using ' + c.cmd + (c.args.length ? ' ' + c.args.join(' ') : '') +
+           ' (' + c.source + ', Python ' + v.major + '.' + v.minor + ')');
+      _cachedPythonCmd = c.cmd;
+      _cachedPythonArgs = c.args;
+      _cachedPythonCheckedAt = Date.now();
+      return c.cmd;
+    }
+  }
+
+  // Everything failed — return null so callers can short-circuit
+  slog('discoverPython: NO Python interpreter found (tried ' + tryCmds.length + ' candidates)');
+  _cachedPythonCmd = null;
+  _cachedPythonCheckedAt = Date.now();
+  return null;
+}
+
+let _cachedPythonArgs = [];
+function getPythonArgs() { return _cachedPythonArgs || []; }
+
+function getPythonCmd() {
+  const cmd = discoverPython();
+  // Preserve backward-compat with the old API: never return null,
+  // callers that check `enginesReady()` first will short-circuit;
+  // bare callers will get the failing alias and the existing error
+  // path will catch it.
+  return cmd || (process.platform === 'win32' ? 'python' : 'python3');
+}
+
+// v0.3.3: callable from /engines/setup so the freshly-installed Python
+// is detected immediately without waiting for the 60s cache to expire.
+function clearPythonCache() {
+  _cachedPythonCmd = null;
+  _cachedPythonCheckedAt = 0;
 }
 
 // Quick sanity check that the engine runtime is importable.
@@ -3488,6 +3661,12 @@ function analyzeOneInBackground(row) {
           try { fs.unlinkSync(wavTmp); } catch (e) {}
           if (code !== 0) {
             slog('bg-analyze id=' + row.id + ' python exit=' + code + ': ' + stderr.slice(0, 200));
+            // v0.3.3: trip the global Python-missing breaker on exit
+            // code 9009 (Windows ERROR_BAD_COMMAND) or MS Store alias text
+            if (code === 9009 || /Python was not found/i.test(stderr) ||
+                (stderr || '').indexOf('Microsoft Store') !== -1) {
+              tripPythonMissingBreaker();
+            }
             analyzeWorker.failed.set(row.id, (analyzeWorker.failed.get(row.id) || 0) + 1);
             return resolve(false);
           }
@@ -4266,9 +4445,20 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
   const inputPath = req.file.path, model = req.body.model || 'base', lang = req.body.language || 'auto';
   slog('Transcribe: model=' + model + ' lang=' + lang);
   const cleanup = () => { try { fs.unlinkSync(inputPath); } catch {} };
+  // v0.3.3: skip the spawn entirely if the breaker says no Python.
+  // Returns a 503 with a friendly hint so the UI can prompt for setup.
+  if (_pythonMissingBreaker) {
+    cleanup();
+    return res.status(503).json({
+      error: 'Python engine not available',
+      hint: 'Run engine setup from Settings, or install Python 3.10+ manually.',
+      reason: 'python-missing',
+    });
+  }
   try {
     const langArgs = lang === 'auto' ? [] : ['--language', lang];
-    await run('python', ['-m', 'whisper', inputPath, '--model', model, '--output_format', 'txt', '--output_dir', os.tmpdir(), '--verbose', 'False', ...langArgs]);
+    const pyCmd = getPythonCmd();
+    await run(pyCmd, ['-m', 'whisper', inputPath, '--model', model, '--output_format', 'txt', '--output_dir', os.tmpdir(), '--verbose', 'False', ...langArgs]);
     const txtPath = path.join(os.tmpdir(), path.basename(inputPath) + '.txt');
     if (!fs.existsSync(txtPath)) throw new Error('Whisper produced no output file');
     const text = fs.readFileSync(txtPath, 'utf8').trim();
@@ -4984,7 +5174,7 @@ app.post('/clean-temp-files', (req, res) => {
 });
 
 // ── Start: bind port first, THEN init DB ──────────────────────────────────────
-app.listen(PORT, '127.0.0.1', () => {
+const _httpServer = app.listen(PORT, '127.0.0.1', () => {
   slog('Server listening on port ' + PORT + ' — ready!');
   // Log file location so user can find it
   slog('Log file: ' + logPath);
@@ -5005,18 +5195,41 @@ app.listen(PORT, '127.0.0.1', () => {
   } catch (e) {
     slog('temp-sweep startup failed: ' + e.message);
   }
-  setInterval(() => {
-    try {
-      const sw = sweepOldTempFiles(24);
-      if (sw.deleted > 0) {
-        const mb = Math.round(sw.bytesFreed / 1024 / 1024 * 10) / 10;
-        slog('temp-sweep periodic: deleted ' + sw.deleted + ' files (' + mb + ' MB freed)');
-      }
-    } catch (e) {
-      slog('temp-sweep periodic failed: ' + e.message);
-    }
-  }, 6 * 3600 * 1000);
 });
+
+// v0.3.3: port-collision detection. Old code silently failed and the
+// renderer would just see "server not ready" forever. Now we log it,
+// exit non-zero, and main.js shows the user a clear dialog (see main.js
+// _handleServerExit hook).
+_httpServer.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    const msg = 'PORT IN USE: ' + PORT + ' is already taken. ' +
+                'Another Freq.Phull instance may be running. ' +
+                'Quit it via Task Manager, or restart your computer.';
+    slog(msg);
+    // Emit a structured message for main.js to parse
+    try { process.stdout.write('__FREQPHULL_FATAL__ port-in-use\n'); } catch {}
+    setTimeout(() => process.exit(2), 200);
+  } else {
+    slog('HTTP server error: ' + err.code + ' ' + err.message);
+  }
+});
+
+// v0.3.3: periodic temp sweep (every 6h). Was previously inside the
+// app.listen callback; moved out so it survives the listen() error
+// path (port collision shouldn't disable temp cleanup if a future
+// version retries on a different port).
+setInterval(() => {
+  try {
+    const sw = sweepOldTempFiles(24);
+    if (sw.deleted > 0) {
+      const mb = Math.round(sw.bytesFreed / 1024 / 1024 * 10) / 10;
+      slog('temp-sweep periodic: deleted ' + sw.deleted + ' files (' + mb + ' MB freed)');
+    }
+  } catch (e) {
+    slog('temp-sweep periodic failed: ' + e.message);
+  }
+}, 6 * 3600 * 1000).unref();
 
 // Global handlers - belt and suspenders. Even if slog ever throws
 // (it shouldn't anymore), the try/catch here prevents recursion.

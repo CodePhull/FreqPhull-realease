@@ -9,6 +9,96 @@ along the way.
 
 ---
 
+## v0.3.3 (2026-06-20)
+
+**Professional iconography — emojis removed app-wide**
+- 235 emoji uses across renderer replaced with monochrome stroke SVG icons (Heroicons/Lucide style). 41 unique emojis mapped to 27 named icons (folder, trash, pencil, search, tag, box, drive, broom, refresh, wrench, image, download, upload, arrow-down, globe, book, sparkles, shuffle, note, mic, volume, sliders, heart, heart-filled, warn, clock, plus x and check for state).
+- Decorative emoji PREFIXES in notification messages (e.g. `✓ Database loaded`, `📦 Sent to ...`, `⚡ Forcing`) — REMOVED. The notification system already shows a type icon (check/x/warn/info bubble); the prefix was redundant noise. Cleaner text reads more professionally.
+- Heart icons (`♥` favorited, `♡` unfavorite) replaced with SVG — Windows renders these as bright red emoji which clashed with the monochrome aesthetic. Now they inherit currentColor like every other icon.
+- Diagnostics text-equivalents: `✓ FOUND` → `OK`, `✗ missing` → `NOT FOUND`. State indicators in waiting/running/done/error use ASCII strings instead of Unicode glyphs.
+- New `.ic` CSS utility class for all inline icons: vertical-align baseline-aware, currentColor inheritance, automatic 4px/6px margin when adjacent to text in buttons.
+
+**Updater window — compact, modern, polished**
+- Rewrote `renderer/updater/updater.html` from scratch to feel like a focused product window, not a popup:
+  - Slimmer 620x720 footprint with tighter padding (28px body padding vs 32px, 12-13px font sizes throughout)
+  - Compact 22px topbar (was 28px), smaller logo monogram, light topbar buttons
+  - Status badge gets a colored dot pseudo-element (currentColor) — clean state indicator
+  - Version cards downscaled: 24px Bebas Neue numbers (was 30px), tighter padding, subtle 1.8% top-edge gradient for depth
+  - Arrow between versions is now an inline SVG instead of `->` text
+  - "What's new" list shows up to 12 bullets with custom dot markers (5px circles, muted color)
+  - Footer buttons more compact (10px padding vs 12px), with proper hover/active/focus states matching the desktop UI
+  - Installing-takeover screen: HK monogram tile downscaled to 72x72 (was 88x88), softer 14px corner radius, 36px hero title (was 42px), thinner 2px progress shimmer (was 3px)
+  - WCAG focus rings on every interactive element, matches the rest of the app
+  - All Unicode artifacts removed — file is now pure ASCII for max codepage compatibility
+
+**Bug-proof install verification — 10x audit**
+- DB corruption recovery: confirmed present (backs up + starts fresh)
+- Port collision: confirmed `__FREQPHULL_FATAL__` marker → main.js dialog → app exit code 2
+- Python alias filter: confirmed `discoverPython` rejects WindowsApps paths + files <50KB
+- Python missing circuit breaker: confirmed trips on exit 9009, resets on setup success
+- EPIPE feedback loop: confirmed both `server.js` (`_stdoutDead` + `_safeWrite`) and `main.js` (`_mainStdoutDead`)
+- Updater benign-error filter: confirmed downgrades `Cannot find latest.yml` / `ENOTFOUND` / etc. to "up to date"
+- Backend-ready handshake: confirmed renderer listens for `backend-ready` IPC
+- Notification type fallback: confirmed unknown type falls through to `info`
+- File integrity: confirmed all expected assets present (fonts, logos, updater HTML, preload scripts)
+- Package config sanity: confirmed electron pinned to 28.3.3, oneClick install enabled, electronVersion set
+- i18n parity: confirmed EN/FR 488/488, zero missing on either side
+- SVG markup: confirmed balanced across all source files
+
+
+
+**Install-proofing pass — real users mean real edge cases**
+
+**DB corruption recovery.** `new sqlJs.Database(fs.readFileSync(DB_PATH))` was a single point of failure: if the SQLite file got malformed (incomplete write from a crash, antivirus scan mid-write, OneDrive sync conflict), the server-wide init throws and the app never starts. Now wraps the constructor in try/catch — on failure, backs up the corrupt file to `freqphull.db.corrupt.{timestamp}.bak` (forensics), deletes the bad file, and starts with a fresh empty DB. User loses history once instead of being permanently locked out.
+
+**Port-collision detection.** EADDRINUSE on 47891 (another Freq.Phull running, port hijacked by something else, port reserved by Windows networking) used to silently fail the listen() call. The renderer would just see "server not ready" forever — no diagnosis, no path forward. Now the server emits a `__FREQPHULL_FATAL__ port-in-use` marker on stdout, exits code 2, and `main.js` parses it to show a proper error dialog: "Port 47891 is already in use — Open Task Manager, end any Freq.Phull / node.exe processes, then restart." Clean failure mode instead of mystery hang.
+
+**Periodic temp-sweep moved out of the listen callback** — was previously coupled to the listen() success path, meaning if startup ever moved to a retry-on-different-port model the periodic cleanup would skip. Now lives at module scope with `.unref()` so it doesn't keep the process alive on shutdown.
+
+**Subtle UI polish (NOT a redesign)**
+- Sharper Windows ClearType rendering via `-webkit-font-smoothing: antialiased`
+- WCAG-compliant focus rings everywhere (3px white at 32% alpha, with 1px dark inset so it never blends with the button surface)
+- Clearer disabled states: opacity .42 + 50% saturate so disabled buttons read distinctly dead instead of just dim
+- Setting rows get a hair more lift on hover (white at 1.2% alpha)
+- Refined scrollbar: slimmer thumb, monochrome only, hover/active states tightened
+- Selection color muted to brand-white (was bright Windows blue)
+- Active nav button gets a clean 2px white accent bar that scales in (220ms ease-out-quart) — visible but never garish
+- History badges (BPM/KEY/WAV chips) get a subtle inner top highlight — looks bevelled without adding chroma
+- Headers tightened to -0.01em letter-spacing for the "product" feel; Bebas Neue keeps its 0.02em opening
+- Buttons brighten down to 92% on press (consistent feedback across the app)
+- Modal cards get a soft 1.8% top-edge gradient for depth without adding color
+- Tab pane fade-in shifted to ease-out-quart (260ms) — feels more deliberate than the previous quick fade
+
+
+
+**Microsoft Store Python alias trap — fixed**
+- User log showed `bg-analyze id=1 python exit=9009` with message "Python was not found; run without arguments to install from the Microsoft Store" repeating every download. Smoking gun: Windows ships a fake `python.exe` at `%LOCALAPPDATA%\Microsoft\WindowsApps\python.exe` that does nothing but open the MS Store. Our old `getPythonCmd()` fallback returned the bare string `'python'`, which resolves to that alias on every fresh Windows machine. Cue endless 9009 failures and zero analysis ever running.
+- New `discoverPython()` with auto-detection, ordered fallback chain:
+  1. `engines-ready.json` marker (post-setup, full absolute path)
+  2. `py -3` launcher — official Python launcher, NEVER the alias
+  3. Common install dirs: `%LOCALAPPDATA%\Programs\Python\Python3*\python.exe`, `C:\Python3*\python.exe`, `%PROGRAMFILES%\Python3*\python.exe`, `%PROGRAMFILES(X86)%\Python3*\python.exe` (versions 3.13 down to 3.9)
+  4. `where python` output, with WindowsApps alias filtered out
+  5. Last-resort bare `'python'` (preserved old behavior; will fail but at least we tried)
+- Each candidate validated with a quick `import sys; print(sys.version_info)` spawn (timeout 3.5s) so we don't return a path that exists but is broken or too old. Requires Python 3.9+.
+- Alias filter is two-pronged: (a) reject any path containing `WindowsApps`, (b) reject any python.exe under 50 KB (real python.exe is multi-MB; aliases are reparse-point stubs ~5 KB).
+- Result cached for the session, re-checked at most every 60s so a fresh install is picked up.
+
+**Circuit breaker: bg-analyze stops hammering missing Python**
+- Even with discovery, some users genuinely don't have Python. Without a breaker, every download → ingest event re-triggered the worker → 3 retries on the SAME track → MS Store alias error → repeat for next track → log fills with the same error message hundreds of times.
+- New global breaker: on the first exit 9009 / "Python was not found" / "Microsoft Store" in stderr, the breaker trips and:
+  - Stops `nudgeAnalysisWorker()` from running — no more spawns
+  - Returns 503 from `/transcribe` with `reason: 'python-missing'` instead of trying to spawn
+  - Broadcasts an `engines-unavailable` SSE event
+- Breaker resets when `/engines/setup` exits 0. Also clears the Python-discovery cache so the freshly-installed Python is picked up immediately without waiting for the 60s cache.
+
+**Renderer: sticky engines-missing notification with Run-setup CTA**
+- New SSE listener fires once per session (idempotent via `_enginesUnavailableShown`) for the `engines-unavailable` event. Shows a sticky warn-toast (no auto-dismiss) with text: "Python engine not detected. Click to set it up — automatic BPM/key analysis is paused until then." Clicking jumps to Settings tab, scrolls to the AI engines section, and expands it if collapsed. Translated EN/FR.
+- Matching `engines-available` event shows a brief ✓ "Python engine ready. Background analysis resumed." once setup completes successfully — confirmation for the user that the fix worked.
+
+**Transcribe also routes through the discovered Python**
+- Old code hard-coded `await run('python', ['-m', 'whisper', ...])` which fell into the same alias trap. Now uses `getPythonCmd()` and short-circuits on the breaker.
+
+
 ## v0.3.2 (2026-06-19)
 
 **Settings sections actually collapse now**

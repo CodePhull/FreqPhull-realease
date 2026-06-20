@@ -114,11 +114,11 @@ function updateStatus(msg) {
   else if (m.includes('forked') || m.includes('pid=')) setStatus('Engine running…');
   else if (m.includes('sql.js loaded'))             setStatus('Loading database…');
   else if (m.includes('sql.js initialized'))        setStatus('Database ready…');
-  else if (m.includes('db ready'))                  setStatus('Database loaded ✓');
-  else if (m.includes('listening on port'))         setStatus('Backend online ✓');
+  else if (m.includes('db ready'))                  setStatus('Database loaded');
+  else if (m.includes('listening on port'))         setStatus('Backend online');
   else if (m.includes('page loaded'))               setStatus('Interface ready…');
   else if (m.includes('bin dir'))                   setStatus('Checking tools…');
-  else if (m.includes('yt-dlp') && m.includes('exists')) setStatus('Found yt-dlp ✓');
+  else if (m.includes('yt-dlp') && m.includes('exists')) setStatus('Found yt-dlp');
 }
 
 window.addEventListener('DOMContentLoaded', () => {
@@ -272,7 +272,7 @@ function showTamperBanner(info, mode) {
   banner.className = 'tamper-banner';
   if (mode !== 'tampered') banner.classList.add('soft');
   const isTampered = mode === 'tampered';
-  const headline = isTampered ? '⚠ Build verification failed' : 'ℹ Build check note';
+  const headline = isTampered ? '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01"/></svg> Build verification failed' : 'ℹ Build check note';
   const body = isTampered
     ? 'This Freq.Phull build does not match the signed manifest. AI engines have been disabled to protect your data. Reinstall from the official source to restore full functionality.'
     : 'A non-critical packaging check did not match. Engines remain available; this is informational only.';
@@ -404,7 +404,7 @@ function showTab(btn) {
     loadSepHistory();
     setTimeout(restoreScroll, 30);
   } else if (newTab === 'stockpile') {
-    // If a folder view is currently open (e.g. user clicked 🎵 to analyze
+    // If a folder view is currently open (e.g. user clicked <svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg> to analyze
     // a track and is now coming back), preserve it and just refresh the
     // track list. Otherwise show the dashboard.
     if (spFvFolder) {
@@ -670,7 +670,7 @@ function _dlRenderQueueRow(q) {
   const statusLabel = {
     waiting:    'Waiting',
     downloading: 'Downloading… ' + Math.round(q.progress || 0) + '%',
-    done:       'Downloaded ✓',
+    done:       'Downloaded',
     error:      'Failed' + (q.error ? ' — ' + q.error.slice(0, 40) : ''),
   }[q.status];
 
@@ -681,7 +681,7 @@ function _dlRenderQueueRow(q) {
   //   error → none (Download button can be used to retry by re-pasting)
   let actions = '';
   if (q.status === 'waiting') {
-    actions = `<button class="dl-qi-action danger" id="dl-qi-cancel-${q.id}" title="Remove from queue">✕</button>`;
+    actions = `<button class="dl-qi-action danger" id="dl-qi-cancel-${q.id}" title="Remove from queue"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
   } else if (q.status === 'done' && q.fullPath) {
     actions = `
       <button class="dl-qi-action" id="dl-qi-analyze-${q.id}" title="Open in Analyze">
@@ -827,7 +827,7 @@ async function processDlQueue() {
     es.close();
     const { filename, fullPath, historyId } = JSON.parse(e.data);
     document.getElementById('dl-fill').style.width = '100%';
-    document.getElementById('dl-prog-lbl').textContent = '✓ ' + filename;
+    document.getElementById('dl-prog-lbl').textContent = '' + filename;
     dlSt('Saved — ' + filename, 'ok');
     currentHistId = historyId;
 
@@ -852,12 +852,12 @@ async function processDlQueue() {
       await loadAudioBuffer(result.data, filename, historyId);
 
       // Notification with BPM/key — click to jump to analyze
-      showAppNotification('✓ ' + filename.slice(0, 30) + ' — ' + (currentBpm || '?') + ' BPM · ' + (currentKey || '?') + ' ' + (currentMode || ''), 'done', () => {
+      showAppNotification('' + filename.slice(0, 30) + ' — ' + (currentBpm || '?') + ' BPM · ' + (currentKey || '?') + ' ' + (currentMode || ''), 'done', () => {
         showTab(document.querySelector('[data-tab="analyze"]'));
       });
     } catch(err) {
       dlSt('Saved — open Analyze tab to load manually', 'ok');
-      showAppNotification('✓ Downloaded: ' + filename.slice(0, 35), 'done');
+      showAppNotification('Downloaded: ' + filename.slice(0, 35), 'done');
     }
 
     // Re-render the queue UI so the done item picks up its new actions
@@ -891,11 +891,11 @@ async function processDlQueue() {
         });
         const amJ = await am.json();
         if (amJ.committed && amJ.committed.moved) {
-          showAppNotification('📦 ' + t('sentTo') + ' ' + (amJ.committed.folder_name || ''), 'done');
+          showAppNotification('<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v13H3zM3 7l3-4h12l3 4M12 3v17"/></svg> ' + t('sentTo') + ' ' + (amJ.committed.folder_name || ''), 'done');
           refreshUIForAction('tag-changed', { historyId });
         } else if (amJ.tagged && amJ.tagged.length) {
           const names = amJ.tagged.map(t => t.folder_name).join(', ');
-          showAppNotification('✓ ' + t('autoMatched') + ': ' + names, 'ok');
+          showAppNotification('' + t('autoMatched') + ': ' + names, 'ok');
           // Refresh tag chips on the new history row
           refreshUIForAction('tag-changed', { historyId });
         }
@@ -916,7 +916,7 @@ async function processDlQueue() {
     let msg = 'Download failed';
     try { msg = JSON.parse(e.data).message; } catch {}
     dlSt('Error: ' + msg, 'err');
-    showAppNotification('✕ ' + msg.slice(0, 40), 'err');
+    showAppNotification('' + msg.slice(0, 40), 'err');
 
     // Mark this item errored, keep it in the queue
     item.status = 'error';
@@ -955,7 +955,7 @@ async function processDlQueue() {
 //   • prefers-reduced-motion users get instant fades instead of springs
 //
 // Icons:
-//   ok   ✓ check    err  ✕ x    info  i    warn  !
+//   ok   check    err  x    info  i    warn  !
 //
 // Backwards-compatible with the old (msg, type, onClick) signature.
 
@@ -1541,7 +1541,7 @@ async function loadAudioBuffer(arrayBuf, name, histId) {
     const msg = e.message || 'Unknown error';
     if (typeof showAppNotification === 'function') {
       const short = msg.length > 120 ? msg.slice(0, 117) + '…' : msg;
-      showAppNotification('✕ ' + short, 'err', null, 8000);
+      showAppNotification('' + short, 'err', null, 8000);
     }
     // CRITICAL: release the transition lock + handoff flags so the user can
     // retry without the app being permanently "locked into loading." Without
@@ -1674,7 +1674,7 @@ function seekAnalyzerTo(t_s) {
 // the normal pass found nothing but the user insists there's a switch.
 function reanalyzeDeepSections() {
   if (!_lastAnalyzedPath) return;
-  showAppNotification('⚡ ' + t('bsForcing'), 'info', null, 3000);
+  showAppNotification('<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> ' + t('bsForcing'), 'info', null, 3000);
   runPythonAnalysis(_lastAnalyzedPath, _lastAnalyzedHistId, true);
 }
 
@@ -1756,9 +1756,9 @@ function applyAnalysisResult(result, histId) {
   // Show engine badge + Camelot + content type
   const histLbl = document.getElementById('hist-lbl');
   if (histLbl) {
-    const contentBadge = result.is_melodic === true ? ' · 🎤 Melodic' : result.is_melodic === false ? ' · 🔊 Bass-heavy' : '';
+    const contentBadge = result.is_melodic === true ? ' · <svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/></svg> Melodic' : result.is_melodic === false ? ' · <svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a9 9 0 0 1 0 14"/></svg> Bass-heavy' : '';
     histLbl.textContent = result.engine && result.engine.startsWith('freq.phull')
-      ? `✓ Professional analysis  ·  Camelot ${result.camelot || '—'}${contentBadge}`
+      ? `Professional analysis  ·  Camelot ${result.camelot || '—'}${contentBadge}`
       : `Camelot ${result.camelot || '—'}`;
   }
 
@@ -1843,11 +1843,11 @@ function applyAnalysisResult(result, histId) {
       </div>`).join('');
     const marks = (bs.switches || []).map(sw => {
       const ch = (sw.changes || []).map(c => t('bsChange_' + c)).join(' + ');
-      return `<div class="bs-switch-note">⚡ ${t('bsSwitchAt')} <b onclick="seekAnalyzerTo(${sw.time_s})" style="cursor:pointer;text-decoration:underline">${fmt2time(sw.time_s)}</b>${ch ? ' — ' + ch : ''} <span style="opacity:.6">(${Math.round(sw.confidence * 100)}%)</span></div>`;
+      return `<div class="bs-switch-note"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> ${t('bsSwitchAt')} <b onclick="seekAnalyzerTo(${sw.time_s})" style="cursor:pointer;text-decoration:underline">${fmt2time(sw.time_s)}</b>${ch ? ' — ' + ch : ''} <span style="opacity:.6">(${Math.round(sw.confidence * 100)}%)</span></div>`;
     }).join('');
     bsHTML = `
       <div class="bs-card">
-        <div class="bs-head">⚡ ${t('bsTitle')}</div>
+        <div class="bs-head"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> ${t('bsTitle')}</div>
         ${marks}
         <div class="bs-timeline">${tl}</div>
         ${rows}
@@ -1857,7 +1857,7 @@ function applyAnalysisResult(result, histId) {
     bsHTML = `
       <div class="bs-card" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
         <span style="font-size:12px;color:var(--hint)">${t('bsNone')}</span>
-        <button class="btn xs" onclick="reanalyzeDeepSections()">⚡ ${t('bsForceBtn')}</button>
+        <button class="btn xs" onclick="reanalyzeDeepSections()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> ${t('bsForceBtn')}</button>
       </div>`;
   }
 
@@ -2722,7 +2722,7 @@ function startAudio() {
   // Surface the mini player in mirror mode so the user can see playback
   // info and control it from anywhere in the app.
   showAnalyzeMirror();
-  // Flip the currently-playing history row's button to ⏸
+  // Flip the currently-playing history row's button to pause
   if (typeof _refreshHistoryRowPlayState === 'function') _refreshHistoryRowPlayState();
 }
 
@@ -2831,7 +2831,7 @@ function showAnalyzeMirror() {
     }
     thumbWrap.innerHTML = url
       ? '<img src="' + url.replace(/"/g, '&quot;') + '"/>'
-      : '<span class="sp-fv-mini-thumb-fallback">♪</span>';
+      : '<span class="sp-fv-mini-thumb-fallback"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></span>';
   }
   // Play icon → pause (since we're playing)
   const svg = document.getElementById('sp-fv-mini-toggle-svg');
@@ -3657,7 +3657,7 @@ function renderCamelot(key,mode) {
 }
 function scheduleNoteSave() {
   clearTimeout(noteTimer);document.getElementById('notes-saved').textContent='Saving…';
-  noteTimer=setTimeout(async()=>{if(!currentHistId){document.getElementById('notes-saved').textContent='';return;}await fetch(API+'/history/'+currentHistId+'/notes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({notes:document.getElementById('notes-box').value})});document.getElementById('notes-saved').textContent='Saved ✓';},1200);
+  noteTimer=setTimeout(async()=>{if(!currentHistId){document.getElementById('notes-saved').textContent='';return;}await fetch(API+'/history/'+currentHistId+'/notes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({notes:document.getElementById('notes-box').value})});document.getElementById('notes-saved').textContent='Saved';},1200);
 }
 function startTranscribe(e){if(e.target.files[0])startTranscribeFile(e.target.files[0]);}
 async function startTranscribeFile(file){
@@ -3685,6 +3685,38 @@ function subscribeToServerEvents() {
   _eventsSubscribed = true;
   try {
     const es = new EventSource(API + '/events');
+    // v0.3.3: engines unavailable. The server-side circuit breaker
+    // tripped because Python isn't installed or detectable. Show one
+    // friendly notification with a Run-setup CTA instead of users
+    // wondering why downloads land without BPM/key forever.
+    es.addEventListener('engines-unavailable', () => {
+      if (window._enginesUnavailableShown) return;
+      window._enginesUnavailableShown = true;
+      if (typeof showAppNotification === 'function') {
+        showAppNotification(
+          t('enginesMissing') || 'Python engine not detected — analysis paused',
+          'warn',
+          () => {
+            // Click → jump to Settings → AI Engines section
+            if (typeof switchTab === 'function') switchTab('settings');
+            // Expand the engines section
+            setTimeout(() => {
+              const wrap = document.querySelector('.settings-section[data-section="engines"]');
+              if (wrap && wrap.classList.contains('collapsed')) toggleSettingsSection('engines');
+              wrap && wrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }, 100);
+          },
+          0  // sticky — don't auto-dismiss
+        );
+      }
+    });
+    es.addEventListener('engines-available', () => {
+      window._enginesUnavailableShown = false;
+      if (typeof showAppNotification === 'function') {
+        showAppNotification(t('enginesReady') || 'Python engine ready — analysis resumed', 'ok', null, 3500);
+      }
+    });
+
     es.addEventListener('history-changed', async () => {
       // Refresh the in-memory history then re-render. We only repaint if
       // the History tab exists in the DOM; renderHistory itself is cheap
@@ -3844,17 +3876,17 @@ async function refreshYtdlpStatus() {
 
 async function manualUpdateYtdlp() {
   const btn = document.getElementById('btn-ytdlp-update');
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ ' + t('checkingBtn'); }
+  if (btn) { btn.disabled = true; btn.textContent = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> ' + t('checkingBtn'); }
   try {
     const j = await fetch(API + '/ytdlp/update', { method: 'POST' }).then(r => r.json());
-    if (j.lastResult === 'updated') showAppNotification('✓ yt-dlp → v' + j.installed, 'done');
-    else if (j.lastResult === 'up-to-date') showAppNotification('✓ ' + t('ytdlpUpToDate'), 'info');
+    if (j.lastResult === 'updated') showAppNotification('yt-dlp → v' + j.installed, 'done');
+    else if (j.lastResult === 'up-to-date') showAppNotification('' + t('ytdlpUpToDate'), 'info');
     else if (j.lastResult === 'system-install') showAppNotification(t('ytdlpSystem'), 'warn');
     else showAppNotification('yt-dlp: ' + (j.lastResult || '?'), 'warn');
   } catch (e) {
-    showAppNotification('✕ ' + e.message, 'err');
+    showAppNotification('' + e.message, 'err');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '⬆ ' + t('btnCheckNow'); }
+    if (btn) { btn.disabled = false; btn.textContent = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg> ' + t('btnCheckNow'); }
     refreshYtdlpStatus();
   }
 }
@@ -3996,17 +4028,17 @@ async function bulkMoveSelected(mode) {
   if (totalSkipped) summary += ' · ' + totalSkipped + ' already there';
   if (errors.length) summary += ' · ' + errors.length + ' failed';
   status.textContent = summary;
-  current.textContent = errors.length ? errors.length + ' error(s)' : '✓ Complete';
+  current.textContent = errors.length ? errors.length + ' error(s)' : 'Complete';
   count.textContent = '';
 
   if (errors.length) {
-    showAppNotification('✕ ' + errors.length + ' file(s) could not be moved', 'err');
+    showAppNotification('' + errors.length + ' file(s) could not be moved', 'err');
   } else if (moved > 0) {
     // Honest success toast — distinguishes "all done" from "some already
     // there." Old version only showed errors, so the user got NO feedback
     // when moves succeeded — they'd just see the progress bar disappear.
     const skipNote = totalSkipped ? ' · ' + totalSkipped + ' already there' : '';
-    showAppNotification('✓ ' + moved + ' moved to ' + folderName + skipNote, 'ok');
+    showAppNotification('' + moved + ' moved to ' + folderName + skipNote, 'ok');
   } else if (totalSkipped > 0) {
     // Nothing moved because everything was already at destination
     showAppNotification('All selected tracks were already in ' + folderName, 'info');
@@ -4049,7 +4081,7 @@ function bulkSendToSeparator() {
     if (h && h.file_path) { if (enqueueSeparation(h.file_path, h.title)) added++; else skipped++; }
     else skipped++;
   }
-  showAppNotification('🎛 ' + t('sepqAdded').replace('{n}', added) + (skipped ? ' · ' + skipped + ' ' + t('sepqSkipped') : ''), 'done');
+  showAppNotification('<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg> ' + t('sepqAdded').replace('{n}', added) + (skipped ? ' · ' + skipped + ' ' + t('sepqSkipped') : ''), 'done');
   toggleSelectMode();
   showTab(document.querySelector('[data-tab="stems"]'));
 }
@@ -4090,10 +4122,10 @@ async function bulkTagSelected() {
       <div class="setup-card" style="max-width:480px;max-height:80vh;display:flex;flex-direction:column;padding:24px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
           <div>
-            <div class="setup-title" style="font-size:22px;text-align:left;margin-bottom:2px">🏷️ Tag ${selectedIds.size} track${selectedIds.size === 1 ? '' : 's'}</div>
+            <div class="setup-title" style="font-size:22px;text-align:left;margin-bottom:2px"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.6 13.4 13 21l-9-9V4h8l8.6 8.6a1.4 1.4 0 0 1 0 2z"/><circle cx="8" cy="8" r="1.5"/></svg> Tag ${selectedIds.size} track${selectedIds.size === 1 ? '' : 's'}</div>
             <div style="font-size:12px;color:var(--muted)">Pick a folder — selected tracks will be tagged into it</div>
           </div>
-          <button class="btn xs" onclick="window._bulkTagResolve(null)">✕</button>
+          <button class="btn xs" onclick="window._bulkTagResolve(null)"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div style="flex:1;overflow-y:auto;padding-right:4px">
           ${optsHTML}
@@ -4138,7 +4170,7 @@ async function bulkTagSelected() {
     if (count) count.textContent = (i + 1) + '/' + ids.length;
   }
 
-  showAppNotification(`✓ ${t('aoTaggedOk')} ${ok}${fail ? ' · ' + fail + ' ' + t('failedWord') : ''}`, fail ? 'warn' : 'done');
+  showAppNotification(`${t('aoTaggedOk')} ${ok}${fail ? ' · ' + fail + ' ' + t('failedWord') : ''}`, fail ? 'warn' : 'done');
   setTimeout(() => { if (prog) prog.classList.add('hidden'); if (fill) fill.style.width = '0%'; }, 1500);
   // Refresh views and exit select mode
   selectedIds.clear();
@@ -4166,7 +4198,7 @@ async function bulkFavoriteSelected(makeFav) {
     }
   }
   showAppNotification(
-    `✓ ${makeFav ? 'Favorited' : 'Unfavorited'} ${ok}${fail ? ' · ' + fail + ' failed' : ''}`,
+    `${makeFav ? 'Favorited' : 'Unfavorited'} ${ok}${fail ? ' · ' + fail + ' failed' : ''}`,
     fail ? 'warn' : 'done'
   );
   selectedIds.clear();
@@ -4196,7 +4228,7 @@ async function bulkDeleteSelected() {
       fail++;
     }
   }
-  showAppNotification(`✓ Deleted ${okN} from history${fail ? ' · ' + fail + ' failed' : ''}`, fail ? 'warn' : 'done');
+  showAppNotification(`Deleted ${okN} from history${fail ? ' · ' + fail + ' failed' : ''}`, fail ? 'warn' : 'done');
   selectedIds.clear();
   await loadHistory();
   toggleSelectMode();
@@ -4264,7 +4296,7 @@ async function bulkReanalyzeSelected() {
     if (count) count.textContent = (i + 1) + '/' + ids.length;
   }
 
-  showAppNotification(`✓ Re-analyzed ${done}${fail ? ' · ' + fail + ' failed' : ''}`, fail ? 'warn' : 'done');
+  showAppNotification(`Re-analyzed ${done}${fail ? ' · ' + fail + ' failed' : ''}`, fail ? 'warn' : 'done');
   setTimeout(() => { if (prog) prog.classList.add('hidden'); if (fill) fill.style.width = '0%'; if (curEl) curEl.textContent = ''; }, 1500);
   selectedIds.clear();
   await loadHistory();
@@ -4298,10 +4330,10 @@ async function openAutoOrganize() {
     <div class="setup-card" style="max-width:720px;max-height:80vh;display:flex;flex-direction:column;padding:24px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
         <div>
-          <div class="setup-title" style="font-size:22px;text-align:left;margin-bottom:2px">✨ ${t('aoTitle')}</div>
+          <div class="setup-title" style="font-size:22px;text-align:left;margin-bottom:2px"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.3L4.8 10l5.3 1.9L12 17l1.9-5.3L19.2 10l-5.3-1.9zM5 3v4M3 5h4M19 17v4M17 19h4"/></svg> ${t('aoTitle')}</div>
           <div style="font-size:12px;color:var(--muted)">${t('aoScanningSub')}</div>
         </div>
-        <button class="btn xs" onclick="closeAutoOrganize()">✕</button>
+        <button class="btn xs" onclick="closeAutoOrganize()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
       </div>
       <div id="auto-organize-body" style="flex:1;overflow-y:auto;padding-right:4px;text-align:center;padding-top:40px;color:var(--hint)">
         ${t('aoLooking')}
@@ -4435,7 +4467,7 @@ async function applyAutoOrganize() {
     if (prog) prog.textContent = `${t('aoApplying')} ${i + 1}/${picked.length}…`;
   }
 
-  showAppNotification(`✓ ${t('aoTaggedOk')} ${ok}${fail ? ' · ' + fail + ' ' + t('failedWord') : ''}`, fail ? 'warn' : 'done');
+  showAppNotification(`${t('aoTaggedOk')} ${ok}${fail ? ' · ' + fail + ' ' + t('failedWord') : ''}`, fail ? 'warn' : 'done');
   closeAutoOrganize();
   // Refresh stockpile + history views
   if (typeof loadFolders === 'function') await loadFolders();
@@ -4467,10 +4499,10 @@ async function openDuplicateFinder() {
     <div class="setup-card" style="max-width:760px;max-height:84vh;display:flex;flex-direction:column;padding:24px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
         <div>
-          <div class="setup-title" style="font-size:22px;text-align:left;margin-bottom:2px">🔁 ${t('dupName')}</div>
+          <div class="setup-title" style="font-size:22px;text-align:left;margin-bottom:2px"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6M3.5 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.65 4.36A9 9 0 0 0 20.5 15"/></svg> ${t('dupName')}</div>
           <div style="font-size:12px;color:var(--muted)">${t('dupSub')}</div>
         </div>
-        <button class="btn xs" onclick="closeDuplicateFinder()">✕</button>
+        <button class="btn xs" onclick="closeDuplicateFinder()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
       </div>
       <div id="duplicate-finder-body" style="flex:1;overflow-y:auto;padding-right:4px;text-align:center;padding-top:40px;color:var(--hint)">
         Scanning…
@@ -4507,7 +4539,7 @@ function renderDuplicateFinder(data) {
     <div style="margin-bottom:14px;padding:12px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--white)">
       <div style="margin-bottom:6px"><strong>${t('dupBackfillHead').replace('{n}', missing)}</strong></div>
       <div style="color:var(--hint);margin-bottom:8px">${t('dupBackfillDesc')}</div>
-      <button class="btn pri xs" onclick="startFingerprintBackfill()">⚡ ${t('dupBackfillBtn').replace('{n}', missing)}</button>
+      <button class="btn pri xs" onclick="startFingerprintBackfill()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> ${t('dupBackfillBtn').replace('{n}', missing)}</button>
       <span id="dup-backfill-progress" style="margin-left:10px;font-size:11px;color:var(--hint)"></span>
     </div>` : '';
 
@@ -4551,7 +4583,7 @@ function renderDuplicateFinder(data) {
       <div style="margin-bottom:14px;padding:12px;background:var(--bg2);border:1px solid var(--border);border-radius:8px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
           <div style="font-size:12px;color:var(--muted)">${t('dupGroupWord')} ${gi + 1} — ${g.count} ${g.count === 1 ? t('dupOne') : t('dupMany')}</div>
-          <button class="btn xs danger" onclick="deleteDuplicateGroup(${gi})">🗑️ ${t('dupDeleteChecked')}</button>
+          <button class="btn xs danger" onclick="deleteDuplicateGroup(${gi})"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> ${t('dupDeleteChecked')}</button>
         </div>
         ${rowsHTML}
       </div>`;
@@ -4591,7 +4623,7 @@ async function deleteDuplicateGroup(gi) {
       if (r.ok) okN++; else fail++;
     } catch { fail++; }
   }
-  showAppNotification(`✓ ${t('deletedWord')} ${okN}${fail ? ' · ' + fail + ' ' + t('failedWord') : ''}`, fail ? 'warn' : 'done');
+  showAppNotification(`${t('deletedWord')} ${okN}${fail ? ' · ' + fail + ' ' + t('failedWord') : ''}`, fail ? 'warn' : 'done');
   // Refresh and re-render duplicates
   await loadHistory();
   openDuplicateFinder();
@@ -4617,7 +4649,7 @@ async function openSimilarTracks(historyId) {
           <div class="setup-title" style="font-size:22px;text-align:left;margin-bottom:2px">≈ ${t('simTitle')}</div>
           <div style="font-size:12px;color:var(--muted);max-width:480px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(base ? base.title : '')}</div>
         </div>
-        <button class="btn xs" onclick="document.getElementById('similar-modal').style.display='none'">✕</button>
+        <button class="btn xs" onclick="document.getElementById('similar-modal').style.display='none'"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
       </div>
       <div id="similar-body" style="flex:1;overflow-y:auto;padding-right:4px;text-align:center;padding-top:30px;color:var(--hint)">${t('simLooking')}</div>
     </div>`;
@@ -4650,7 +4682,7 @@ async function openSimilarTracks(historyId) {
     }).join('');
   } catch (e) {
     const body = document.getElementById('similar-body');
-    if (body) body.innerHTML = '<div style="padding:30px">✕ ' + escapeHtml(e.message) + '</div>';
+    if (body) body.innerHTML = '<div style="padding:30px">Error: ' + escapeHtml(e.message) + '</div>';
   }
 }
 
@@ -4677,7 +4709,7 @@ async function startFingerprintBackfill() {
         if (data.state === 'progress' || data.state === 'start') {
           if (prog) prog.textContent = `${data.done}/${data.total} hashed…`;
         } else if (data.state === 'complete') {
-          if (prog) prog.textContent = `✓ Complete — ${data.done}/${data.total}`;
+          if (prog) prog.textContent = `Complete — ${data.done}/${data.total}`;
           showAppNotification(`Fingerprint backfill complete — ${data.done} tracks hashed`, 'done');
           es.close();
           window._backfillES = null;
@@ -4687,7 +4719,7 @@ async function startFingerprintBackfill() {
       } catch {}
     });
   } catch (e) {
-    showAppNotification('✕ ' + e.message, 'err');
+    showAppNotification('' + e.message, 'err');
   }
 }
 
@@ -4714,18 +4746,18 @@ function renderBgAnalyzePill(d) {
     pill.classList.add('active');
     pill.classList.remove('hidden', 'done');
     const title = (d.current.title || '').slice(0, 38);
-    pill.innerHTML = '<span class="bg-pill-spin">⟳</span> ' +
+    pill.innerHTML = '<span class="bg-pill-spin"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg></span> ' +
       t('bgAnalyzing') + ' ' + d.remaining + ' · ' + escapeHtml(title);
   } else if (d.state === 'idle') {
     if (d.remaining > 0) {
       // Worker stopped but rows still pending — usually all hit retry cap
       pill.classList.add('active');
       pill.classList.remove('hidden');
-      pill.innerHTML = '⚠ ' + d.remaining + ' ' + t('bgPending');
+      pill.innerHTML = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01"/></svg> ' + d.remaining + ' ' + t('bgPending');
     } else {
       pill.classList.add('done');
       pill.classList.remove('active');
-      pill.textContent = '✓ ' + t('bgCaughtUp');
+      pill.textContent = '' + t('bgCaughtUp');
       setTimeout(() => { if (pill.classList.contains('done')) pill.classList.add('hidden'); }, 4000);
     }
   }
@@ -5072,7 +5104,7 @@ async function populateHistoryFilterDropdown() {
   sel.innerHTML =
     '<option value="all">All tracks</option>' +
     '<option value="untagged">Untagged</option>' +
-    '<option value="favorites">★ Favorites</option>' +
+    '<option value="favorites">Favorites</option>' +
     (folders.length ? '<optgroup label="Folders">' +
       folders.map(f => `<option value="folder:${f.id}">${escapeHtml(f.name)} (${f.track_count || 0})</option>`).join('') +
       '</optgroup>' : '');
@@ -5085,7 +5117,7 @@ async function populateHistoryFilterDropdown() {
 function playFromHistory(historyId) {
   const tr = histData.find(h => h.id === historyId);
   if (!tr || !tr.file_path) {
-    showAppNotification('✕ ' + (t('spFileMissing') || 'File path missing'), 'err');
+    showAppNotification('' + (t('spFileMissing') || 'File path missing'), 'err');
     return;
   }
   const q = (document.getElementById('hist-search')?.value || '').toLowerCase();
@@ -5181,7 +5213,7 @@ async function toggleFavorite(historyId) {
     // Roll back optimistic state on failure
     row.is_favorite = wasOn ? 1 : 0;
     updateFavoriteUI(historyId, wasOn);
-    showAppNotification('✕ ' + e.message, 'err');
+    showAppNotification('' + e.message, 'err');
   }
 }
 
@@ -5209,12 +5241,12 @@ async function ensureFavoritesFolder() {
     const r = await fetch(API + '/stockpile/folders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'Favorites', color: '#ff5555', icon: '♥' }),
+      body: JSON.stringify({ name: 'Favorites', color: '#ff5555', icon: '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>' }),
     });
     const j = await r.json();
     if (r.ok && j.id) {
       // Push into local cache so subsequent calls don't refetch
-      spFolders.push({ id: j.id, name: 'Favorites', color: '#ff5555', icon: '♥', track_count: 0 });
+      spFolders.push({ id: j.id, name: 'Favorites', color: '#ff5555', icon: '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>', track_count: 0 });
       return j.id;
     }
     // POST failed (likely UNIQUE constraint from a parallel race) — refresh
@@ -5306,7 +5338,7 @@ async function untagFromHistory(historyId, folderId) {
     delete spSuggestionsByTrack[historyId];
     refreshUIForAction('tag-changed', { historyId, folderId });
   } catch (e) {
-    showAppNotification('✕ ' + e.message, 'err');
+    showAppNotification('' + e.message, 'err');
   }
 }
 
@@ -5432,7 +5464,7 @@ async function loadFromHistory(id, opts){
   }
 
   if (!result.ok) {
-    showAppNotification('✕ Could not load: file not found on disk','err');
+    showAppNotification('Could not load: file not found on disk','err');
     // Release any pending transition lock so a follow-up click can recover
     if (typeof globalPlayer !== 'undefined') globalPlayer._transitionLock = false;
     return;
@@ -5449,7 +5481,7 @@ async function loadFromHistory(id, opts){
     await loadAudioBuffer(result.data,row.title||filePath.split(/[/\\]/).pop(),id);
     if(row.notes)document.getElementById('notes-box').value=row.notes;
     if(row.transcript)document.getElementById('transcript-out').value=row.transcript;
-  }catch(e){showAppNotification('✕ Could not load: '+e.message.slice(0,50),'err');}
+  }catch(e){showAppNotification('Could not load: '+e.message.slice(0,50),'err');}
 }
 async function deleteHistory(id){
   // Styled confirm — danger style because removing from history is
@@ -5666,18 +5698,18 @@ function renderSepQueue() {
   const lbl = document.getElementById('sep-queue-count');
   const waiting = sepQueue.filter(q => q.status === 'waiting').length;
   if (lbl) lbl.textContent = sepQueue.length + (waiting ? ' · ' + waiting + ' ' + t('sepqWaiting') : '');
-  const icon = { waiting: '◌', running: '⏳', done: '✓', error: '✕' };
+  const icon = { waiting: 'o', running: 'spin', done: 'ok', error: 'x' };
   list.innerHTML = sepQueue.map(q => `
     <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg);border-radius:6px;margin-bottom:4px;font-size:12px">
       <span style="width:16px;text-align:center;color:${q.status === 'error' ? '#ff6b6b' : q.status === 'done' ? '#7ed982' : 'var(--hint)'}">${icon[q.status]}</span>
       <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--white)">${escapeHtml(q.name)}</span>
-      ${q.status === 'waiting' ? `<button class="btn xs" onclick="removeFromSepQueue(${q.id})">✕</button>` : ''}
+      ${q.status === 'waiting' ? `<button class="btn xs" onclick="removeFromSepQueue(${q.id})"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>` : ''}
     </div>`).join('');
 }
 
 function sendToSeparator() {
   if (!lastFilePath) {
-    showAppNotification('✕ Load a track first', 'err');
+    showAppNotification('Load a track first', 'err');
     return;
   }
   sepSourcePath = lastFilePath;
@@ -5691,7 +5723,7 @@ function loadSeparatorFile(e) {
   const f = e.target.files[0];
   if (!f) return;
   if (!f.path) {
-    showAppNotification('✕ Cannot read file path', 'err');
+    showAppNotification('Cannot read file path', 'err');
     return;
   }
   sepSourcePath = f.path;
@@ -5988,7 +6020,7 @@ function openExtensionHowTo() {
           <div class="setup-title" style="font-size:24px;text-align:left;margin-bottom:4px">${t('extHowToTitle')}</div>
           <div style="font-size:13px;color:var(--muted);max-width:480px">${t('extHowToSub')}</div>
         </div>
-        <button class="btn xs" onclick="document.getElementById('ext-howto-modal').style.display='none'" aria-label="Close">✕</button>
+        <button class="btn xs" onclick="document.getElementById('ext-howto-modal').style.display='none'" aria-label="Close"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
       </div>
       <div style="flex:1;overflow-y:auto;padding-right:6px">
         <ol class="ext-howto-list">
@@ -6051,11 +6083,11 @@ function toggleWriteTags(checked) {
 
 async function startSeparation() {
   if (!sepSourcePath) {
-    showAppNotification('✕ ' + t('sepNoTrack'), 'err');
+    showAppNotification('' + t('sepNoTrack'), 'err');
     return;
   }
   if (!backendOnline) {
-    showAppNotification('✕ ' + t('sepBackendOffline'), 'err');
+    showAppNotification('' + t('sepBackendOffline'), 'err');
     return;
   }
 
@@ -6141,7 +6173,7 @@ async function startSeparation() {
       const m = JSON.parse(e.data);
       const msg = m.message || 'Warning';
       const hint = m.hint ? '\n' + m.hint : '';
-      showAppNotification('⚠ ' + msg + hint, 'info', null, 8000);
+      showAppNotification('<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01"/></svg> ' + msg + hint, 'info', null, 8000);
       diagLog('[stems-warn] ' + msg + (m.hint ? ' · ' + m.hint : ''), 'warn');
     } catch {}
   });
@@ -6163,7 +6195,7 @@ async function startSeparation() {
       // Smooth UX — fade out the progress card after a beat
       setTimeout(() => document.getElementById('stems-progress').classList.add('hidden'), 600);
       const procTime = m.processing_time ? ' · ' + m.processing_time + 's' : '';
-      showAppNotification('✓ ' + t('sepReady') + procTime, 'done');
+      showAppNotification('' + t('sepReady') + procTime, 'done');
       loadSepHistory();
     } catch {}
     btn.disabled = false;
@@ -6182,7 +6214,7 @@ async function startSeparation() {
       // EventSource native error — connection dropped
     }
     document.getElementById('stems-progress').classList.add('hidden');
-    showAppNotification('✕ ' + msg.slice(0, 60), 'err');
+    showAppNotification('' + msg.slice(0, 60), 'err');
     if (hint) {
       // Surface install hints in the diag log
       diagLog('[stems hint] ' + hint, 'info');
@@ -6198,21 +6230,21 @@ function stepToLabel(step, msg) {
     loading_engine:              'Initializing ensemble…',
     loading_vocal_model:         'Loading Stage 1 model…',
     separating_vocals:           'Isolating vocals — Stage 1 of 2',
-    vocal_split_complete:        'Vocals isolated ✓',
+    vocal_split_complete:        'Vocals isolated',
     loading_vocal_ensemble_model:'Loading vocal ensemble model…',
     separating_vocal_ensemble:   'Vocal ensemble pass — second model for vocal isolation…',
-    vocal_ensemble_complete:     'Vocal ensemble pass ✓',
+    vocal_ensemble_complete:     'Vocal ensemble pass',
     loading_lead_vocal_model:    'Loading lead-vocal model…',
     separating_lead_vocal:       'Splitting lead from backing vocals…',
-    lead_vocal_split_complete:   'Lead/backing vocals split ✓',
+    lead_vocal_split_complete:   'Lead/backing vocals split',
     loading_dereverb_model:      'Loading de-reverb model…',
     dereverberating:             'Removing reverb from vocal stem…',
-    dereverb_complete:           'Vocal de-reverbed ✓',
+    dereverb_complete:           'Vocal de-reverbed',
     loading_instrumental_model:  'Loading Stage 2 model…',
     separating_instrumental:     'Splitting instrumental — Stage 2 of 2',
-    instrumental_split_complete: 'Instrumental split ✓',
+    instrumental_split_complete: 'Instrumental split',
     separating_instrumental_ensemble: 'Running ensemble pass — second model for harmonic stems…',
-    instrumental_split_ensemble_complete: 'Ensemble pass ✓',
+    instrumental_split_ensemble_complete: 'Ensemble pass',
     recovering_stems:            'AI stem recovery — routing misclassified content…',
     restoring_fullness:          'Restoring note tails and ducking compensation…',
     cleaning_back_vocal:         'Removing hat bleed from back vocal stem…',
@@ -6231,21 +6263,21 @@ function stepToLabel(step, msg) {
     loading_engine:              'Initialisation de l\'ensemble…',
     loading_vocal_model:         'Chargement du modèle Étape 1…',
     separating_vocals:           'Isolation des voix — Étape 1 sur 2',
-    vocal_split_complete:        'Voix isolées ✓',
+    vocal_split_complete:        'Voix isolées',
     loading_vocal_ensemble_model:'Chargement du modèle ensemble vocal…',
     separating_vocal_ensemble:   'Pass d\'ensemble vocal — second modèle pour l\'isolation…',
-    vocal_ensemble_complete:     'Pass d\'ensemble vocal ✓',
+    vocal_ensemble_complete:     'Pass d\'ensemble vocal',
     loading_lead_vocal_model:    'Chargement du modèle voix lead…',
     separating_lead_vocal:       'Séparation lead / chœurs…',
-    lead_vocal_split_complete:   'Voix lead / chœurs séparées ✓',
+    lead_vocal_split_complete:   'Voix lead / chœurs séparées',
     loading_dereverb_model:      'Chargement du modèle dé-réverb…',
     dereverberating:             'Suppression de la réverb sur la voix…',
-    dereverb_complete:           'Voix dé-réverbée ✓',
+    dereverb_complete:           'Voix dé-réverbée',
     loading_instrumental_model:  'Chargement du modèle Étape 2…',
     separating_instrumental:     'Séparation instrumentale — Étape 2 sur 2',
-    instrumental_split_complete: 'Instrumental séparé ✓',
+    instrumental_split_complete: 'Instrumental séparé',
     separating_instrumental_ensemble: 'Pass d\'ensemble — second modèle pour stems harmoniques…',
-    instrumental_split_ensemble_complete: 'Pass d\'ensemble ✓',
+    instrumental_split_ensemble_complete: 'Pass d\'ensemble',
     recovering_stems:            'Récupération IA — routage du contenu mal classé…',
     restoring_fullness:          'Restauration des queues de notes et compensation du ducking…',
     cleaning_back_vocal:         'Nettoyage des charlestons dans le stem back vocal…',
@@ -6434,7 +6466,7 @@ function renderStemPlayers(result) {
   // Build the audio graph: each stem → GainNode (mute/volume) → StereoPannerNode → destination.
   // Sharing one AudioContext keeps everything sample-clock-aligned.
   if (!window.AudioContext && !window.webkitAudioContext) {
-    showAppNotification('✕ Web Audio API not supported in this Electron version', 'err');
+    showAppNotification('Web Audio API not supported in this Electron version', 'err');
     return;
   }
   mixerCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -7197,7 +7229,7 @@ function mixerToggleLoop() {
     mixerLoopEnd = null;
     updateLoopRegionUI();
     if (btn) btn.classList.remove('active');
-    showAppNotification(t('sepLoopCleared') || '✕ Loop cleared', 'info');
+    showAppNotification(t('sepLoopCleared') || 'Loop cleared', 'info');
   } else {
     showAppNotification(t('sepLoopHint') || 'Shift+drag on the waveform to set loop region', 'info');
   }
@@ -7972,7 +8004,7 @@ function startMastering() {
         stats.style.whiteSpace = 'pre-line';
       }
       if (result) result.classList.remove('hidden');
-      showAppNotification('✓ Mastered with ' + (m.preset_label || m.preset), 'ok');
+      showAppNotification('Mastered with ' + (m.preset_label || m.preset), 'ok');
     } catch {}
     if (btn) btn.disabled = false;
     if (lbl) lbl.textContent = 'Apply';
@@ -7986,7 +8018,7 @@ function startMastering() {
       if (m.message) msg = m.message;
     } catch {}
     if (progTxt) progTxt.textContent = msg;
-    showAppNotification('✕ ' + msg.slice(0, 80), 'err');
+    showAppNotification('' + msg.slice(0, 80), 'err');
     if (btn) btn.disabled = false;
     if (lbl) lbl.textContent = 'Apply';
     if (masterEvtSource) { masterEvtSource.close(); masterEvtSource = null; }
@@ -8189,8 +8221,8 @@ async function loadSepHistory() {
             <div class="sep-hist-title">${escapeHtml(row.title || 'Untitled')}</div>
             <div class="sep-hist-meta">${escapeHtml(stemNames)}${stemNames ? ' — ' : ''}${escapeHtml(meta)}</div>
           </div>
-          <button class="btn xs" onclick="openSepHistoryFolder(${row.id},event)" title="${t('sepOpenFolder') || 'Open folder'}">📁</button>
-          <button class="btn xs danger" onclick="event.stopPropagation();deleteSepHistory(${row.id})" title="${t('remove')}">✕</button>
+          <button class="btn xs" onclick="openSepHistoryFolder(${row.id},event)" title="${t('sepOpenFolder') || 'Open folder'}"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
+          <button class="btn xs danger" onclick="event.stopPropagation();deleteSepHistory(${row.id})" title="${t('remove')}"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>`;
     }).join('');
   } catch (e) {
@@ -8254,10 +8286,10 @@ function openSepHistoryEntry(id) {
         // Hide the progress card if it was showing
         const prog = document.getElementById('stems-progress');
         if (prog) prog.classList.add('hidden');
-        showAppNotification('✓ ' + (t('sepRestored') || 'Loaded from separator history'), 'ok');
+        showAppNotification('' + (t('sepRestored') || 'Loaded from separator history'), 'ok');
       } catch (e) {
         diagLog('openSepHistoryEntry render failed: ' + e.message, 'err');
-        showAppNotification('✕ ' + e.message, 'err');
+        showAppNotification('' + e.message, 'err');
       }
     })
     .catch(() => {
@@ -8308,7 +8340,7 @@ window.addEventListener('DOMContentLoaded', () => {
       const f = e.dataTransfer.files[0];
       if (!f) return;
       if (!f.path) {
-        showAppNotification('✕ Cannot read file path', 'err');
+        showAppNotification('Cannot read file path', 'err');
         return;
       }
       sepSourcePath = f.path;
@@ -8443,7 +8475,7 @@ async function checkEnginesStatus() {
         document.getElementById('setup-done').classList.remove('hidden');
         closeSetupConn();
         setTimeout(hideSetupModal, 2200);
-        showAppNotification('✓ ' + t('enginesReady'), 'done');
+        showAppNotification('' + t('enginesReady'), 'done');
         try { localStorage.removeItem('freqphull_setup_skipped'); } catch {}
       });
       setupEvtSource.addEventListener('error', e => {
@@ -8540,7 +8572,7 @@ function startEnginesSetup() {
     document.getElementById('setup-done').classList.remove('hidden');
     closeSetupConn();
     setTimeout(hideSetupModal, 2200);
-    showAppNotification('✓ ' + t('enginesReady'), 'done');
+    showAppNotification('' + t('enginesReady'), 'done');
     try { localStorage.removeItem('freqphull_setup_skipped'); } catch {}
   });
 
@@ -8606,7 +8638,7 @@ function startSetupPolling() {
             document.getElementById('setup-progress').classList.add('hidden');
             document.getElementById('setup-done').classList.remove('hidden');
             setTimeout(hideSetupModal, 2200);
-            showAppNotification('✓ ' + t('enginesReady'), 'done');
+            showAppNotification('' + t('enginesReady'), 'done');
             try { localStorage.removeItem('freqphull_setup_skipped'); } catch {}
           } else {
             showSetupError('Setup ended without confirmation',
@@ -8686,6 +8718,10 @@ function stepToHuman(step) {
 
 const T = {
   en: {
+    // ── v0.3.3: engines circuit-breaker ──
+    enginesMissing:'Python engine not detected. Click to set it up — automatic BPM/key analysis is paused until then.',
+    enginesReady:'Python engine ready. Background analysis resumed.',
+
     // ── v0.3.1: Settings sections ──
     settingsSec_general:'General',
     settingsSec_generalDesc:'Language and library location',
@@ -8906,7 +8942,7 @@ const T = {
     aoNoUntagged:'No untagged tracks. Nice and clean!',
     aoNoneMatched:'{n} untagged tracks found, but none matched any folder above the confidence threshold. Try adding artist seeds to your folders, or tag a few manually so the mood model has more to learn from.',
     aoFound:"Found <strong>{x}</strong> matches out of <strong>{y}</strong> untagged tracks. Uncheck any you don't want. Each track gets the picked folder as its primary tag — files get moved into place automatically.",
-    aoSelectAll:'✓ Select all', aoClearSel:'○ Clear', aoConf70:'≥ 70% only',
+    aoSelectAll:'Select all', aoClearSel:'○ Clear', aoConf70:'≥ 70% only',
     aoApply:'Apply selected',
     aoNothing:'Nothing selected',
     aoApplying:'Applying',
@@ -8939,7 +8975,7 @@ const T = {
     dropTitle:'Drop an audio file here', dropSub:'or click to browse — MP3 · WAV · FLAC · OGG · M4A',
     bpm:'BPM', key:'KEY', length:'LENGTH',
     camelot:'CAMELOT', chords:'CHORDS', pitch:'PITCH',
-    exportWav:'⬇ Export WAV', dragHint:'After grabbing, drag from Chrome\'s download bar straight into FL Studio',
+    exportWav:'<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v16M5 13l7 7 7-7"/></svg> Export WAV', dragHint:'After grabbing, drag from Chrome\'s download bar straight into FL Studio',
     notes:'NOTES', notesPlaceholder:'Lyrics, ideas…',
     // Transcribe tab
     transTitle:'Transcribe', transSub:'Use AI to convert audio to text — powered by Whisper',
@@ -9080,9 +9116,9 @@ const T = {
     tapHint:'tap at least 4 times', reset:'Reset',
     // History tab
     histTitle:'History', histSub:'Every track downloaded — BPM and key saved automatically',
-    searchTracks:'Search tracks…', select:'Select', cancel:'✕ Cancel',
+    searchTracks:'Search tracks…', select:'Select', cancel:'Cancel',
     selectAll:'Select All', selected:'selected',
-    toStockpile:'📦 To Stockpile', moveTo:'📁 Move to…',
+    toStockpile:'<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v13H3zM3 7l3-4h12l3 4M12 3v17"/></svg> To Stockpile', moveTo:'<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> Move to…',
     stockpile:'Stockpile', stockpileNotSet:'Not set — click to choose',
     noHistory:'No history yet — download a track to get started',
     noMatch:'No matching tracks', remove:'Remove',
@@ -9109,7 +9145,7 @@ const T = {
     setupCancelled:'Setup cancelled',
     setupNotInstalled:'AI engines are not installed. Run setup now?',
     enginesReady:'AI engines ready',
-    enginesInstalled:'✓ Installed',
+    enginesInstalled:'Installed',
     enginesNotInstalled:'Not installed — stem separator and transcription unavailable',
     enginesStale:'Setup is out-of-date — re-run setup to fix',
     runSetup:'Run setup',
@@ -9126,6 +9162,10 @@ const T = {
     close:'Close', by:'by', save:'Save', delete:'Delete',
   },
   fr: {
+    // ── v0.3.3: disjoncteur moteur Python ──
+    enginesMissing:"Moteur Python introuvable. Cliquez pour le configurer — l'analyse automatique BPM/cle est en pause.",
+    enginesReady:"Moteur Python pret. L'analyse en arriere-plan a repris.",
+
     // ── v0.3.1: Sections de parametres ──
     settingsSec_general:'General',
     settingsSec_generalDesc:'Langue et emplacement de la bibliotheque',
@@ -9346,7 +9386,7 @@ const T = {
     aoNoUntagged:'Aucune piste non étiquetée. Tout est propre !',
     aoNoneMatched:'{n} pistes non étiquetées trouvées, mais aucune ne correspond à un dossier au-dessus du seuil de confiance. Essayez d\'ajouter des artistes de référence à vos dossiers, ou étiquetez-en quelques-unes manuellement pour entraîner le modèle.',
     aoFound:"<strong>{x}</strong> correspondances trouvées sur <strong>{y}</strong> pistes non étiquetées. Décochez celles que vous ne voulez pas. Chaque piste reçoit le dossier choisi comme étiquette principale — les fichiers sont déplacés automatiquement.",
-    aoSelectAll:'✓ Tout sélectionner', aoClearSel:'○ Effacer', aoConf70:'≥ 70 % seulement',
+    aoSelectAll:'Tout sélectionner', aoClearSel:'○ Effacer', aoConf70:'≥ 70 % seulement',
     aoApply:'Appliquer la sélection',
     aoNothing:'Aucune sélection',
     aoApplying:'Application',
@@ -9379,7 +9419,7 @@ const T = {
     dropTitle:'Déposez un fichier audio ici', dropSub:'ou cliquez pour parcourir — MP3 · WAV · FLAC · OGG · M4A',
     bpm:'BPM', key:'TONALITÉ', length:'DURÉE',
     camelot:'CAMELOT', chords:'ACCORDS', pitch:'HAUTEUR',
-    exportWav:'⬇ Exporter en WAV', dragHint:'Après le téléchargement, glissez la piste depuis la barre de Chrome directement dans FL Studio',
+    exportWav:'<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v16M5 13l7 7 7-7"/></svg> Exporter en WAV', dragHint:'Après le téléchargement, glissez la piste depuis la barre de Chrome directement dans FL Studio',
     notes:'NOTES', notesPlaceholder:'Paroles, idées…',
     // Transcribe tab
     transTitle:'Transcrire', transSub:'Utilisez l\'IA pour convertir l\'audio en texte — propulsé par Whisper',
@@ -9519,9 +9559,9 @@ const T = {
     tapHint:'tapez au moins 4 fois', reset:'Réinitialiser',
     // History tab
     histTitle:'Historique', histSub:'Toutes les pistes téléchargées — BPM et tonalité enregistrés automatiquement',
-    searchTracks:'Rechercher des pistes…', select:'Sélectionner', cancel:'✕ Annuler',
+    searchTracks:'Rechercher des pistes…', select:'Sélectionner', cancel:'Annuler',
     selectAll:'Tout sélectionner', selected:'sélectionnée(s)',
-    toStockpile:'📦 Vers le stockage', moveTo:'📁 Déplacer vers…',
+    toStockpile:'<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v13H3zM3 7l3-4h12l3 4M12 3v17"/></svg> Vers le stockage', moveTo:'Déplacer vers…',
     stockpile:'Stockage', stockpileNotSet:'Non défini — cliquez pour choisir',
     noHistory:'Aucun historique pour l\'instant — téléchargez une piste pour commencer',
     noMatch:'Aucune piste correspondante', remove:'Supprimer',
@@ -9548,7 +9588,7 @@ const T = {
     setupCancelled:'Installation annulée',
     setupNotInstalled:'Les moteurs IA ne sont pas installés. Lancer l\'installation maintenant ?',
     enginesReady:'Moteurs IA prêts',
-    enginesInstalled:'✓ Installé',
+    enginesInstalled:'Installé',
     enginesNotInstalled:'Non installé — la séparation et la transcription sont indisponibles',
     enginesStale:'Installation obsolète — relancer pour corriger',
     runSetup:'Lancer l\'installation',
@@ -9617,7 +9657,7 @@ function applyLang() {
 
   // Stockpile label
   const stockLbl = document.querySelector('.stockpile-lbl');
-  if (stockLbl) stockLbl.textContent = '📦 ' + t('stockpile') + ':';
+  if (stockLbl) stockLbl.textContent = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v13H3zM3 7l3-4h12l3 4M12 3v17"/></svg> ' + t('stockpile') + ':';
   const stockPath = document.getElementById('stockpile-path');
   if (stockPath && !stockpileFolder) stockPath.textContent = t('stockpileNotSet');
 
@@ -9852,35 +9892,35 @@ function renderSettings() {
                 <div class="setting-name">${t('storName')}</div>
                 <div class="setting-desc" id="storage-breakdown-desc">${t('storDesc')}</div>
               </div>
-              <button class="btn sm" onclick="openStorageBreakdown()">💾 ${t('btnViewStorage')}</button>
+              <button class="btn sm" onclick="openStorageBreakdown()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="14" width="18" height="6" rx="1"/><path d="M7 8 12 3l5 5"/><circle cx="7" cy="17" r="1"/></svg> ${t('btnViewStorage')}</button>
             </div>
         <div class="setting-row">
               <div class="setting-info">
                 <div class="setting-name">${t('dupName')}</div>
                 <div class="setting-desc">${t('dupDesc')}</div>
               </div>
-              <button class="btn sm" onclick="openDuplicateFinder()">🔁 ${t('btnFindDupes')}</button>
+              <button class="btn sm" onclick="openDuplicateFinder()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6M3.5 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.65 4.36A9 9 0 0 0 20.5 15"/></svg> ${t('btnFindDupes')}</button>
             </div>
         <div class="setting-row">
               <div class="setting-info">
                 <div class="setting-name">${t('repairLabel')}</div>
                 <div class="setting-desc" id="repair-desc">${t('repairDesc')}</div>
               </div>
-              <button class="btn sm" id="btn-repair" onclick="repairHistory(false)">🔍 ${t('repairBtn')}</button>
+              <button class="btn sm" id="btn-repair" onclick="repairHistory(false)"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg> ${t('repairBtn')}</button>
             </div>
         <div class="setting-row">
               <div class="setting-info">
                 <div class="setting-name">${t('fixFilesName')}</div>
                 <div class="setting-desc" id="fix-files-desc">${t('fixFilesDesc')}</div>
               </div>
-              <button class="btn sm" id="btn-fix-files" onclick="repairFileLocations()">📁 ${t('btnFixFiles')}</button>
+              <button class="btn sm" id="btn-fix-files" onclick="repairFileLocations()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> ${t('btnFixFiles')}</button>
             </div>
         <div class="setting-row">
               <div class="setting-info">
                 <div class="setting-name">${t('cleanTempName')}</div>
                 <div class="setting-desc" id="clean-temp-desc">${t('cleanTempDesc')}</div>
               </div>
-              <button class="btn sm" id="btn-clean-temp" onclick="cleanTempFiles()">🧹 ${t('btnCleanNow')}</button>
+              <button class="btn sm" id="btn-clean-temp" onclick="cleanTempFiles()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 5L7 17l-4 4M14 6l4 4M3 21l4-4 5 5"/></svg> ${t('btnCleanNow')}</button>
             </div>
       </div></div>
     </div>
@@ -9944,14 +9984,14 @@ function renderSettings() {
                 <div class="setting-name">${t('updName')}</div>
                 <div class="setting-desc" id="update-check-desc">${t('updDesc')}</div>
               </div>
-              <button class="btn sm" id="btn-check-updates" onclick="manualCheckForUpdates()">🔄 ${t('btnCheckNow')}</button>
+              <button class="btn sm" id="btn-check-updates" onclick="manualCheckForUpdates()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6M3.5 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.65 4.36A9 9 0 0 0 20.5 15"/></svg> ${t('btnCheckNow')}</button>
             </div>
         <div class="setting-row">
               <div class="setting-info">
                 <div class="setting-name">yt-dlp</div>
                 <div class="setting-desc" id="ytdlp-status-desc">${t('checking')}</div>
               </div>
-              <button class="btn sm" id="btn-ytdlp-update" onclick="manualUpdateYtdlp()">⬆ ${t('btnCheckNow')}</button>
+              <button class="btn sm" id="btn-ytdlp-update" onclick="manualUpdateYtdlp()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg> ${t('btnCheckNow')}</button>
             </div>
       </div></div>
     </div>
@@ -9969,8 +10009,8 @@ function renderSettings() {
                 <div class="setting-desc">${t('extLinkDesc')}</div>
               </div>
               <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
-                <button class="btn sm" onclick="openExtensionPage()" title="GitHub">🌐 ${t('extLinkOpen')}</button>
-                <button class="btn sm pri" onclick="openExtensionHowTo()">📖 ${t('extLinkHowTo')}</button>
+                <button class="btn sm" onclick="openExtensionPage()" title="GitHub"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></svg> ${t('extLinkOpen')}</button>
+                <button class="btn sm pri" onclick="openExtensionHowTo()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5z"/><path d="M4 19.5V22"/></svg> ${t('extLinkHowTo')}</button>
               </div>
             </div>
       </div></div>
@@ -10040,7 +10080,7 @@ function renderSettings() {
     const el = document.getElementById('engines-status-desc');
     if (!el) return;
     if (j.installed) {
-      el.textContent = '✓ Installed' + (j.info && j.info.date ? ' · ' + j.info.date : '');
+      el.textContent = 'Installed' + (j.info && j.info.date ? ' · ' + j.info.date : '');
       el.style.color = '#7ed982';
     } else if (j.info && j.info.python) {
       // Marker exists but invalid (stale/old format). Tell the user it needs re-setup.
@@ -10086,7 +10126,7 @@ async function diagnosePaths() {
       lines.push('');
       lines.push('[' + name + '] resolved: ' + info.resolved);
       for (const c of info.candidates) {
-        lines.push('  ' + (c.exists ? '✓ FOUND  ' : '✗ missing') + ' ' + c.path);
+        lines.push('  ' + (c.exists ? 'OK    ' : 'NOT FOUND') + ' ' + c.path);
       }
     }
     lines.push('');
@@ -10095,7 +10135,7 @@ async function diagnosePaths() {
       lines.push('');
       lines.push('[' + name + '] resolved: ' + (info.resolved || '(none)'));
       for (const c of info.paths) {
-        lines.push('  ' + (c.exists ? '✓ FOUND  ' : '✗ missing') + ' ' + c.path);
+        lines.push('  ' + (c.exists ? 'OK    ' : 'NOT FOUND') + ' ' + c.path);
       }
     }
     const text = lines.join('\n');
@@ -10112,7 +10152,7 @@ async function diagnosePaths() {
       <div class="setup-card" style="max-width:720px;max-height:80vh;display:flex;flex-direction:column">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
           <div class="setup-title" style="font-size:22px;text-align:left;margin:0">${t('diagTitle')}</div>
-          <button class="btn xs" onclick="document.getElementById('diag-modal').style.display='none'">✕</button>
+          <button class="btn xs" onclick="document.getElementById('diag-modal').style.display='none'"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <pre id="diag-output" style="flex:1;overflow:auto;background:var(--bg3);padding:14px;border-radius:8px;font-size:11px;font-family:'Menlo',monospace;color:var(--white);white-space:pre-wrap;word-break:break-all;border:1px solid var(--border);line-height:1.55">${escapeHtml(text)}</pre>
         <div style="display:flex;gap:6px;margin-top:12px">
@@ -10122,7 +10162,7 @@ async function diagnosePaths() {
     `;
     modal.style.display = 'flex';
   } catch (e) {
-    showAppNotification('✕ Diagnose failed: ' + e.message, 'err');
+    showAppNotification('Diagnose failed: ' + e.message, 'err');
   }
 }
 
@@ -10130,8 +10170,8 @@ function copyDiagOutput() {
   const el = document.getElementById('diag-output');
   if (!el) return;
   navigator.clipboard.writeText(el.textContent || '').then(() => {
-    showAppNotification('✓ Copied to clipboard', 'done');
-  }).catch(e => showAppNotification('✕ ' + e.message, 'err'));
+    showAppNotification('Copied to clipboard', 'done');
+  }).catch(e => showAppNotification('' + e.message, 'err'));
 }
 
 // View server + setup logs in a tabbed modal
@@ -10155,7 +10195,7 @@ async function viewLogs() {
       <div class="setup-card" style="max-width:820px;max-height:85vh;display:flex;flex-direction:column">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
           <div class="setup-title" style="font-size:22px;text-align:left;margin:0">${t('logsTitle')}</div>
-          <button class="btn xs" onclick="document.getElementById('logs-modal').style.display='none'">✕</button>
+          <button class="btn xs" onclick="document.getElementById('logs-modal').style.display='none'"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div style="display:flex;gap:6px;margin-bottom:10px">
           <button class="btn sm logs-tab on" onclick="switchLogTab(0)">Server</button>
@@ -10175,7 +10215,7 @@ async function viewLogs() {
     window._logsCurrentTab = 0;
     switchLogTab(0);
   } catch (e) {
-    showAppNotification('✕ Failed to fetch logs: ' + e.message, 'err');
+    showAppNotification('Failed to fetch logs: ' + e.message, 'err');
   }
 }
 
@@ -10204,7 +10244,7 @@ async function refreshLogs() {
     window._logsData = await r.json();
     switchLogTab(window._logsCurrentTab || 0);
   } catch (e) {
-    showAppNotification('✕ Refresh failed: ' + e.message, 'err');
+    showAppNotification('Refresh failed: ' + e.message, 'err');
   }
 }
 
@@ -10212,8 +10252,8 @@ function copyCurrentLog() {
   const out = document.getElementById('logs-output');
   if (!out) return;
   navigator.clipboard.writeText(out.textContent || '').then(() => {
-    showAppNotification('✓ Copied to clipboard', 'done');
-  }).catch(e => showAppNotification('✕ ' + e.message, 'err'));
+    showAppNotification('Copied to clipboard', 'done');
+  }).catch(e => showAppNotification('' + e.message, 'err'));
 }
 
 
@@ -10232,13 +10272,13 @@ async function repairHistory(silent) {
             ' repaired=' + data.repaired + ' needsReview=' + data.needsReview, 'info');
 
     if (data.repaired > 0) {
-      showAppNotification('🔧 ' + data.repaired + ' track(s) reconnected', 'done');
+      showAppNotification('<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-7 7 2 2 7-7a4 4 0 0 0 5.4-5.4L13 9l-2-2 2.5-2.5z"/></svg> ' + data.repaired + ' track(s) reconnected', 'done');
       // Re-render only if repairs were made AND user can see the change.
       // The silent startup scan that returns repaired=0 must NOT trigger a
       // second render — that's the visible "jiggle" on app load.
       await loadHistory();
     } else if (!silent && data.broken === 0) {
-      showAppNotification('✓ All tracks are already linked', 'info');
+      showAppNotification('All tracks are already linked', 'info');
     }
 
     // If there are review items, surface them in a modal
@@ -10246,7 +10286,7 @@ async function repairHistory(silent) {
       showRepairReviewModal(data.reviewItems);
     } else if (data.needsReview > 0 && silent) {
       // Silent startup scan — don't pop the modal but tell the user via notification
-      showAppNotification('🔧 ' + data.repaired + ' linked, ' + data.needsReview + ' need review',
+      showAppNotification('<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-7 7 2 2 7-7a4 4 0 0 0 5.4-5.4L13 9l-2-2 2.5-2.5z"/></svg> ' + data.repaired + ' linked, ' + data.needsReview + ' need review',
         'info', () => showRepairReviewModal(data.reviewItems));
     }
 
@@ -10263,7 +10303,7 @@ async function repairHistory(silent) {
       }
     }
   } catch (e) {
-    if (!silent) showAppNotification('✕ Repair failed: ' + e.message, 'err');
+    if (!silent) showAppNotification('Repair failed: ' + e.message, 'err');
   }
 }
 
@@ -10295,7 +10335,7 @@ async function repairFileLocations() {
   const desc = document.getElementById('fix-files-desc');
   // Disable + show a spinner so the user knows something is happening.
   // Reuse the existing pri styling so it matches the rest of the buttons.
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ ' + t('scanningBtn'); }
+  if (btn) { btn.disabled = true; btn.textContent = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> ' + t('scanningBtn'); }
   try {
     const r = await fetch(API + '/stockpile/repair-files', {
       method: 'POST',
@@ -10313,14 +10353,14 @@ async function repairFileLocations() {
     const summary = parts.length
       ? parts.join(' · ')
       : t('checkedNothing').replace('{n}', j.checked);
-    showAppNotification('✓ ' + summary, 'done');
+    showAppNotification('' + summary, 'done');
     if (desc) desc.textContent = summary;
     // Refresh history so the renderer reflects the new file_paths
     if (j.moved) await loadHistory();
   } catch (e) {
-    showAppNotification('✕ ' + e.message, 'err');
+    showAppNotification('' + e.message, 'err');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '📁 ' + t('btnFixFiles'); }
+    if (btn) { btn.disabled = false; btn.textContent = t('btnFixFiles'); }
   }
 }
 
@@ -10344,7 +10384,7 @@ async function cleanTempFiles() {
   if (!ok) return;
   const btn = document.getElementById('btn-clean-temp');
   const desc = document.getElementById('clean-temp-desc');
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ ' + t('cleaningBtn'); }
+  if (btn) { btn.disabled = true; btn.textContent = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> ' + t('cleaningBtn'); }
   try {
     const r = await fetch(API + '/clean-temp-files', {
       method: 'POST',
@@ -10354,14 +10394,14 @@ async function cleanTempFiles() {
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'Cleanup failed');
     const msg = j.deleted > 0
-      ? '✓ ' + t('cleanedResult').replace('{n}', j.deleted).replace('{w}', j.deleted === 1 ? t('fileWord') : t('filesWord')).replace('{mb}', j.mbFreed)
-      : '✓ ' + t('cleanNothing');
+      ? '' + t('cleanedResult').replace('{n}', j.deleted).replace('{w}', j.deleted === 1 ? t('fileWord') : t('filesWord')).replace('{mb}', j.mbFreed)
+      : '' + t('cleanNothing');
     showAppNotification(msg, 'done');
     if (desc) desc.textContent = msg;
   } catch (e) {
-    showAppNotification('✕ ' + e.message, 'err');
+    showAppNotification('' + e.message, 'err');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '🧹 ' + t('btnCleanNow'); }
+    if (btn) { btn.disabled = false; btn.textContent = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 5L7 17l-4 4M14 6l4 4M3 21l4-4 5 5"/></svg> ' + t('btnCleanNow'); }
   }
 }
 
@@ -10380,7 +10420,7 @@ async function manualCheckForUpdates() {
   const btn = document.getElementById('btn-check-updates');
   const desc = document.getElementById('update-check-desc');
   const origDesc = desc ? desc.textContent : '';
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ ' + t('checkingBtn'); }
+  if (btn) { btn.disabled = true; btn.textContent = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> ' + t('checkingBtn'); }
   // v0.3.0: known-benign updater errors get treated as "up to date"
   // here too — match what updater.js does on the main side. Without
   // this, the user clicked "Check now" and saw a red error toast even
@@ -10406,12 +10446,12 @@ async function manualCheckForUpdates() {
         const errMsg = (result && result.error) || 'Update check failed';
         // Benign? Pretend we're up to date — that's functionally true.
         if (isBenignUpdateError(errMsg)) {
-          showAppNotification('✓ ' + t('updUpToDate'), 'ok');
+          showAppNotification('' + t('updUpToDate'), 'ok');
           if (desc) desc.textContent = t('updUpToDate');
           if (typeof diagLog === 'function') diagLog('Updater (benign): ' + errMsg, 'info');
         } else {
-          showAppNotification('✕ ' + errMsg, 'err');
-          if (desc) desc.textContent = '✕ ' + errMsg;
+          showAppNotification('' + errMsg, 'err');
+          if (desc) desc.textContent = '' + errMsg;
         }
       }
       return;
@@ -10423,11 +10463,11 @@ async function manualCheckForUpdates() {
     const status = await window.api.updater.getStatus();
     const current = (status && status.currentVersion) || 'current';
     if (result.version && result.version !== current) {
-      const msg = '✓ Update available: v' + result.version + ' (you have v' + current + ')';
+      const msg = 'Update available: v' + result.version + ' (you have v' + current + ')';
       showAppNotification(msg, 'done');
       if (desc) desc.textContent = msg + ' — see the banner at the top of the app.';
     } else {
-      const msg = '✓ You\'re up to date (v' + current + ')';
+      const msg = 'You\'re up to date (v' + current + ')';
       showAppNotification(msg, 'ok');
       if (desc) desc.textContent = msg + '. The app also checks automatically every 4 hours.';
       // After 5 seconds restore the original explainer so future clicks
@@ -10435,10 +10475,10 @@ async function manualCheckForUpdates() {
       setTimeout(() => { if (desc) desc.textContent = origDesc; }, 8000);
     }
   } catch (e) {
-    showAppNotification('✕ ' + e.message, 'err');
-    if (desc) desc.textContent = '✕ ' + e.message;
+    showAppNotification('' + e.message, 'err');
+    if (desc) desc.textContent = '' + e.message;
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '🔄 Check now'; }
+    if (btn) { btn.disabled = false; btn.textContent = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6M3.5 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.65 4.36A9 9 0 0 0 20.5 15"/></svg> Check now'; }
   }
 }
 
@@ -10478,10 +10518,10 @@ async function openStorageBreakdown() {
     <div class="setup-card" style="max-width:720px;max-height:80vh;display:flex;flex-direction:column;padding:24px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
         <div>
-          <div class="setup-title" style="font-size:24px;text-align:left;margin-bottom:2px">💾 ${t('storName')}</div>
+          <div class="setup-title" style="font-size:24px;text-align:left;margin-bottom:2px"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="14" width="18" height="6" rx="1"/><path d="M7 8 12 3l5 5"/><circle cx="7" cy="17" r="1"/></svg> ${t('storName')}</div>
           <div style="font-size:12px;color:var(--muted)">${t('storSub')}</div>
         </div>
-        <button class="btn xs" onclick="closeStorageBreakdown()">✕</button>
+        <button class="btn xs" onclick="closeStorageBreakdown()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
       </div>
       <div id="storage-breakdown-body" style="flex:1;overflow-y:auto;padding-right:4px">
         <div style="text-align:center;padding:40px;color:var(--hint)">${t('storScanning')}</div>
@@ -10539,7 +10579,7 @@ async function storagePruneMissing() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ confirm: true }),
     }).then(x => x.json());
-    showAppNotification('🗑 ' + t('pruneRemoved') + ' ' + (r.removed || 0) + ' ' + t('deadEntriesWord'), 'done');
+    showAppNotification('<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> ' + t('pruneRemoved') + ' ' + (r.removed || 0) + ' ' + t('deadEntriesWord'), 'done');
     if (typeof loadHistory === 'function') await loadHistory();
     openStorageBreakdown();
   } catch (e) {
@@ -10575,14 +10615,14 @@ async function storageRepairMetadata() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ confirm: true })
     }).then(r => r.json());
-    showAppNotification('🖼 ' + t('storRepairDone')
+    showAppNotification('<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg> ' + t('storRepairDone')
       .replace('{n}', r.affected)
       .replace('{twin}', r.twin_merge)
       .replace('{probe}', r.ffprobe), 'done');
     if (typeof loadHistory === 'function') await loadHistory();
     openStorageBreakdown();
   } catch (e) {
-    showAppNotification('✕ ' + e.message, 'err');
+    showAppNotification('' + e.message, 'err');
   }
 }
 
@@ -10597,7 +10637,7 @@ async function storageAdoptOrphans() {
       body: JSON.stringify({ root }),
     }).then(x => x.json());
     if (r.error) throw new Error(r.error);
-    showAppNotification('📥 ' + t('notifImported') + ' ' + r.adopted + ' ' + (r.adopted === 1 ? t('fileWord') : t('filesWord')) +
+    showAppNotification('<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg> ' + t('notifImported') + ' ' + r.adopted + ' ' + (r.adopted === 1 ? t('fileWord') : t('filesWord')) +
       (r.skipped_stems ? ' (' + r.skipped_stems + ' ' + t('notifStemsSkipped') + ')' : ''), 'done');
     if (typeof loadHistory === 'function') await loadHistory();
     closeStorageBreakdown();
@@ -10624,7 +10664,7 @@ function renderStorageBreakdown(data) {
     ? formatBytes(data.drive.free_bytes) + ' ' + t('storFreeOnDrive')
     : '';
   const missingChip = data.missing_files > 0
-    ? `<span class="storage-chip warn">⚠ ${data.missing_files} ${data.missing_files === 1 ? t('storMissingOne') : t('storMissingMany')}</span>`
+    ? `<span class="storage-chip warn"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01"/></svg> ${data.missing_files} ${data.missing_files === 1 ? t('storMissingOne') : t('storMissingMany')}</span>`
     : '';
   const orphanChip = (data.untracked && data.untracked.files > 0)
     ? `<span class="storage-chip warn">${data.untracked.files} ${data.untracked.files === 1 ? t('storOrphanOne') : t('storOrphanMany')} (${orphanMB})</span>`
@@ -10634,14 +10674,14 @@ function renderStorageBreakdown(data) {
   // user fix them right here instead of hunting through Settings.
   const fixActions = [];
   if (data.missing_files > 0) {
-    fixActions.push(`<button class="btn xs" onclick="storageFixMissing()">🔍 ${t('storLocate')}</button>`);
-    fixActions.push(`<button class="btn xs" onclick="storagePruneMissing()">🗑 ${t('storPrune')}</button>`);
+    fixActions.push(`<button class="btn xs" onclick="storageFixMissing()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg> ${t('storLocate')}</button>`);
+    fixActions.push(`<button class="btn xs" onclick="storagePruneMissing()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> ${t('storPrune')}</button>`);
   }
   if (data.untracked && data.untracked.files > 0) {
-    fixActions.push(`<button class="btn xs" onclick="storageAdoptOrphans()">📥 ${t('storImportBtn')} (${data.untracked.files})</button>`);
+    fixActions.push(`<button class="btn xs" onclick="storageAdoptOrphans()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg> ${t('storImportBtn')} (${data.untracked.files})</button>`);
   }
-  fixActions.push(`<button class="btn xs" onclick="storageRepairMetadata()">🖼 ${t('storRepairThumbs')}</button>`);
-  fixActions.push(`<button class="btn xs" onclick="closeStorageBreakdown();openAutoOrganize()">✨ ${t('aoTitle')}</button>`);
+  fixActions.push(`<button class="btn xs" onclick="storageRepairMetadata()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg> ${t('storRepairThumbs')}</button>`);
+  fixActions.push(`<button class="btn xs" onclick="closeStorageBreakdown();openAutoOrganize()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.3L4.8 10l5.3 1.9L12 17l1.9-5.3L19.2 10l-5.3-1.9zM5 3v4M3 5h4M19 17v4M17 19h4"/></svg> ${t('aoTitle')}</button>`);
   const actionsHTML = `<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap" id="storage-fix-actions">${fixActions.join('')}</div>`;
 
   const summaryHTML = `
@@ -10663,7 +10703,7 @@ function renderStorageBreakdown(data) {
         const pct = Math.max(2, Math.round((f.bytes / maxBytes) * 100));
         const colorStyle = f.color ? `background:${escapeHtml(f.color)}` : 'background:var(--accent)';
         const missingNote = f.missing_count > 0
-          ? `<span style="color:#f59e0b;margin-left:8px;font-size:11px">⚠ ${f.missing_count} ${t('storMissingNote')}</span>`
+          ? `<span style="color:#f59e0b;margin-left:8px;font-size:11px"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01"/></svg> ${f.missing_count} ${t('storMissingNote')}</span>`
           : '';
         return `
           <div class="storage-folder-row" style="margin-bottom:10px">
@@ -10717,7 +10757,7 @@ function showRepairReviewModal(items) {
           <div class="setup-title" style="font-size:24px;text-align:left;margin-bottom:2px">${t('rrTitle')}</div>
           <div style="font-size:12px;color:var(--muted)">${items.length} track${items.length === 1 ? '' : 's'} need confirmation — pick the right file or skip</div>
         </div>
-        <button class="btn xs" onclick="closeRepairReview()">✕</button>
+        <button class="btn xs" onclick="closeRepairReview()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
       </div>
       <div id="review-list" style="flex:1;overflow-y:auto;padding-right:4px">
         ${items.map((item, i) => `
@@ -10774,7 +10814,7 @@ async function applyReviewMatch(rowIdx, historyId) {
     });
     const j = await r.json();
     if (!j.ok) {
-      showAppNotification('✕ ' + (j.error || 'Apply failed'), 'err');
+      showAppNotification('' + (j.error || 'Apply failed'), 'err');
       return;
     }
     // Visually remove the row
@@ -10784,12 +10824,12 @@ async function applyReviewMatch(rowIdx, historyId) {
       row.style.pointerEvents = 'none';
       const status = document.createElement('div');
       status.style.cssText = 'font-size:11px;color:#7ed982;margin-top:6px';
-      status.textContent = '✓ Linked';
+      status.textContent = 'Linked';
       row.appendChild(status);
     }
     await loadHistory();
   } catch (e) {
-    showAppNotification('✕ ' + e.message, 'err');
+    showAppNotification('' + e.message, 'err');
   }
 }
 
@@ -10824,7 +10864,7 @@ async function applyAllReviewMatches() {
     } catch {}
   }
   if (applied > 0) {
-    showAppNotification('✓ ' + applied + ' track(s) linked', 'done');
+    showAppNotification('' + applied + ' track(s) linked', 'done');
     await loadHistory();
   }
 }
@@ -10912,8 +10952,8 @@ function renderStockpileFolders() {
     const canAutoMatch = !!(f.artist_seeds || f.mood_centroid);
     card.innerHTML = `
       <div class="sp-fc-actions">
-        ${canAutoMatch ? `<button title="${t('spAutoMatchTooltip')}" class="sp-fc-magic" onclick="openMatchPreview(${f.id})">⚡</button>` : ''}
-        <button title="Edit" onclick="editFolder(${f.id})">✎</button>
+        ${canAutoMatch ? `<button title="${t('spAutoMatchTooltip')}" class="sp-fc-magic" onclick="openMatchPreview(${f.id})"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.3L4.8 10l5.3 1.9L12 17l1.9-5.3L19.2 10l-5.3-1.9zM5 3v4M3 5h4M19 17v4M17 19h4"/></svg></button>` : ''}
+        <button title="Edit" onclick="editFolder(${f.id})"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button>
         <button title="Delete" onclick="deleteFolder(${f.id})">×</button>
       </div>
       <div class="sp-fc-name"><span class="sp-fc-color" ${f.color ? `style="background:${escapeHtml(f.color)}"` : ''}></span>${escapeHtml(f.name)}</div>
@@ -11044,9 +11084,9 @@ async function quickTag(historyId, folderId, confidence, source) {
     fetch(API + '/stockpile/summary').then(r => r.json()).then(renderStockpileSummary);
     // Auto-refresh history row's tag chips + folder view if relevant
     refreshUIForAction('tag-changed', { historyId, folderId });
-    showAppNotification('✓ ' + t('spTagged') + ': ' + (f ? f.name : ''), 'ok');
+    showAppNotification('' + t('spTagged') + ': ' + (f ? f.name : ''), 'ok');
   } catch (e) {
-    showAppNotification('✕ ' + e.message, 'err');
+    showAppNotification('' + e.message, 'err');
   }
 }
 
@@ -11296,16 +11336,16 @@ function renderFolderTracks() {
       tr.key_note ? `<span class="badge">${escapeHtml(tr.key_note)} ${escapeHtml(tr.key_mode || '')}</span>` : '',
       tr.duration ? `<span class="badge">${fmtSec(tr.duration)}</span>` : '',
       tr.mood_label ? `<span class="badge">${escapeHtml(tr.mood_label)}</span>` : '',
-      tr.stockpile_committed ? `<span class="badge committed">✓ ${t('spCommitted') || 'Committed'}</span>` : '',
+      tr.stockpile_committed ? `<span class="badge committed">${t('spCommitted') || 'Committed'}</span>` : '',
     ].filter(Boolean).join('');
     const isPlaying = (spFvAudioTrackId === tr.id) ? 'playing' : '';
     const playGlyph = isPlaying
       ? '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>'
       : '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="7,5 7,19 19,12"/></svg>';
-    // Thumbnail: image if available, otherwise dim ♪ glyph in the slot
+    // Thumbnail: image if available, otherwise dim placeholder glyph in the slot
     const thumb = tr.thumbnail
       ? `<img class="sp-fv-row-thumb" loading="lazy" decoding="async" src="${escapeHtml(resolveThumb(tr.thumbnail))}" onerror="window._thumbFail(this)"/>`
-      : `<div class="sp-fv-row-thumb fallback">♪</div>`;
+      : `<div class="sp-fv-row-thumb fallback"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>`;
     // Clicking the title block opens the full analysis (waveform, sections,
     // chord progression, LUFS, dynamic range, etc.). The title is the
     // primary surface so it gets a hover affordance.
@@ -11318,9 +11358,9 @@ function renderFolderTracks() {
           <div class="sp-fv-row-meta">${meta}</div>
         </div>
         <div class="sp-fv-row-actions">
-          <button onclick="folderViewOpenAnalysis(${tr.id})" title="${t('spOpenAnalysis') || 'Open full analysis'}">🎵</button>
+          <button onclick="folderViewOpenAnalysis(${tr.id})" title="${t('spOpenAnalysis') || 'Open full analysis'}"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></button>
           <button onclick="folderViewRetag(${tr.id})" title="${t('spChangeFolder') || 'Move to another folder'}">↪</button>
-          <button onclick="folderViewOpenInExplorer(${tr.id})" title="${t('spShowInExplorer') || 'Show in Explorer'}">📁</button>
+          <button onclick="folderViewOpenInExplorer(${tr.id})" title="${t('spShowInExplorer') || 'Show in Explorer'}"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
           <button class="danger" onclick="folderViewUntag(${tr.id})" title="${t('spRemoveFromFolder') || 'Remove from this folder'}">×</button>
         </div>
       </div>
@@ -11478,7 +11518,7 @@ function playTrack(track, context) {
       // previous track that's already been replaced.
       if (!globalPlayer.track) return;
       // Real error on the current track
-      showAppNotification('✕ ' + (t('spPreviewError') || 'Cannot play this file'), 'err');
+      showAppNotification('' + (t('spPreviewError') || 'Cannot play this file'), 'err');
       stopGlobalPlay();
     });
   }
@@ -11501,7 +11541,7 @@ function playTrack(track, context) {
     if (!globalPlayer.track) return;
     // Common harmless rejection: AbortError when the user spams play. Skip.
     if (err && err.name === 'AbortError') return;
-    showAppNotification('✕ ' + err.message, 'err');
+    showAppNotification('' + err.message, 'err');
   }).finally(() => {
     // Release transition lock once playback actually started (or failed).
     // The play() promise resolves when audio begins; that's the safest
@@ -11628,9 +11668,9 @@ function showMiniPlayerForTrack(track) {
     if (url) {
       thumbWrap.innerHTML =
         '<img src="' + url.replace(/"/g, '&quot;') +
-        '" onerror="this.parentElement.innerHTML=\'<span class=&quot;sp-fv-mini-thumb-fallback&quot;>♪</span>\'"/>';
+        '" onerror="this.parentElement.innerHTML=\'<span class=&quot;sp-fv-mini-thumb-fallback&quot;><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></span>\'"/>';
     } else {
-      thumbWrap.innerHTML = '<span class="sp-fv-mini-thumb-fallback">♪</span>';
+      thumbWrap.innerHTML = '<span class="sp-fv-mini-thumb-fallback"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></span>';
     }
   }
   // Wire drag handlers (idempotent)
@@ -11847,7 +11887,7 @@ function toggleShuffleMode() {
   shuffleMode = !shuffleMode;
   localStorage.setItem('hk_shuffle', shuffleMode ? '1' : '0');
   applyModeButtonStates();
-  showAppNotification(shuffleMode ? '🔀 ' + (t('miniShuffleOn') || 'Shuffle on') : (t('miniShuffleOff') || 'Shuffle off'), 'info');
+  showAppNotification(shuffleMode ? '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><path d="m4 20 17-17M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg> ' + (t('miniShuffleOn') || 'Shuffle on') : (t('miniShuffleOff') || 'Shuffle off'), 'info');
 }
 function toggleLoopMode() {
   // Cycle: none → playlist → track → none
@@ -12027,7 +12067,7 @@ async function saveMiniNotepad() {
     const row = histData.find(h => h.id === historyId);
     if (row) row.user_notes = notes;
   } catch (e) {
-    if (foot) foot.textContent = '✕ ' + e.message;
+    if (foot) foot.textContent = '' + e.message;
   }
 }
 
@@ -12477,9 +12517,9 @@ async function folderViewUntag(trackId) {
     document.getElementById('sp-fv-meta').textContent =
       `${spFvFolder.track_count} ${spFvFolder.track_count === 1 ? t('spTrack') : t('spTracks')}`;
     renderFolderTracks();
-    showAppNotification('✓ ' + (t('spUntagged') || 'Removed from folder'), 'ok');
+    showAppNotification('' + (t('spUntagged') || 'Removed from folder'), 'ok');
   } catch (e) {
-    showAppNotification('✕ ' + e.message, 'err');
+    showAppNotification('' + e.message, 'err');
   }
 }
 
@@ -12510,7 +12550,7 @@ function folderViewOpenInExplorer(trackId) {
     .then(r => r.json())
     .then(j => {
       if (!j.exists) {
-        showAppNotification('✕ ' + (t('spFileMissing') || 'File no longer exists at') + ' ' + tr.file_path, 'err');
+        showAppNotification('' + (t('spFileMissing') || 'File no longer exists at') + ' ' + tr.file_path, 'err');
         return;
       }
       if (api.openPath) api.openPath(tr.file_path);
@@ -12613,7 +12653,7 @@ async function submitCreateFolder() {
   const editId = document.getElementById('sp-new-folder-modal').dataset.editId;
 
   if (!name) {
-    showAppNotification('✕ ' + t('spNameRequired'), 'err');
+    showAppNotification('' + t('spNameRequired'), 'err');
     return;
   }
 
@@ -12638,7 +12678,7 @@ async function submitCreateFolder() {
     spSuggestionsByTrack = {};
 
     const folderId = (j.folder && j.folder.id) || (editId ? parseInt(editId, 10) : null);
-    showAppNotification('✓ ' + (editId ? t('spFolderSaved') : t('spFolderCreated')), 'ok');
+    showAppNotification('' + (editId ? t('spFolderSaved') : t('spFolderCreated')), 'ok');
 
     // If seeds were provided AND this is a folder create (or seeds were
     // edited), check for matching untagged tracks and offer bulk-tag.
@@ -12649,7 +12689,7 @@ async function submitCreateFolder() {
       loadStockpile();
     }
   } catch (e) {
-    showAppNotification('✕ ' + e.message, 'err');
+    showAppNotification('' + e.message, 'err');
   }
 }
 
@@ -12684,9 +12724,9 @@ async function deleteFolder(id) {
     if (!r.ok) throw new Error('Delete failed');
     spSuggestionsByTrack = {};
     loadStockpile();
-    showAppNotification('✓ ' + t('spFolderDeleted'), 'ok');
+    showAppNotification('' + t('spFolderDeleted'), 'ok');
   } catch (e) {
-    showAppNotification('✕ ' + e.message, 'err');
+    showAppNotification('' + e.message, 'err');
   }
 }
 
@@ -12704,7 +12744,7 @@ if (typeof escapeHtml !== 'function') {
 // ── Bulk match / auto-tag ────────────────────────────────────────────────────
 // Given a folder, fetch every untagged track that matches its seeds (filename
 // artist match) or its mood centroid, and offer one-click bulk tagging.
-// Triggered after folder creation if seeds were given, or via the ⚡ button
+// Triggered after folder creation if seeds were given, or via the <svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> button
 // on each folder card.
 
 async function openMatchPreview(folderId) {
@@ -12733,7 +12773,7 @@ async function openMatchPreview(folderId) {
     renderMatchPreview(folderId, j);
   } catch (e) {
     document.getElementById('sp-match-body').innerHTML =
-      `<div style="text-align:center;padding:24px;color:#ff8888">✕ ${escapeHtml(e.message)}</div>`;
+      `<div style="text-align:center;padding:24px;color:#ff8888">Error: ${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -12843,7 +12883,7 @@ function selectAllMatches(folderId, on) {
 async function applyMatchSelection(folderId) {
   const sel = window.spMatchSelection[folderId];
   if (!sel || !sel.size) {
-    showAppNotification('✕ ' + t('spNoTracksSelected'), 'err');
+    showAppNotification('' + t('spNoTracksSelected'), 'err');
     return;
   }
   const ids = Array.from(sel);
@@ -12861,10 +12901,10 @@ async function applyMatchSelection(folderId) {
     delete window.spMatchSelection[folderId];
     spSuggestionsByTrack = {};
     loadStockpile();
-    showAppNotification('✓ ' + t('spTaggedNTracks').replace('{n}', j.tagged), 'ok');
+    showAppNotification('' + t('spTaggedNTracks').replace('{n}', j.tagged), 'ok');
   } catch (e) {
     if (btn) { btn.disabled = false; }
-    showAppNotification('✕ ' + e.message, 'err');
+    showAppNotification('' + e.message, 'err');
   }
 }
 
@@ -13018,7 +13058,7 @@ function _setupUpdater() {
     // every 4-hour interval check (would be spammy). The boot check
     // flag was set by onChecking above.
     if (_bootCheckToastShown && typeof showAppNotification === 'function') {
-      showAppNotification('✓ ' + (t('updUpToDate') || "You're up to date"), 'ok', null, 2200);
+      showAppNotification('' + (t('updUpToDate') || "You're up to date"), 'ok', null, 2200);
       _bootCheckToastShown = false;  // reset for next boot
     }
   });
@@ -13303,7 +13343,7 @@ function toggleSettingsSection(id) {
 // Every popup (Logs, Storage breakdown, Auto-organize, Duplicate finder,
 // Diagnose paths, Repair review, bulk-tag picker…) shares the
 // `.setup-modal` backdrop class. Clicking the dimmed area around the card
-// now closes the popup — no need to hunt for the ✕.
+// now closes the popup — no need to hunt for the close button.
 //
 // Exclusions:
 //   • #setup-modal — the first-run engine setup. Dismissing that

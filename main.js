@@ -357,6 +357,28 @@ function startBackend() {
     backendProcess.stdout?.on('data', d => {
       const msg = d.toString().trim();
       log('[srv] ' + msg);
+      // v0.3.3: server emits __FREQPHULL_FATAL__ <reason> for hard
+      // startup failures (port already taken, etc.). Show the user a
+      // proper dialog instead of letting them stare at a blank app.
+      if (msg.includes('__FREQPHULL_FATAL__')) {
+        const reason = msg.split('__FREQPHULL_FATAL__')[1].trim();
+        log('FATAL server error: ' + reason);
+        try {
+          let title = 'Freq.Phull cannot start';
+          let detail = 'The backend reported: ' + reason;
+          if (reason.indexOf('port-in-use') === 0) {
+            title = 'Port 47891 is already in use';
+            detail = 'Another copy of Freq.Phull is probably running.\n\n' +
+                     'Open Task Manager (Ctrl+Shift+Esc), look for any\n' +
+                     '"Freq.Phull" or "node.exe" processes, end them, then\n' +
+                     'restart Freq.Phull.\n\n' +
+                     'If that does not help, a system restart will free it.';
+          }
+          dialog.showErrorBox(title, detail);
+        } catch {}
+        setTimeout(() => app.exit(2), 500);
+        return;
+      }
       if (msg.includes('47891')) {
         log('Backend online!');
         backendReady = true;
