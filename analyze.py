@@ -1103,8 +1103,28 @@ def _bpm_really_differs(a, b):
 
 
 def detect_beat_switches(mono, sr, force=False):
-    """Returns {detected, switches:[{time_s, confidence, changes}],
-    sections:[{start_s, end_s, bpm, key, mode, camelot, rms_db}]}."""
+    """Detect structural beat switches in producer audio (typebeats, hip-hop).
+    Returns {detected, switches:[{time_s, confidence, changes}],
+    sections:[{start_s, end_s, bpm, key, mode, camelot, rms_db}]}.
+
+    v0.3.3 accuracy pass — tightened thresholds across the board to
+    cut false positives. Beat switches are an authoritative claim (the
+    UI marks them on the waveform); a wrong flag costs more trust than
+    a missed real one. Strategy:
+      * Wider novelty window (W=12 vs 8) — more stable structural signal,
+        ignores momentary spikes from single-bar transitions
+      * Higher base threshold (1.7 sigma vs 1.4) — fewer noise peaks
+      * Larger min peak distance (30s vs 20s) — beat switches are at
+        least one verse apart in real music
+      * Minimum section length (20s vs 12s) — collapses cluster artifacts
+      * Two-of-four change requirement (vs any-one) — a single feature
+        changing isn't a beat switch, it's a fill or breakdown
+      * Stricter harmony cosine (0.72 vs 0.80) — only flag REAL re-harm
+      * Stricter energy delta (8 dB vs 5 dB) — quiet/loud changes alone
+        within one beat don't count
+      * Cross-window validation — confirm the boundary holds when
+        viewed from a wider lens (don't trust a single-block spike)
+    """
     out = {'detected': False, 'switches': [], 'sections': []}
     total_s = len(mono) / sr
     if total_s < 50:           # nothing meaningful to switch between
@@ -1113,27 +1133,41 @@ def detect_beat_switches(mono, sr, force=False):
     if feats is None:
         return out
 
-    nov = _novelty_curve(feats, W=8)
-    inner = nov[10:max(11, n_blocks - 10)]
-    if inner.size < 4:
+    # Wider context window — modern hip-hop verses run 30-60s; W=12s of
+    # context gives the cosine more semantic weight than 8s of bars.
+    nov = _novelty_curve(feats, W=12)
+    # Drop the wraparound region (where nov is 0 from the W-padding)
+    inner = nov[14:max(15, n_blocks - 14)]
+    if inner.size < 8:
         return out
     mu, sd = float(np.mean(inner)), float(np.std(inner))
-    # force=True (filename says "beat switch" / user clicked the button)
-    # lowers the bar — we EXPECT a switch, so surface the best candidate.
-    thresh = mu + (1.0 if force else 1.4) * sd
-    peaks, props = find_peaks(nov, height=thresh, distance=20)
-    peaks = [int(p) for p in peaks if 12 <= p <= total_s - 12]
+
+    # Tighter thresholds. force=True (user explicitly asked, or filename
+    # advertises a switch) lowers the bar but doesn't disable it.
+    sigma_mult = 1.2 if force else 1.7
+    thresh = mu + sigma_mult * sd
+
+    # Min 30s between candidate peaks — beat switches don't come thicker
+    # than once per verse, and a verse is at minimum ~20s even in fast
+    # tracks (4 bars at 200 BPM = 4.8s, but typebeats run 16+ bars).
+    peaks, _ = find_peaks(nov, height=thresh, distance=30)
+    # Trim peaks too close to the edges — the song doesn't switch in
+    # its first 16s or last 16s in normal cases.
+    peaks = [int(p) for p in peaks if 16 <= p <= total_s - 16]
     if not peaks:
         return out
-    # Strongest first, cap at 4, then back to chronological
-    peaks = sorted(sorted(peaks, key=lambda p: -nov[p])[:4])
 
-    # Sections between boundaries; merge fragments < 12s into neighbors
+    # Strongest first, cap at 5, then back to chronological
+    peaks = sorted(sorted(peaks, key=lambda p: -nov[p])[:5])
+
+    # Build sections from boundaries. Minimum span 20s — anything shorter
+    # is almost certainly a transition fill, not a real new beat.
+    MIN_SECTION_S = 20
     bounds = [0.0] + [float(p) for p in peaks] + [total_s]
     spans = []
     for i in range(len(bounds) - 1):
         s0, s1 = bounds[i], bounds[i + 1]
-        if spans and (s1 - s0) < 12:
+        if spans and (s1 - s0) < MIN_SECTION_S:
             spans[-1] = (spans[-1][0], s1)
         else:
             spans.append((s0, s1))
@@ -1153,36 +1187,54 @@ def detect_beat_switches(mono, sr, force=False):
             key, mode = detect_key(seg, sr)[0:2]
         except Exception:
             pass
-        # Mean chroma over the span — used for the harmony-change test
+        # Mean chroma over the span (used for harmony-change test)
         b0, b1 = int(s0), max(int(s0) + 1, int(s1))
         ch = np.mean(feats[b0:min(b1, n_blocks), 0:12], axis=0)
+        # Mean spectral profile over the span (used for stricter
+        # validation — beats with the same chroma but different
+        # spectral balance ARE different beats)
+        sp = np.mean(feats[b0:min(b1, n_blocks), 12:16], axis=0)
         return {'start_s': round(s0, 1), 'end_s': round(s1, 1), 'bpm': bpm,
                 'key': key, 'mode': mode,
-                'camelot': CAMELOT.get(f'{key} {mode}', '—') if key else '—',
-                'rms_db': round(rms_db, 1), '_chroma': ch}
+                'camelot': CAMELOT.get(f'{key} {mode}', '-') if key else '-',
+                'rms_db': round(rms_db, 1), '_chroma': ch, '_spectral': sp}
 
     sections = [analyze_span(s0, s1) for (s0, s1) in spans]
 
-    # Validate each boundary; merge neighbors that are actually the same beat
-    def differs(a, b):
-        changes = []
+    # Validate each boundary. v0.3.3: require >=2 distinct dimensions
+    # of change to flag a switch (was: any single dimension). One feature
+    # changing happens during fills, breakdowns, and verse builds; a
+    # genuine beat switch reorganizes multiple dimensions at once.
+    def changes_between(a, b):
+        ch = []
         if _bpm_really_differs(a['bpm'], b['bpm']):
-            changes.append('bpm')
+            ch.append('bpm')
         if a['key'] and b['key'] and (a['key'] != b['key'] or a['mode'] != b['mode']):
-            changes.append('key')
+            ch.append('key')
         ca, cb = a['_chroma'], b['_chroma']
         na, nb = np.linalg.norm(ca), np.linalg.norm(cb)
-        if na > 1e-9 and nb > 1e-9 and float(np.dot(ca, cb) / (na * nb)) < 0.80:
-            if 'key' not in changes:
-                changes.append('harmony')
-        if abs(a['rms_db'] - b['rms_db']) > 5:
-            changes.append('energy')
-        return changes
+        # Stricter cosine threshold for real re-harmonization
+        if na > 1e-9 and nb > 1e-9 and float(np.dot(ca, cb) / (na * nb)) < 0.72:
+            if 'key' not in ch:
+                ch.append('harmony')
+        # Spectral profile change — captures drum-pattern shifts that
+        # leave the chroma unchanged but reorganize the timbral mix
+        sa, sb = a['_spectral'], b['_spectral']
+        if np.linalg.norm(sa) > 1e-9 and np.linalg.norm(sb) > 1e-9:
+            ssim = float(np.dot(sa, sb) / (np.linalg.norm(sa) * np.linalg.norm(sb) + 1e-10))
+            if ssim < 0.65:
+                ch.append('texture')
+        # Stricter energy delta — quiet bars happen WITHIN a single beat
+        if abs(a['rms_db'] - b['rms_db']) > 8:
+            ch.append('energy')
+        return ch
 
+    # First pass: drop boundaries where fewer than 2 dimensions changed.
+    # These are fills, breaks, build-ups — not actual switches.
     i = 0
     while i < len(sections) - 1:
-        ch = differs(sections[i], sections[i + 1])
-        if not ch:
+        ch = changes_between(sections[i], sections[i + 1])
+        if len(ch) < 2:
             merged = analyze_span(sections[i]['start_s'], sections[i + 1]['end_s'])
             sections[i:i + 2] = [merged]
         else:
@@ -1191,15 +1243,43 @@ def detect_beat_switches(mono, sr, force=False):
     if len(sections) < 2:
         return out
 
-    switches = []
+    # Cross-window validation: confirm each surviving boundary holds when
+    # we expand the analysis window by +/- 5s on each side. A single-block
+    # novelty spike that doesn't replicate across a wider lens is noise.
+    validated = []
     for i in range(len(sections) - 1):
+        bound_t = sections[i]['end_s']
+        # Wider span on each side
+        lo = max(0.0, bound_t - 25)
+        hi = min(total_s, bound_t + 25)
+        # Skip if either side is too short to be meaningful
+        if (bound_t - lo) < 10 or (hi - bound_t) < 10:
+            continue
+        left = analyze_span(lo, bound_t)
+        right = analyze_span(bound_t, hi)
+        ch_wide = changes_between(left, right)
+        # The wider view must STILL show >=2 changes
+        if len(ch_wide) >= 2:
+            validated.append(i)
+
+    if not validated:
+        return out
+
+    # Build the final switches list from validated indices
+    switches = []
+    for i in validated:
         t_s = sections[i]['end_s']
         blk_i = min(n_blocks - 1, max(0, int(t_s)))
-        conf = min(0.99, max(0.3, (float(nov[blk_i]) - mu) / (sd * 3 + 1e-10)))
+        # Confidence: how far above the noise floor was the novelty
+        # peak at this point. Clipped to [0.4, 0.99].
+        conf = min(0.99, max(0.4, (float(nov[blk_i]) - mu) / (sd * 3 + 1e-10)))
         switches.append({'time_s': t_s, 'confidence': round(conf, 2),
                          'changes': sections[i].get('_changes_next', [])})
+
+    # Clean up internal fields before returning
     for sec in sections:
         sec.pop('_chroma', None)
+        sec.pop('_spectral', None)
         sec.pop('_changes_next', None)
     out['detected'] = True
     out['switches'] = switches

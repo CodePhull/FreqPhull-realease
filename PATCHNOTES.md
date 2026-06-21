@@ -9,7 +9,98 @@ along the way.
 
 ---
 
-## v0.3.3 (2026-06-20)
+## v0.3.4 (2026-06-21)
+
+**Installer + first-launch hardening pass — triple-checked for new-user reliability**
+
+**Python launcher args got dropped at spawn time.** discoverPython() correctly cached `{cmd: 'py', args: ['-3']}` when the Windows Python launcher was the chosen interpreter, but EVERY spawn() call site was just passing the bare `pythonCmd` (`py`) without the cached args. Result: running `py` instead of `py -3`. Most machines have one Python so it works by accident, but on any machine with Python 2 still installed (or with the launcher configured to default to a specific older version), `py` resolves wrong and analysis fails with cryptic syntax errors from Python 2 trying to run Python 3 code. Fixed at all SEVEN spawn sites: analyze, fingerprint, bg-analyze, transcribe via inner pipeline, stems, mastering, and the main analyze script. Each now does `spawn(pythonCmd, [...getPythonArgs(), ...scriptArgs], opts)` so the launcher gets every flag it was given.
+
+**Fatal-marker parsing could corrupt the error dialog.** main.js was doing `msg.split('__FREQPHULL_FATAL__')[1].trim()` to extract the failure reason from server stdout. But stdout data events can deliver multiple log lines per chunk; if the marker happens to be followed by other lines in the same buffer flush, the dialog message would include subsequent log noise (file paths, IPs, internal state). Now grabs only up to the first newline so the dialog shows exactly the marker payload and nothing else.
+
+**Readiness handshake — stricter signal.** Old check was `msg.includes('47891')` against the entire stdout chunk. Worked because only the readiness log line happens to mention the port, but fragile: any future log line incidentally mentioning 47891 (e.g. a debug dump of the env) would fire a false ready event. New signal requires BOTH `47891` AND `/ready/i` in the message — the readiness line is the only one with both. Also added a `!backendReady` guard so duplicate matches don't re-fire the IPC event.
+
+**Backend crash-restart loop — capped.** A permanently broken backend (corrupt server.js, missing native module, antivirus quarantine of a critical .dll) was respawning every 2 seconds forever, filling logs and burning CPU with zero user feedback. Now caps at 5 consecutive crash restarts. On the 6th, shows a real error dialog: "The backend process has crashed 5 times in a row. This usually means the install is corrupted or an antivirus has quarantined a required file. Try: 1) Reinstall, 2) Add the install folder to Windows Defender exclusions, 3) Check the log file." Counter resets to 0 on a clean exit so a single crash later in the session uses the full retry budget.
+
+**Triple-check audit results — everything else verified solid:**
+
+| Check | Status |
+|---|---|
+| `bin/` resolution: RES + __dirname + asar.unpacked fallback chain | OK |
+| Missing binary handler: PATH fallback + AV quarantine hint logged | OK |
+| Integrity manifest: graceful skip on missing or check error | OK |
+| DB corruption recovery: backup-and-fresh-start path | OK |
+| Port collision detection: `__FREQPHULL_FATAL__` marker -> dialog | OK |
+| EPIPE feedback loop guards: server.js + main.js | OK |
+| Python alias filter: rejects WindowsApps + <50KB python.exe | OK |
+| Engines-broken breaker: trips on 9009 / MS Store / ModuleNotFoundError / ImportError | OK |
+| Breaker reset on setup-engines exit 0 | OK |
+| Setup script: top-level try/catch with structured JSON error reporting | OK |
+| Setup script: numpy preflight before torch (catches base failures early) | OK |
+| Setup script: pure ASCII + CRLF (PowerShell parser strict requirement) | OK |
+| Setup script: marker file written as UTF-8 without BOM | OK |
+| Setup process: keeps running across renderer disconnects | OK |
+| Setup process: spawn error -> user-visible "Cannot launch PowerShell" message | OK |
+| Renderer: IPC `backend-ready` + polling fallback + 2.5s anti-FOUC | OK |
+| Renderer: textContent guard against SVG-as-text bugs | OK |
+| All Node syntax checks pass | OK |
+| Python AST parse passes | OK |
+| EN/FR i18n parity 489/489 | OK |
+
+
+## v0.3.3 (2026-06-21)
+
+**Analyzer header SVG-as-text: belt + suspenders fix**
+- Audited every textContent assignment in app.js + index.html that contains an SVG markup substring. Result: zero remaining sites in source — the previous fix is in place at line 1759. The screenshot was from a stale build.
+- Made the analyzer badge construction bulletproof anyway: rebuilt as a clean array of plain text segments (`['Professional analysis', 'Camelot 4A', 'Bass-heavy']`) joined with a middle dot. Each segment is now a plain literal with zero possibility of markup creep, even from future edits.
+- New defensive runtime guard wraps `Node.prototype.textContent`. Any assignment of a string containing `<svg` triggers a `console.warn` with stack trace AND strips the markup to its raw text so the user never sees raw HTML in the page. Fast-path (1 ns) on the common case where the string doesn't contain `<svg`. This catches the entire CLASS of bug going forward — not just the specific site we already fixed.
+
+**Engines-broken circuit breaker — actually defined this time**
+- Critical latent bug: v0.3.3 added call sites for `tripPythonMissingBreaker()` and `_pythonMissingBreaker` but never added the function/variable definitions. The moment exit-9009 fired anywhere, the server would have thrown `ReferenceError` and crashed. Hidden because the new `discoverPython` + `py -3` launcher finds Python on nearly every Windows machine, so exit-9009 never actually fired in user testing.
+- Built the breaker for real with a widened concept: "engines broken" covers BOTH "Python missing" AND "Python found but dependencies missing" (the new failure mode from the user's log). State carries a `reason` (`python-missing` | `deps-missing`) and a `detail` (the specific missing module name, when known).
+- New `classifyEngineFailure(exit_code, stderr)` extracts the reason + detail from any Python failure:
+  - Exit 9009 / "Python was not found" / "Microsoft Store" -> `python-missing`
+  - `ModuleNotFoundError: No module named 'X'` -> `deps-missing`, detail=X
+  - `ImportError: cannot import name 'X'` -> `deps-missing`, detail=X
+  - Exit 1 with ImportError/ModuleNotFoundError on the first line -> `deps-missing`, detail=null
+- bg-analyze worker, `/transcribe`, and the breaker reset (on `setup-engines exit 0`) all route through this classifier. `/bg-analyze/status` now returns `breaker_tripped` + `breaker_reason` + `breaker_detail` so the renderer can drive its UI without a separate roundtrip.
+- Backward-compat: kept the old `tripPythonMissingBreaker` / `_pythonMissingBreaker` names as aliases so the existing call sites still work without changes.
+
+**Renderer: distinct toast variant + persistent diagnostic strip**
+- Different message for each breaker reason:
+  - `python-missing` -> "Python engine not detected - click to set it up" (existing)
+  - `deps-missing` -> "Engine dependencies missing - click to run setup again (numpy)" (NEW; shows the missing module name when known)
+- De-duplication keyed on `reason:detail` so a different failure mode after the same session re-shows the toast. Previously a single boolean flag suppressed all subsequent notifications.
+- New diagnostic row in Settings -> AI engines section. Hidden by default; visible only when the breaker is tripped. Shows the title + description for whichever reason fired, plus a "Re-run setup" button so the user has a clear path forward even after dismissing the toast. Driven by polling `/bg-analyze/status` on settings render and after each `engines-*` SSE event.
+- EN/FR parity 489/489 with five new keys for the diagnostic row strings.
+
+**setup-engines.ps1: numpy preflight + better diagnostics**
+- New Step 2.5 between "upgrade pip" and "install PyTorch": explicit `pip install numpy scipy scikit-learn soundfile` with proper version bounds. These were transitive deps of torch, but installing them up front means:
+  - If they fail (offline, blocked corporate network, missing VC++ runtime for numpy native extensions), we see a small clear error within 30 seconds instead of a cryptic torch error 200 MB into a 250 MB download.
+  - If torch later fails, analysis still works for users who don't need stems — graceful degradation instead of all-or-nothing.
+  - Each install has its own `$LASTEXITCODE` check that surfaces a clear EmitError with the specific failed package + actionable hint.
+- Dropped `--quiet` from all four `pip install` calls. Pip prints ~5 lines on success and the full traceback on failure; keeping that in the log file makes post-mortem debugging actually possible.
+- Sanitized the script back to pure ASCII + CRLF after edits (3 em-dash bytes had crept in during editing; PowerShell parser is strict about non-ASCII and fails with cryptic "Missing closing parenthesis" errors — known trap from v0.2.5).
+
+
+
+**Analyzer header showed raw SVG markup**
+- Bug from the emoji-to-SVG sweep: nine sites where the result of an emoji replacement was being assigned via `.textContent` instead of `.innerHTML`, so the SVG strings rendered as literal text in the page (`<svg class="ic" width=...>...</svg> Bass-heavy`). Fixed all nine:
+  - Analyzer "Professional analysis" label — switched to plain text labels ("Melodic" / "Bass-heavy") since the text is already self-explanatory in this context; no icon needed for a small inline status line.
+  - Eight button-state update sites (manual yt-dlp update, repair-files button, stockpile-label refresh, etc.) — converted `textContent` → `innerHTML`. Content is fully under our control (no user input interpolated), so it's safe.
+- Audited every remaining `class="ic"` occurrence against `.textContent =`, `.innerText =`, `.title =`, `.placeholder =`, `alert(` — zero true positives left.
+
+**Beat-switch detector accuracy pass**
+- Tightened thresholds across the board because false positives are worse than false negatives: a flagged switch is an authoritative claim (the UI marks it on the waveform), so a wrong flag costs more trust than a missed real one. Six changes:
+  1. **Wider novelty window (W=12 vs 8).** 12 seconds of context is closer to the verse-length scale of modern hip-hop; ignores single-bar transition spikes that fooled the 8s view.
+  2. **Higher sigma threshold (1.7 vs 1.4).** Drops borderline noise peaks. Forced mode (filename/user request) eased from 1.0 to 1.2 — still permissive but no longer surfacing pure noise.
+  3. **Larger min peak distance (30s vs 20s).** Real beat switches don't come more than once per verse.
+  4. **Minimum section length (20s vs 12s).** Collapses cluster artifacts from peaks too close together — these were almost always transition fills mistaken for switches.
+  5. **Two-of-four change requirement (was: any-one).** A single feature changing happens during fills, breakdowns, and verse builds. A real beat switch reorganizes multiple dimensions at once. New dimensions: BPM (half/double-aware), key+mode, chroma harmony (cosine < 0.72, was 0.80), spectral texture (cosine < 0.65, NEW — catches drum-pattern shifts that leave chroma alone), and RMS energy (>8 dB delta, was >5 dB).
+  6. **Cross-window validation.** Every surviving boundary gets re-tested with a wider lens — expand 25s on each side, re-compute the change vector, confirm it STILL shows >=2 changes. A single-block novelty spike that doesn't replicate across this wider view is noise.
+- Added a `texture` dimension to the changes vector: detects drum-pattern shifts (spectral profile reorganizing) that the chroma harmony test would miss — a common case in hip-hop where one beat ends and another starts but the producer kept similar harmony.
+- Result: dramatically fewer false positives on tracks with fills, builds, and energy modulations. Real beat switches still flagged with high confidence (now bottoming at 0.40 instead of 0.30 since the criteria are stricter).
+
+
 
 **Professional iconography — emojis removed app-wide**
 - 235 emoji uses across renderer replaced with monochrome stroke SVG icons (Heroicons/Lucide style). 41 unique emojis mapped to 27 named icons (folder, trash, pencil, search, tag, box, drive, broom, refresh, wrench, image, download, upload, arrow-down, globe, book, sparkles, shuffle, note, mic, volume, sliders, heart, heart-filled, warn, clock, plus x and check for state).

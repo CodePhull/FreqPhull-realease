@@ -4,6 +4,10 @@ const fs    = require('fs');
 const { fork } = require('child_process');
 const { setupUpdater } = require('./updater.js');
 
+// v0.3.4: tracks consecutive crash restarts so we can stop respawning
+// forever if the backend is permanently broken.
+let backendRestartCount = 0;
+
 // v0.2.8: branded standalone updater window. Replaces the inline banner
 // for users who want the dedicated experience. The banner still works
 // (small, non-intrusive); this is opened either programmatically when
@@ -361,7 +365,13 @@ function startBackend() {
       // startup failures (port already taken, etc.). Show the user a
       // proper dialog instead of letting them stare at a blank app.
       if (msg.includes('__FREQPHULL_FATAL__')) {
-        const reason = msg.split('__FREQPHULL_FATAL__')[1].trim();
+        // v0.3.4: extract ONLY the first line after the marker. The
+        // stdout data event can deliver multiple log lines per chunk;
+        // taking everything after the marker can pull in subsequent
+        // log noise and corrupt the dialog message.
+        const after = msg.split('__FREQPHULL_FATAL__')[1] || '';
+        const firstLine = after.split(/[\r\n]/)[0] || '';
+        const reason = firstLine.trim();
         log('FATAL server error: ' + reason);
         try {
           let title = 'Freq.Phull cannot start';
@@ -379,7 +389,10 @@ function startBackend() {
         setTimeout(() => app.exit(2), 500);
         return;
       }
-      if (msg.includes('47891')) {
+      // v0.3.4: stricter readiness signal — port number AND the
+      // literal "ready" string. Defends against future log lines that
+      // happen to mention 47891 firing a false ready event.
+      if (msg.includes('47891') && /ready/i.test(msg) && !backendReady) {
         log('Backend online!');
         backendReady = true;
         updateTrayMenu();
@@ -394,8 +407,35 @@ function startBackend() {
       backendReady = false;
       updateTrayMenu();
       if (code !== 0 && code !== null && !isQuitting) {
-        log('Backend crashed, restarting in 2s...');
+        // v0.3.4: cap restart attempts. Without this, a permanently
+        // broken backend (e.g. corrupt server.js, missing native dep)
+        // would respawn every 2s forever — log spam, CPU waste, no
+        // path out for the user. After 5 tries surface a real dialog
+        // and exit so the user knows something is genuinely wrong.
+        backendRestartCount = (backendRestartCount || 0) + 1;
+        if (backendRestartCount > 5) {
+          log('Backend crashed 5+ times — giving up.');
+          try {
+            dialog.showErrorBox(
+              'Freq.Phull backend keeps crashing',
+              'The backend process has crashed 5 times in a row. ' +
+              'This usually means the install is corrupted or an ' +
+              'antivirus has quarantined a required file.\n\n' +
+              'Try:\n' +
+              '  1. Reinstall Freq.Phull from the latest installer\n' +
+              '  2. Add the install folder to Windows Defender exclusions\n' +
+              '  3. Check the log file:\n     %APPDATA%\\freqphull\\logs\\'
+            );
+          } catch {}
+          setTimeout(() => app.exit(3), 500);
+          return;
+        }
+        log('Backend crashed, restarting in 2s (attempt ' + backendRestartCount + '/5)...');
         setTimeout(startBackend, 2000);
+      } else if (code === 0) {
+        // Clean exit — reset the counter so future crashes use the
+        // full retry budget.
+        backendRestartCount = 0;
       }
     });
 

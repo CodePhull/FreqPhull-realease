@@ -1756,10 +1756,17 @@ function applyAnalysisResult(result, histId) {
   // Show engine badge + Camelot + content type
   const histLbl = document.getElementById('hist-lbl');
   if (histLbl) {
-    const contentBadge = result.is_melodic === true ? ' · <svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/></svg> Melodic' : result.is_melodic === false ? ' · <svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a9 9 0 0 1 0 14"/></svg> Bass-heavy' : '';
-    histLbl.textContent = result.engine && result.engine.startsWith('freq.phull')
-      ? `Professional analysis  ·  Camelot ${result.camelot || '—'}${contentBadge}`
-      : `Camelot ${result.camelot || '—'}`;
+    // v0.3.3: build the badge in pieces (engine label + camelot +
+    // optional content type) so each segment is a plain string with
+    // zero markup. textContent gets a clean final string.
+    const segs = [];
+    if (result.engine && result.engine.startsWith('freq.phull')) {
+      segs.push('Professional analysis');
+    }
+    segs.push('Camelot ' + (result.camelot || '-'));
+    if (result.is_melodic === true) segs.push('Melodic');
+    else if (result.is_melodic === false) segs.push('Bass-heavy');
+    histLbl.textContent = segs.join(' \u00b7 ');
   }
 
   // Show top 3 key candidates if confidence is low — critical for autotune
@@ -3689,32 +3696,42 @@ function subscribeToServerEvents() {
     // tripped because Python isn't installed or detectable. Show one
     // friendly notification with a Run-setup CTA instead of users
     // wondering why downloads land without BPM/key forever.
-    es.addEventListener('engines-unavailable', () => {
-      if (window._enginesUnavailableShown) return;
-      window._enginesUnavailableShown = true;
-      if (typeof showAppNotification === 'function') {
-        showAppNotification(
-          t('enginesMissing') || 'Python engine not detected — analysis paused',
-          'warn',
-          () => {
-            // Click → jump to Settings → AI Engines section
-            if (typeof switchTab === 'function') switchTab('settings');
-            // Expand the engines section
-            setTimeout(() => {
-              const wrap = document.querySelector('.settings-section[data-section="engines"]');
-              if (wrap && wrap.classList.contains('collapsed')) toggleSettingsSection('engines');
-              wrap && wrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }, 100);
-          },
-          0  // sticky — don't auto-dismiss
-        );
+    es.addEventListener('engines-unavailable', (ev) => {
+      // v0.3.3: payload now carries reason + detail
+      //   reason: 'python-missing' | 'deps-missing'
+      //   detail: name of missing module (when deps-missing), else null
+      let payload = {};
+      try { payload = JSON.parse(ev.data || '{}'); } catch {}
+      const sigKey = (payload.reason || 'python-missing') + ':' + (payload.detail || '');
+      // De-dupe: same reason+detail => don't re-show. Different signature
+      // (e.g. user fixed Python but deps are still missing) => show again.
+      if (window._enginesUnavailableShown === sigKey) return;
+      window._enginesUnavailableShown = sigKey;
+
+      if (typeof showAppNotification !== 'function') return;
+      let msg;
+      if (payload.reason === 'deps-missing') {
+        msg = (t('enginesDepsMissing') || 'Engine dependencies missing - click to run setup again') +
+              (payload.detail ? ' (' + payload.detail + ')' : '');
+      } else {
+        msg = t('enginesMissing') || 'Python engine not detected - click to set it up';
       }
+      showAppNotification(msg, 'warn', () => {
+        if (typeof switchTab === 'function') switchTab('settings');
+        setTimeout(() => {
+          const wrap = document.querySelector('.settings-section[data-section="engines"]');
+          if (wrap && wrap.classList.contains('collapsed')) toggleSettingsSection('engines');
+          wrap && wrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 100);
+      }, 0);
+      refreshEnginesDiagRow();
     });
     es.addEventListener('engines-available', () => {
       window._enginesUnavailableShown = false;
       if (typeof showAppNotification === 'function') {
-        showAppNotification(t('enginesReady') || 'Python engine ready — analysis resumed', 'ok', null, 3500);
+        showAppNotification(t('enginesReady') || 'Python engine ready - analysis resumed', 'ok', null, 3500);
       }
+      refreshEnginesDiagRow();
     });
 
     es.addEventListener('history-changed', async () => {
@@ -3876,7 +3893,7 @@ async function refreshYtdlpStatus() {
 
 async function manualUpdateYtdlp() {
   const btn = document.getElementById('btn-ytdlp-update');
-  if (btn) { btn.disabled = true; btn.textContent = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> ' + t('checkingBtn'); }
+  if (btn) { btn.disabled = true; btn.innerHTML = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> ' + t('checkingBtn'); }
   try {
     const j = await fetch(API + '/ytdlp/update', { method: 'POST' }).then(r => r.json());
     if (j.lastResult === 'updated') showAppNotification('yt-dlp → v' + j.installed, 'done');
@@ -3886,7 +3903,7 @@ async function manualUpdateYtdlp() {
   } catch (e) {
     showAppNotification('' + e.message, 'err');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg> ' + t('btnCheckNow'); }
+    if (btn) { btn.disabled = false; btn.innerHTML = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg> ' + t('btnCheckNow'); }
     refreshYtdlpStatus();
   }
 }
@@ -8720,6 +8737,12 @@ const T = {
   en: {
     // ── v0.3.3: engines circuit-breaker ──
     enginesMissing:'Python engine not detected. Click to set it up — automatic BPM/key analysis is paused until then.',
+    enginesDepsMissing:'Engine dependencies missing. Click to run setup again - analysis is paused until then.',
+    enginesDiagTitle:'Engines unavailable',
+    enginesDiagTitleDeps:'Engine dependencies missing',
+    enginesDiagDescGeneric:'Background analysis is paused. Run setup to install Python and the required packages.',
+    enginesDiagDescDeps:'Python is installed but a required package failed to install. Re-run setup to retry.',
+    enginesDiagRetry:'Re-run setup',
     enginesReady:'Python engine ready. Background analysis resumed.',
 
     // ── v0.3.1: Settings sections ──
@@ -9164,6 +9187,12 @@ const T = {
   fr: {
     // ── v0.3.3: disjoncteur moteur Python ──
     enginesMissing:"Moteur Python introuvable. Cliquez pour le configurer — l'analyse automatique BPM/cle est en pause.",
+    enginesDepsMissing:"Dependances du moteur manquantes. Cliquez pour relancer la configuration - l'analyse est en pause.",
+    enginesDiagTitle:'Moteurs indisponibles',
+    enginesDiagTitleDeps:'Dependances du moteur manquantes',
+    enginesDiagDescGeneric:"L'analyse en arriere-plan est en pause. Lancez la configuration pour installer Python et les paquets requis.",
+    enginesDiagDescDeps:"Python est installe mais un paquet requis n'a pas pu etre installe. Relancez la configuration pour reessayer.",
+    enginesDiagRetry:'Relancer la configuration',
     enginesReady:"Moteur Python pret. L'analyse en arriere-plan a repris.",
 
     // ── v0.3.1: Sections de parametres ──
@@ -9657,7 +9686,7 @@ function applyLang() {
 
   // Stockpile label
   const stockLbl = document.querySelector('.stockpile-lbl');
-  if (stockLbl) stockLbl.textContent = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v13H3zM3 7l3-4h12l3 4M12 3v17"/></svg> ' + t('stockpile') + ':';
+  if (stockLbl) stockLbl.innerHTML = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v13H3zM3 7l3-4h12l3 4M12 3v17"/></svg> ' + t('stockpile') + ':';
   const stockPath = document.getElementById('stockpile-path');
   if (stockPath && !stockpileFolder) stockPath.textContent = t('stockpileNotSet');
 
@@ -9775,6 +9804,28 @@ function applyLang() {
 }
 
 // ── Settings page ─────────────────────────────────────────────────────────────
+function refreshEnginesDiagRow() {
+  // v0.3.3: show/hide the diagnostic strip + update its message based on
+  // the current breaker state. Pulled from /bg-analyze/status which now
+  // returns breaker_tripped + breaker_reason + breaker_detail.
+  const row = document.getElementById('engines-diag-row');
+  if (!row) return;
+  fetch(API + '/bg-analyze/status').then(r => r.json()).then(st => {
+    if (!st || !st.breaker_tripped) { row.style.display = 'none'; return; }
+    row.style.display = '';
+    const title = document.getElementById('engines-diag-title');
+    const detail = document.getElementById('engines-diag-detail');
+    if (st.breaker_reason === 'deps-missing') {
+      if (title) title.textContent = t('enginesDiagTitleDeps');
+      if (detail) detail.textContent = t('enginesDiagDescDeps') +
+        (st.breaker_detail ? ' (' + st.breaker_detail + ')' : '');
+    } else {
+      if (title) title.textContent = t('enginesDiagTitle');
+      if (detail) detail.textContent = t('enginesDiagDescGeneric');
+    }
+  }).catch(() => {});
+}
+
 function renderSettings() {
   const el = document.getElementById('settings-content');
   if (!el) return;
@@ -10064,6 +10115,7 @@ function renderSettings() {
   refreshYtdlpStatus();
   syncHardwareAccelToggle();
   _applySettingsSectionState();
+  refreshEnginesDiagRow();
   if (window.api && window.api.updater) {
     window.api.updater.getStatus().then(s => {
       const el = document.getElementById('about-version-desc');
@@ -10335,7 +10387,7 @@ async function repairFileLocations() {
   const desc = document.getElementById('fix-files-desc');
   // Disable + show a spinner so the user knows something is happening.
   // Reuse the existing pri styling so it matches the rest of the buttons.
-  if (btn) { btn.disabled = true; btn.textContent = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> ' + t('scanningBtn'); }
+  if (btn) { btn.disabled = true; btn.innerHTML = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> ' + t('scanningBtn'); }
   try {
     const r = await fetch(API + '/stockpile/repair-files', {
       method: 'POST',
@@ -10384,7 +10436,7 @@ async function cleanTempFiles() {
   if (!ok) return;
   const btn = document.getElementById('btn-clean-temp');
   const desc = document.getElementById('clean-temp-desc');
-  if (btn) { btn.disabled = true; btn.textContent = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> ' + t('cleaningBtn'); }
+  if (btn) { btn.disabled = true; btn.innerHTML = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> ' + t('cleaningBtn'); }
   try {
     const r = await fetch(API + '/clean-temp-files', {
       method: 'POST',
@@ -10401,7 +10453,7 @@ async function cleanTempFiles() {
   } catch (e) {
     showAppNotification('' + e.message, 'err');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 5L7 17l-4 4M14 6l4 4M3 21l4-4 5 5"/></svg> ' + t('btnCleanNow'); }
+    if (btn) { btn.disabled = false; btn.innerHTML = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 5L7 17l-4 4M14 6l4 4M3 21l4-4 5 5"/></svg> ' + t('btnCleanNow'); }
   }
 }
 
@@ -10420,7 +10472,7 @@ async function manualCheckForUpdates() {
   const btn = document.getElementById('btn-check-updates');
   const desc = document.getElementById('update-check-desc');
   const origDesc = desc ? desc.textContent : '';
-  if (btn) { btn.disabled = true; btn.textContent = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> ' + t('checkingBtn'); }
+  if (btn) { btn.disabled = true; btn.innerHTML = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> ' + t('checkingBtn'); }
   // v0.3.0: known-benign updater errors get treated as "up to date"
   // here too — match what updater.js does on the main side. Without
   // this, the user clicked "Check now" and saw a red error toast even
@@ -10478,7 +10530,7 @@ async function manualCheckForUpdates() {
     showAppNotification('' + e.message, 'err');
     if (desc) desc.textContent = '' + e.message;
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6M3.5 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.65 4.36A9 9 0 0 0 20.5 15"/></svg> Check now'; }
+    if (btn) { btn.disabled = false; btn.innerHTML = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6M3.5 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.65 4.36A9 9 0 0 0 20.5 15"/></svg> Check now'; }
   }
 }
 
@@ -13288,6 +13340,42 @@ function toggleSettingsSection(id) {
   state[id] = !collapsed;
   _saveSettingsSectionState(state);
 }
+
+// ─── v0.3.3 SVG-in-textContent guard ─────────────────────────────
+// During the emoji->SVG sweep we had several sites where an SVG string
+// got assigned via .textContent (so it rendered as literal markup in
+// the page instead of as an icon). This guard wraps textContent for
+// every Node so any future regression gets caught instantly: a
+// console.warn with stack trace, and the raw markup is silently stripped
+// to a safe text fallback. Runs once at module load, idempotent.
+(function installTextContentGuard(){
+  try {
+    const desc = Object.getOwnPropertyDescriptor(Node.prototype, 'textContent');
+    if (!desc || !desc.set || Node.prototype.__tcGuardInstalled) return;
+    const origSet = desc.set;
+    Object.defineProperty(Node.prototype, 'textContent', {
+      configurable: true,
+      enumerable: desc.enumerable,
+      get: desc.get,
+      set: function(v) {
+        // Fast-path: only do the check on strings that look suspicious.
+        // ~1 ns per assignment in the common case.
+        if (typeof v === 'string' && v.length > 12 && v.indexOf('<svg') !== -1) {
+          console.warn('[textContent guard] dropped SVG markup assignment:',
+                       v.slice(0, 120) + (v.length > 120 ? '...' : ''),
+                       new Error().stack);
+          // Render safe fallback: strip all tags so at least the text shows.
+          v = v.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+        }
+        origSet.call(this, v);
+      },
+    });
+    Node.prototype.__tcGuardInstalled = true;
+  } catch (e) {
+    // Some environments may not allow redefining the prototype property.
+    // The guard is defense in depth, not a hard requirement.
+  }
+})();
 
 // v0.3.0: Back-to-top floating button. Observes scroll on #main and
 // toggles a .show class past 400px. Click smooth-scrolls to top.

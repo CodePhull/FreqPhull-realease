@@ -489,9 +489,38 @@ function Invoke-Py {
 # ============================================================================
 EmitStatus "upgrading_pip" 18 "Updating pip..."
 try {
-    Invoke-Py -m pip install --upgrade pip --quiet 2>&1 | ForEach-Object { Log "[pip] $_" }
+    Invoke-Py -m pip install --upgrade pip  2>&1 | ForEach-Object { Log "[pip] $_" }
 } catch {
     Log "pip upgrade failed (non-fatal): $_"
+}
+
+# ============================================================================
+# Step 2.5: Install core numerical stack (numpy + scipy)
+# ============================================================================
+# These are pulled in as deps of torch later, but installing them up front
+# means:
+#   * If they fail (e.g. user is offline at startup), we see a small clear
+#     error within 30 seconds instead of a cryptic torch-related one
+#     after a 200 MB download.
+#   * If the user already has numpy/scipy installed system-wide, pip skips
+#     them - no harm done.
+#   * The bg-analyze worker's analyze.py only needs numpy/scipy/scikit-learn;
+#     even if torch later fails, analysis still works for users who don't
+#     use stems.
+EmitStatus "installing_numerical" 20 "Installing numpy + scipy (audio analysis core)..."
+try {
+    Invoke-Py -m pip install "numpy>=1.24,<2.1" "scipy>=1.10" "scikit-learn>=1.3" "soundfile>=0.12" --retries 3 --timeout 90 2>&1 | ForEach-Object { Log "[numerical] $_" }
+    if ($LASTEXITCODE -ne 0) {
+        EmitError "Failed to install numpy/scipy (pip exit $LASTEXITCODE)" "Check your internet connection. If you are on a metered/corporate network, pip may be blocked."
+    }
+    # Verify they import - some Windows machines need VC++ runtime for numpy
+    $numCheck = Invoke-Py -c "import numpy, scipy, sklearn, soundfile; print('OK')" 2>&1
+    if ("$numCheck" -notmatch "^OK") {
+        EmitError "numpy/scipy installed but cannot be imported: $numCheck" "Install Microsoft Visual C++ 2015-2022 Redistributable from microsoft.com and re-run setup."
+    }
+    Log "Numerical stack ready: $numCheck"
+} catch {
+    EmitError "Numerical install threw: $_" "See $logFile for details."
 }
 
 # ============================================================================
@@ -733,7 +762,7 @@ if (-not $torchInstalled) {
             # --force-reinstall on attempt 2+ ensures we overwrite any
             # corrupt files left behind.
             $forceFlag = if ($attempt -gt 1) { "--force-reinstall" } else { "" }
-            Invoke-Py -m pip install torch torchaudio $forceFlag --index-url https://download.pytorch.org/whl/cpu --retries 5 --timeout 120 --quiet 2>&1 | ForEach-Object { Log "[torch] $_" }
+            Invoke-Py -m pip install torch torchaudio $forceFlag --index-url https://download.pytorch.org/whl/cpu --retries 5 --timeout 120  2>&1 | ForEach-Object { Log "[torch] $_" }
             if ($LASTEXITCODE -eq 0) {
                 # Re-verify post-install - the pip install can return 0 but
                 # leave a broken install if a wheel was corrupted in transit
@@ -795,7 +824,7 @@ try {
 
 if (-not $sepInstalled) {
     try {
-        Invoke-Py -m pip install "audio-separator[cpu]" --quiet 2>&1 | ForEach-Object { Log "[audio-sep] $_" }
+        Invoke-Py -m pip install "audio-separator[cpu]"  2>&1 | ForEach-Object { Log "[audio-sep] $_" }
         if ($LASTEXITCODE -ne 0) {
             EmitError "Separation engine install failed (pip exit $LASTEXITCODE)" "See log for details."
         }
@@ -833,7 +862,7 @@ try {
 
 if (-not $whisperInstalled) {
     try {
-        Invoke-Py -m pip install openai-whisper --quiet 2>&1 | ForEach-Object { Log "[whisper] $_" }
+        Invoke-Py -m pip install openai-whisper  2>&1 | ForEach-Object { Log "[whisper] $_" }
         if ($LASTEXITCODE -ne 0) {
             EmitError "Whisper install failed (pip exit $LASTEXITCODE)" "See log for details."
         }

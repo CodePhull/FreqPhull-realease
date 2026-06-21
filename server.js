@@ -388,7 +388,7 @@ function writeTagsToFile(historyId, { bpm, key_note, key_mode }) {
     // but log the outcome so issues are observable in the server log.
     // Pass the JSON command as a single argv to dodge shell quoting issues
     // with non-ASCII paths.
-    const proc = spawn(pythonCmd, [scriptPath, cmdJson], { windowsHide: true });
+    const proc = spawn(pythonCmd, [...getPythonArgs(), scriptPath, cmdJson], { windowsHide: true });
     let stdout = '', stderr = '';
     proc.stdout.on('data', d => { stdout += d; });
     proc.stderr.on('data', d => { stderr += d; });
@@ -436,7 +436,7 @@ function computeFingerprint(historyId, filePath) {
       return;
     }
     const pythonCmd = getPythonCmd();
-    const proc = spawn(pythonCmd, [scriptPath, filePath], { windowsHide: true });
+    const proc = spawn(pythonCmd, [...getPythonArgs(), scriptPath, filePath], { windowsHide: true });
     let stdout = '', stderr = '';
     proc.stdout.on('data', d => { stdout += d; });
     proc.stderr.on('data', d => { stderr += d; });
@@ -674,6 +674,96 @@ function getPythonCmd() {
 function clearPythonCache() {
   _cachedPythonCmd = null;
   _cachedPythonCheckedAt = 0;
+}
+
+// ════════════════════════════════════════════════════════════════════
+// v0.3.3 engines-broken circuit breaker
+// ════════════════════════════════════════════════════════════════════
+// The bg-analyze worker re-fires on every download/ingest event. If
+// engines are broken, that re-triggers a failing spawn — 3 retries per
+// track, indefinitely, filling logs with the same error. The breaker
+// short-circuits that loop and tells the renderer to surface a CTA
+// instead of leaving the user wondering why downloads land with no
+// BPM/key forever.
+//
+// Trip conditions (any of these):
+//   1. Exit code 9009 (Windows ERROR_BAD_COMMAND — Python alias / not found)
+//   2. Stderr contains "Python was not found" or "Microsoft Store" (alias trap)
+//   3. Exit code 1 with stderr containing "ModuleNotFoundError" or
+//      "ImportError" — Python exists but its environment is incomplete
+//
+// Reset: /engines/setup exit 0 (setup succeeded), or app restart.
+// Each variant has a distinct "reason" the renderer can use to show
+// the right message: "python-missing" vs "deps-missing".
+
+let _enginesBrokenBreaker = false;
+let _enginesBrokenReason = null;     // 'python-missing' | 'deps-missing' | null
+let _enginesBrokenDetail = null;     // first failing module name, if known
+
+// Backward-compat alias. Old code reads/writes _pythonMissingBreaker;
+// keep the symbol so older call sites don't break. Both names update
+// in lockstep.
+let _pythonMissingBreaker = false;
+
+function tripEnginesBrokenBreaker(reason, detail) {
+  if (_enginesBrokenBreaker) {
+    // Already tripped. If we have NEW detail (e.g. learned the
+    // specific module name), record it for the user.
+    if (detail && !_enginesBrokenDetail) _enginesBrokenDetail = detail;
+    return;
+  }
+  _enginesBrokenBreaker = true;
+  _pythonMissingBreaker = true;
+  _enginesBrokenReason = reason || 'python-missing';
+  _enginesBrokenDetail = detail || null;
+  slog('ENGINES BREAKER TRIPPED: reason=' + _enginesBrokenReason +
+       (detail ? ' detail=' + detail : '') +
+       '. Bg-analyze / transcribe / stems disabled until setup completes.');
+  try {
+    broadcastEvent('engines-unavailable', {
+      reason: _enginesBrokenReason,
+      detail: _enginesBrokenDetail,
+    });
+  } catch {}
+}
+function resetEnginesBrokenBreaker() {
+  if (!_enginesBrokenBreaker) return;
+  _enginesBrokenBreaker = false;
+  _pythonMissingBreaker = false;
+  _enginesBrokenReason = null;
+  _enginesBrokenDetail = null;
+  clearPythonCache();
+  slog('ENGINES BREAKER RESET: bg-analyze / transcribe / stems re-enabled.');
+  try { broadcastEvent('engines-available', {}); } catch {}
+}
+// Backward-compat aliases for the v0.3.3 call sites that already shipped
+function tripPythonMissingBreaker() { tripEnginesBrokenBreaker('python-missing'); }
+function resetPythonMissingBreaker() { resetEnginesBrokenBreaker(); }
+
+// Classifier: from a (exit_code, stderr) pair, decide whether to trip
+// the breaker and which reason to record. Returns {trip, reason, detail}.
+function classifyEngineFailure(code, stderr) {
+  const err = stderr || '';
+  // Python not found (MS Store alias / missing interpreter)
+  if (code === 9009 ||
+      /Python was not found/i.test(err) ||
+      err.indexOf('Microsoft Store') !== -1) {
+    return { trip: true, reason: 'python-missing', detail: null };
+  }
+  // Python exists but a required module isn't installed
+  const mod = err.match(/ModuleNotFoundError: No module named ['"]([^'"]+)['"]/);
+  if (mod) {
+    return { trip: true, reason: 'deps-missing', detail: mod[1] };
+  }
+  const imp = err.match(/ImportError: cannot import name ['"]([^'"]+)['"]/);
+  if (imp) {
+    return { trip: true, reason: 'deps-missing', detail: imp[1] };
+  }
+  // Generic import error in the first line (covers DLL load failed, etc.)
+  if (code === 1 && /^(ImportError|ModuleNotFoundError)/m.test(err)) {
+    return { trip: true, reason: 'deps-missing', detail: null };
+  }
+  return { trip: false };
 }
 
 // Quick sanity check that the engine runtime is importable.
@@ -1357,7 +1447,7 @@ app.post('/history/fingerprint-backfill', (req, res) => {
         return;
       }
       const pythonCmd = getPythonCmd();
-      const proc = spawn(pythonCmd, [scriptPath, row.file_path], { windowsHide: true });
+      const proc = spawn(pythonCmd, [...getPythonArgs(), scriptPath, row.file_path], { windowsHide: true });
       let stdout = '';
       proc.stdout.on('data', d => { stdout += d; });
       proc.on('close', () => {
@@ -3650,7 +3740,7 @@ function analyzeOneInBackground(row) {
         if (safe.tempCopy) { try { fs.unlinkSync(safe.tempCopy); } catch (e) {} }
         // 2) Run analyzer
         const pythonCmd = getPythonCmd();
-        const proc = spawn(pythonCmd, [scriptTmp, wavTmp], { windowsHide: true, env: process.env });
+        const proc = spawn(pythonCmd, [...getPythonArgs(), scriptTmp, wavTmp], { windowsHide: true, env: process.env });
         let stdout = '', stderr = '';
         proc.stdout.on('data', function(d){ stdout += d.toString(); });
         proc.stderr.on('data', function(d){ stderr += d.toString(); });
@@ -3661,11 +3751,13 @@ function analyzeOneInBackground(row) {
           try { fs.unlinkSync(wavTmp); } catch (e) {}
           if (code !== 0) {
             slog('bg-analyze id=' + row.id + ' python exit=' + code + ': ' + stderr.slice(0, 200));
-            // v0.3.3: trip the global Python-missing breaker on exit
-            // code 9009 (Windows ERROR_BAD_COMMAND) or MS Store alias text
-            if (code === 9009 || /Python was not found/i.test(stderr) ||
-                (stderr || '').indexOf('Microsoft Store') !== -1) {
-              tripPythonMissingBreaker();
+            // v0.3.3: classify the failure and trip the breaker if it's
+            // a "no point retrying" condition (Python missing, MS Store
+            // alias, or missing pip packages). Stops the spawn-fail loop
+            // and tells the renderer to surface a setup CTA.
+            const cls = classifyEngineFailure(code, stderr);
+            if (cls.trip) {
+              tripEnginesBrokenBreaker(cls.reason, cls.detail);
             }
             analyzeWorker.failed.set(row.id, (analyzeWorker.failed.get(row.id) || 0) + 1);
             return resolve(false);
@@ -3760,6 +3852,11 @@ app.get('/bg-analyze/status', function(req, res){
     current: analyzeWorker.current,
     remaining: analyzeWorker.queueSize,
     failed_count: Array.from(analyzeWorker.failed.values()).filter(function(n){ return n >= 3; }).length,
+    // v0.3.3 engines-broken breaker state — renderer drives its diagnostic
+    // strip + toast variant from these three fields.
+    breaker_tripped: _enginesBrokenBreaker,
+    breaker_reason: _enginesBrokenReason,
+    breaker_detail: _enginesBrokenDetail,
   });
 });
 
@@ -3875,7 +3972,7 @@ app.get('/analyze', async (req, res) => {
   const pyArgs = wantSections ? [scriptTmp, '--sections', wavTmp] : [scriptTmp, wavTmp];
   if (wantSections) slog('analyze: beat-switch deep mode on');
   slog('analyze: spawning ' + pythonCmd + ' ' + scriptTmp);
-  const proc = spawn(pythonCmd, pyArgs, { windowsHide: true, env: process.env });
+  const proc = spawn(pythonCmd, [...getPythonArgs(), ...pyArgs], { windowsHide: true, env: process.env });
 
   let stdout = '', stderr = '';
   proc.stdout.on('data', d => { stdout += d.toString(); });
@@ -4445,14 +4542,21 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
   const inputPath = req.file.path, model = req.body.model || 'base', lang = req.body.language || 'auto';
   slog('Transcribe: model=' + model + ' lang=' + lang);
   const cleanup = () => { try { fs.unlinkSync(inputPath); } catch {} };
-  // v0.3.3: skip the spawn entirely if the breaker says no Python.
-  // Returns a 503 with a friendly hint so the UI can prompt for setup.
-  if (_pythonMissingBreaker) {
+  // v0.3.3: skip the spawn entirely if the engines breaker is tripped.
+  // Different hint based on what's actually broken (Python missing vs
+  // dependencies missing) so the user knows what action to take.
+  if (_enginesBrokenBreaker) {
     cleanup();
+    const isDepsMissing = _enginesBrokenReason === 'deps-missing';
     return res.status(503).json({
-      error: 'Python engine not available',
-      hint: 'Run engine setup from Settings, or install Python 3.10+ manually.',
-      reason: 'python-missing',
+      error: isDepsMissing ? 'Python dependencies not installed'
+                           : 'Python engine not available',
+      hint: isDepsMissing
+        ? ('Run engine setup again to install required packages' +
+           (_enginesBrokenDetail ? ' (missing: ' + _enginesBrokenDetail + ')' : '') + '.')
+        : 'Run engine setup from Settings, or install Python 3.10+ manually.',
+      reason: _enginesBrokenReason || 'python-missing',
+      detail: _enginesBrokenDetail,
     });
   }
   try {
@@ -4613,7 +4717,7 @@ app.get('/stems', (req, res) => {
     if (isFinite(v)) args.push('--fullness-transient-db', String(v));
   }
   slog('stems: spawning ' + pythonCmd + ' ' + scriptTmp);
-  const proc = spawn(pythonCmd, args, { windowsHide: true, env: process.env });
+  const proc = spawn(pythonCmd, [...getPythonArgs(), ...args], { windowsHide: true, env: process.env });
 
   let buf = '';
   let lastDone = null;
@@ -4860,7 +4964,7 @@ app.get('/master', (req, res) => {
   }
   slog('master: spawning ' + pythonCmd + ' ' + scriptTmp + ' preset=' + preset +
        (referencePath ? ' ref=' + path.basename(referencePath) + ' strength=' + matchStrength : ''));
-  const proc = spawn(pythonCmd, args, { windowsHide: true, env: process.env });
+  const proc = spawn(pythonCmd, [...getPythonArgs(), ...args], { windowsHide: true, env: process.env });
 
   let buf = '';
   let stderrBuf = '';
@@ -5072,6 +5176,11 @@ app.get('/setup-engines', (req, res) => {
     setupRunning = false;
     setupState.endedAt = Date.now();
     slog('setup-engines: exit ' + code);
+        if (code === 0) {
+          // v0.3.3: setup just succeeded — refresh Python discovery and
+          // release the engines-broken breaker so analysis resumes.
+          resetEnginesBrokenBreaker();
+        }
     if (code !== 0 && !lastErrorEmitted) {
       const tail = stderrBuf.slice(-5).join(' | ').slice(-400);
       emit('error', {
