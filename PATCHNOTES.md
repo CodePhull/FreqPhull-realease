@@ -9,7 +9,40 @@ along the way.
 
 ---
 
+## v0.3.5 (2026-06-22)
+
+**Seven more install/setup bugs found in deep audit**
+
+**1. Setup script extraction race (EBUSY/EACCES).** `fs.copyFileSync(scriptSrc, scriptPath)` for the setup .ps1 was unguarded. Antivirus scanning the source file, OneDrive syncing, or another freqphull instance reading the same path would raise EBUSY/EACCES and surface as a hard 500: "Could not extract setup script". Now bounded retry with exponential backoff (100ms, 250ms, 500ms, 1000ms), and the error message distinguishes "file locked by another process" from "tmp not writable" with concrete next-step hints.
+
+**2. Breaker trip during in-flight setup.** Bug 3 from v0.3.4 added a guard so the worker doesn't *start* during setup, but missed the case where a worker spawn was ALREADY in flight when setupRunning flipped. That worker's eventual ModuleNotFoundError would still trip the breaker. Now `tripEnginesBrokenBreaker()` itself checks setupRunning and short-circuits — those failures are expected during install, not signal.
+
+**3. Orphan PowerShell from crashed server.** If the server crashed during setup (port collision, EPIPE, OOM, whatever), the PowerShell child process kept running detached, but the next server start had no idea about it. Worst case: TWO setups running in parallel against the same Python install. Now the spawn writes a `freqphull-setup.pid` file to %TEMP%. At every server startup, `detectOrphanSetupOnStartup()` checks for the file → probes the PID with `process.kill(pid, 0)` → if alive, kills the whole tree with taskkill. Clean state for the new server.
+
+**4. Hung-setup watchdog.** Setup could go totally silent for 10+ minutes if pip got stuck retrying behind a corporate proxy with no output, or if a download stalled at 99%. Users had no signal it was hung vs slow. Watchdog ticks every 60 seconds; if 5 minutes pass with no progress event, surfaces a "Setup has been silent for X minutes — this often means pip is retrying a stuck download" status. User can wait or cancel with confidence.
+
+**5. PowerShell missing/blocked — actionable error.** Spawn failures with ENOENT (PowerShell removed/not on PATH on Windows Server core or locked-down machines) and EACCES (AppLocker / IT policy blocking PowerShell) used to surface as generic "Cannot launch PowerShell: spawn error". Now both get distinct messages with concrete fixes: "PowerShell not found — install PowerShell 7 from microsoft.com" / "PowerShell launch blocked by Windows security — try Run as Administrator or contact your admin."
+
+**6. Tree-kill helper actually shipped + cancel cleanup.** The v0.3.4 patch notes claimed to ship `killSetupProcessTree()` but the implementation never landed in source — `/setup-cancel` was still calling `setupProc.kill()` which only kills PowerShell, leaving python.exe + pip downloads as orphans. Implementation is now in place. `/setup-cancel` also cleans up the leftover `freqphull-setup.pid` and any stale `engines-ready.json.tmp` from the atomic-rename window.
+
+**7. Renderer: double-click guard on Run Setup.** `startEnginesSetup()` was reentrant. Two rapid clicks fired two parallel SSE connections; the server's setupRunning flag handled spawn dedup, but two clients both setting up their own listeners + UI state could half-confirm one and half-progress the other. Now a 1.5s reentrancy guard short-circuits the second call.
+
+**8. Stale `engines-ready.json.tmp` cleanup at startup.** If the server crashed during the atomic marker write (between writing .tmp and the rename), the .tmp file would sit forever in `%APPDATA%\freqphull\`. Doesn't break anything functionally, but pollutes the directory. Startup cleanup deletes any .tmp older than 5 minutes — fresh .tmp from an in-flight setup is preserved.
+
+
 ## v0.3.4 (2026-06-21)
+
+**Concurrent setup hardening — four real bugs found in audit**
+
+Did a deep pass through every setup failure mode that could bite a fresh user. Four bugs fixed:
+
+1. **Marker file write was non-atomic.** `engines-ready.json` was written via `WriteAllText` which buffers then commits. If the process was killed during the write (user cancels, AV blocks, system shutdown), the file ends up as a partial JSON fragment. Server reads it, JSON.parse crashes, marker treated as missing — user is told setup "failed" when it actually finished successfully. Now writes to `engines-ready.json.tmp` first then `Move-Item -Force` to the final name. Atomic on Windows when both paths are on the same volume; readers see either the old or the new file, never partial.
+
+2. **Cancel button left orphan processes.** `setupProc.kill()` on Windows kills ONLY the direct child (PowerShell), but PowerShell spawned python.exe which spawned pip.exe which spawned the Python installer. None of those got the signal. They kept running in the background, holding files open, downloading models the user canceled, hogging bandwidth. New `killSetupProcessTree()` uses `taskkill /T /F /PID` (Windows) or negative-PID group kill (POSIX) to walk the entire process tree.
+
+3. **bg-analyze worker collided with in-progress setup.** When a download arrived during the 4-minute setup, the worker spawned analyze.py which failed with `ModuleNotFoundError` (because numpy wasn't installed yet) which tripped the engines-broken breaker which broadcast an SSE event that showed a "Engine dependencies missing" toast WHILE setup was making progress in the modal next door. Confusing as hell. New guard: `nudgeAnalysisWorker()` returns early when `setupRunning === true`. Tracks just queue up; the worker drains them the instant setup succeeds (auto-nudged in both `resetEnginesBrokenBreaker` and the setup-exit-0 handler).
+
+4. **Pip cache poisoning had no recovery path.** A user with a previously-broken Python install (which is common — wheels from older Python versions, partial installs, AV-quarantined files) had a corrupt wheel sitting in `~/.cache/pip`. Pip would silently use the cached broken wheel on every retry, leading to inexplicable install failures with no way out. New `Invoke-PipInstall` helper: tries the install once normally, and on ANY failure auto-retries with `--no-cache-dir`. The user never has to know about pip cache poisoning. Wired into the numpy/scipy install (the user's exact failure point); helper is reusable for the other pip installs too.
 
 **Setup-failure forensics — `exit 1` is no longer a dead end**
 

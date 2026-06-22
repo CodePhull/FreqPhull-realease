@@ -494,6 +494,32 @@ function Invoke-Py {
     & $pythonCmd $allArgs
 }
 
+# v0.3.4: pip-install with automatic --no-cache-dir retry.
+# Most "pip succeeded once, broken now" failures come from a stale
+# or corrupt wheel in ~/.cache/pip. If the first install fails for
+# ANY reason, retry once bypassing the cache. Catches the issue
+# automatically instead of asking the user to know about it.
+function Invoke-PipInstall {
+    param(
+        [string[]] $Packages,
+        [string]   $Label = "pip",
+        [string[]] $ExtraArgs = @()
+    )
+    $baseArgs = @("-m", "pip", "install") + $ExtraArgs + $Packages
+    Log "[$Label] running: pip install $($ExtraArgs -join ' ') $($Packages -join ' ')"
+    Invoke-Py @baseArgs 2>&1 | ForEach-Object { Log "[$Label] $_" }
+    if ($LASTEXITCODE -eq 0) { return $true }
+    Log "[$Label] first attempt failed (exit $LASTEXITCODE), retrying with --no-cache-dir"
+    $retryArgs = @("-m", "pip", "install", "--no-cache-dir") + $ExtraArgs + $Packages
+    Invoke-Py @retryArgs 2>&1 | ForEach-Object { Log "[$Label-retry] $_" }
+    if ($LASTEXITCODE -eq 0) {
+        Log "[$Label] retry with --no-cache-dir succeeded"
+        return $true
+    }
+    Log "[$Label] retry also failed (exit $LASTEXITCODE)"
+    return $false
+}
+
 # ============================================================================
 # Step 2: Upgrade pip
 # ============================================================================
@@ -519,11 +545,19 @@ try {
 #     use stems.
 EmitStatus "installing_numerical" 20 "Installing numpy + scipy (audio analysis core)..."
 try {
-    Invoke-Py -m pip install "numpy>=1.24,<2.1" "scipy>=1.10" "scikit-learn>=1.3" "soundfile>=0.12" --retries 3 --timeout 90 2>&1 | ForEach-Object { Log "[numerical] $_" }
-    if ($LASTEXITCODE -ne 0) {
-        EmitError "Failed to install numpy/scipy (pip exit $LASTEXITCODE)" "Check your internet connection. If you are on a metered/corporate network, pip may be blocked."
+    # v0.3.4: use Invoke-PipInstall so a corrupt pip cache (a SILENT
+    # failure mode for users who ran a broken Python setup earlier)
+    # gets auto-retried with --no-cache-dir. We never have to ask
+    # users to know about pip cache poisoning.
+    $okNumerical = Invoke-PipInstall `
+        -Packages @("numpy>=1.24,<2.1", "scipy>=1.10", "scikit-learn>=1.3", "soundfile>=0.12") `
+        -Label "numerical" `
+        -ExtraArgs @("--retries", "3", "--timeout", "90")
+    if (-not $okNumerical) {
+        EmitError "Failed to install numpy/scipy (both attempts; cached + no-cache)" "Check your internet connection. If you are on a metered/corporate network, pip may be blocked. See log_tail for the exact pip error."
     }
-    # Verify they import - some Windows machines need VC++ runtime for numpy
+    # Verify they actually import - some Windows machines need VC++
+    # runtime for numpy native extensions (DLL load failure)
     $numCheck = Invoke-Py -c "import numpy, scipy, sklearn, soundfile; print('OK')" 2>&1
     if ("$numCheck" -notmatch "^OK") {
         EmitError "numpy/scipy installed but cannot be imported: $numCheck" "Install Microsoft Visual C++ 2015-2022 Redistributable from microsoft.com and re-run setup."
@@ -1071,8 +1105,17 @@ $markerJson = $markerData | ConvertTo-Json
 # Write WITHOUT BOM. Out-File -Encoding utf8 emits BOM on PowerShell 5.1, which
 # breaks Node's JSON.parse. Use .NET's UTF8Encoding($false) instead.
 $markerFile = Join-Path $markerDir "engines-ready.json"
+# v0.3.4: ATOMIC write. Without this, a process kill mid-write
+# leaves engines-ready.json as a partial fragment that fails
+# JSON.parse on the server side -> user is told setup "failed"
+# when it actually finished. Write to .tmp then atomic rename.
+$markerTmp = "$markerFile.tmp"
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-[System.IO.File]::WriteAllText($markerFile, $markerJson, $utf8NoBom)
+[System.IO.File]::WriteAllText($markerTmp, $markerJson, $utf8NoBom)
+# Move-Item -Force is atomic on Windows when both paths are on the
+# same volume (replace target if exists; readers see either old or
+# new, never partial).
+Move-Item -Path $markerTmp -Destination $markerFile -Force
 
 EmitDone
 

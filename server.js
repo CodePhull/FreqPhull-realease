@@ -735,6 +735,10 @@ function resetEnginesBrokenBreaker() {
   clearPythonCache();
   slog('ENGINES BREAKER RESET: bg-analyze / transcribe / stems re-enabled.');
   try { broadcastEvent('engines-available', {}); } catch {}
+  // v0.3.4: kick the worker to drain tracks that queued up during the
+  // outage. Safe because nudgeAnalysisWorker is itself idempotent and
+  // skipped while setupRunning.
+  try { nudgeAnalysisWorker(); } catch {}
 }
 // Backward-compat aliases for the v0.3.3 call sites that already shipped
 function tripPythonMissingBreaker() { tripEnginesBrokenBreaker('python-missing'); }
@@ -3838,6 +3842,15 @@ async function analysisWorkerLoop() {
 // Debounced wake-up. A playlist of 30 grabs lands as 30 download-done
 // events; we want ONE worker startup that drains all 30 serially.
 function nudgeAnalysisWorker() {
+  // v0.3.3: short-circuit when engines are known-broken so we don't
+  // burn cycles spawning failing Python over and over.
+  if (_enginesBrokenBreaker) return;
+  // v0.3.4: also pause during in-progress engine setup. Without this,
+  // a download that arrives during the 4-min setup spawns analyze.py,
+  // which fails with ModuleNotFoundError, which trips the breaker, which
+  // shows a confusing "engines missing" toast WHILE setup is making
+  // progress in the modal next door.
+  if (setupRunning) return;
   if (analyzeWorker.nudgeTimer) clearTimeout(analyzeWorker.nudgeTimer);
   analyzeWorker.nudgeTimer = setTimeout(function(){
     analyzeWorker.nudgeTimer = null;
@@ -5180,6 +5193,11 @@ app.get('/setup-engines', (req, res) => {
       // v0.3.3: setup just succeeded — refresh Python discovery and
       // release the engines-broken breaker so analysis resumes.
       resetEnginesBrokenBreaker();
+      // v0.3.4: nudge worker explicitly in case the breaker was never
+      // tripped (e.g. first-time install with no prior failures) — we
+      // still want any queued tracks to start analyzing immediately.
+      clearPythonCache();
+      try { nudgeAnalysisWorker(); } catch {}
     }
     // v0.3.4: on ANY non-zero exit, read the setup script's local log
     // file and dump its tail to the server log. Even if EmitError
@@ -5273,12 +5291,43 @@ app.get('/setup-status', (_, res) => {
 
 // Explicit cancel - kills the running setup process (used by a Cancel button
 // in the UI; routine disconnect from req.close() doesn't trigger this)
+// v0.3.4: kill the entire process TREE, not just PowerShell.
+// PowerShell spawns python.exe, which spawns pip.exe, which spawns
+// installers. Plain setupProc.kill() only kills PowerShell — the
+// children become orphans, keep downloading models the user canceled,
+// hold files open, hog bandwidth. taskkill /T /F walks the tree.
+function killSetupProcessTree(proc) {
+  if (!proc || !proc.pid) return;
+  try {
+    if (process.platform === 'win32') {
+      const taskkill = spawn('taskkill', ['/T', '/F', '/PID', String(proc.pid)],
+        { windowsHide: true, stdio: 'ignore' });
+      taskkill.on('error', () => {
+        try { proc.kill('SIGKILL'); } catch {}
+      });
+    } else {
+      try { process.kill(-proc.pid, 'SIGTERM'); }
+      catch { try { proc.kill('SIGKILL'); } catch {} }
+    }
+  } catch (e) {
+    slog('killSetupProcessTree failed: ' + e.message);
+    try { proc.kill(); } catch {}
+  }
+}
+
 app.post('/setup-cancel', (_, res) => {
   if (setupProc) {
-    try { setupProc.kill(); } catch {}
+    killSetupProcessTree(setupProc);
     setupProc = null;
   }
   setupRunning = false;
+  // v0.3.5: clean up leftover state from a cancelled run so the next
+  // setup starts from a clean slate.
+  try { fs.unlinkSync(path.join(os.tmpdir(), 'freqphull-setup.pid')); } catch {}
+  try {
+    const tmpMarker = path.join(os.homedir(), 'AppData', 'Roaming', 'freqphull', 'engines-ready.json.tmp');
+    if (fs.existsSync(tmpMarker)) fs.unlinkSync(tmpMarker);
+  } catch {}
   res.json({ ok: true });
 });
 

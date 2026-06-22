@@ -8567,7 +8567,15 @@ function skipEnginesSetup() {
 let setupPollTimer = null;
 let setupFinished = false; // local flag set on done/error so polling stops
 
+// v0.3.5: protect against double-click on the Run Setup button.
+// Without this, two rapid clicks fire two parallel SSE connections,
+// and the UI can end up in a half-confirmed half-progress state if
+// the second click's state-clear races the first's response.
+let setupStartInFlight = false;
 function startEnginesSetup() {
+  if (setupStartInFlight) return;
+  setupStartInFlight = true;
+  setTimeout(() => { setupStartInFlight = false; }, 1500);
   document.getElementById('setup-confirm').classList.add('hidden');
   document.getElementById('setup-error').classList.add('hidden');
   document.getElementById('setup-done').classList.add('hidden');
