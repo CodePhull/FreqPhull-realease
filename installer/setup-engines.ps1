@@ -38,7 +38,17 @@ function EmitStatus($step, $progress, $msg, $detail = "") {
 }
 
 function EmitError($message, $hint = "") {
-    Emit @{ type = "error"; message = $message; hint = $hint }
+    # v0.3.4: include the last 40 lines of the local log file in the
+    # error payload so we can diagnose pip failures, network blocks,
+    # missing VC++ redist, etc. Without this we are blind to anything
+    # that did not trip a specific check in the script.
+    $logTail = ""
+    try {
+        if (Test-Path $logFile) {
+            $logTail = (Get-Content -Path $logFile -Tail 40 -Encoding utf8 -ErrorAction SilentlyContinue) -join "`n"
+        }
+    } catch {}
+    Emit @{ type = "error"; message = $message; hint = $hint; log_tail = $logTail; log_path = $logFile }
     Log "FATAL: $message"
     exit 1
 }

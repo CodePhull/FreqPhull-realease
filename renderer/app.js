@@ -8498,9 +8498,15 @@ async function checkEnginesStatus() {
       setupEvtSource.addEventListener('error', e => {
         if (e.data) {
           setupFinished = true;
-          let msg = 'Setup failed', hint = '';
-          try { const m = JSON.parse(e.data); if (m.message) msg = m.message; if (m.hint) hint = m.hint; } catch {}
-          showSetupError(msg, hint);
+          let msg = 'Setup failed', hint = '', logTail = null, logPath = null;
+          try {
+            const m = JSON.parse(e.data);
+            if (m.message) msg = m.message;
+            if (m.hint) hint = m.hint;
+            if (m.log_tail) logTail = m.log_tail;
+            if (m.log_path) logPath = m.log_path;
+          } catch {}
+          showSetupError(msg, hint, logTail, logPath);
           closeSetupConn();
         } else {
           closeSetupConn();
@@ -8604,12 +8610,15 @@ function startEnginesSetup() {
       setupFinished = true;
       let msg = 'Setup failed';
       let hint = '';
+      let logTail = null, logPath = null;
       try {
         const m = JSON.parse(e.data);
         if (m.message) msg = m.message;
         if (m.hint) hint = m.hint;
+        if (m.log_tail) logTail = m.log_tail;
+        if (m.log_path) logPath = m.log_path;
       } catch {}
-      showSetupError(msg, hint);
+      showSetupError(msg, hint, logTail, logPath);
       closeSetupConn();
     } else {
       // Native connection drop - do NOT mark failed. Switch to polling.
@@ -8645,7 +8654,12 @@ function startSetupPolling() {
         clearInterval(setupPollTimer); setupPollTimer = null;
         setupFinished = true;
         if (j.lastError) {
-          showSetupError(j.lastError.message || 'Setup failed', j.lastError.hint || '');
+          showSetupError(
+            j.lastError.message || 'Setup failed',
+            j.lastError.hint || '',
+            j.lastError.log_tail || null,
+            j.lastError.log_path || null
+          );
         } else {
           // No error recorded - assume success. Verify via /engines-status.
           const sR = await fetch(API + '/engines-status');
@@ -8669,11 +8683,38 @@ function startSetupPolling() {
   }, 1500);
 }
 
-function showSetupError(msg, hint) {
+function showSetupError(msg, hint, logTail, logPath) {
   document.getElementById('setup-progress').classList.add('hidden');
   document.getElementById('setup-error').classList.remove('hidden');
   document.getElementById('setup-error-msg').textContent = msg;
   document.getElementById('setup-error-hint').textContent = hint || '';
+  // v0.3.4: show the diagnostic log tail if the server sent one.
+  // Hidden by default (<details> collapsed) so the modal stays clean.
+  const wrap = document.getElementById('setup-error-diag-wrap');
+  const pre = document.getElementById('setup-error-diag');
+  if (logTail && wrap && pre) {
+    wrap.style.display = '';
+    pre.textContent = (logPath ? 'Source: ' + logPath + '\n\n' : '') + logTail;
+  } else if (wrap) {
+    wrap.style.display = 'none';
+  }
+}
+
+// Copy the diagnostic to clipboard so users can paste it into support
+// chats without taking a screenshot of a 200-line trace.
+function copySetupDiag() {
+  const pre = document.getElementById('setup-error-diag');
+  if (!pre) return;
+  const btn = document.getElementById('setup-error-diag-copy');
+  navigator.clipboard.writeText(pre.textContent).then(() => {
+    if (btn) {
+      const original = btn.textContent;
+      btn.textContent = 'Copied';
+      setTimeout(() => { btn.textContent = original; }, 1400);
+    }
+  }).catch(() => {
+    showAppNotification('Could not copy to clipboard', 'err');
+  });
 }
 
 async function cancelEnginesSetup() {

@@ -5176,17 +5176,52 @@ app.get('/setup-engines', (req, res) => {
     setupRunning = false;
     setupState.endedAt = Date.now();
     slog('setup-engines: exit ' + code);
-        if (code === 0) {
-          // v0.3.3: setup just succeeded — refresh Python discovery and
-          // release the engines-broken breaker so analysis resumes.
-          resetEnginesBrokenBreaker();
+    if (code === 0) {
+      // v0.3.3: setup just succeeded — refresh Python discovery and
+      // release the engines-broken breaker so analysis resumes.
+      resetEnginesBrokenBreaker();
+    }
+    // v0.3.4: on ANY non-zero exit, read the setup script's local log
+    // file and dump its tail to the server log. Even if EmitError
+    // didn't fire (parser crash, killed process, etc.) we still see
+    // exactly what went wrong. This is what we were missing in user
+    // beta logs that showed "exit 1" with zero diagnostic info.
+    if (code !== 0) {
+      try {
+        const setupLogPath = path.join(os.tmpdir(), 'freqphull-setup.log');
+        if (fs.existsSync(setupLogPath)) {
+          const lines = readUtf8(setupLogPath).split(/\r?\n/);
+          const tail = lines.slice(-50);  // last 50 lines
+          slog('=== setup-engines log tail (last 50 lines) ===');
+          for (const ln of tail) {
+            if (ln.trim()) slog('[setup-log] ' + ln);
+          }
+          slog('=== end setup-engines log tail ===');
+        } else {
+          slog('setup-engines: local log file not found at ' + setupLogPath);
         }
-    if (code !== 0 && !lastErrorEmitted) {
-      const tail = stderrBuf.slice(-5).join(' | ').slice(-400);
-      emit('error', {
-        message: 'Setup ended unexpectedly (code ' + code + ')',
-        hint: tail || 'See %TEMP%\\freqphull-setup.log for details',
-      });
+      } catch (e) {
+        slog('setup-engines: failed to read local log: ' + e.message);
+      }
+      if (!lastErrorEmitted) {
+        const tail = stderrBuf.slice(-5).join(' | ').slice(-400);
+        // v0.3.4: also send the log file content in the synthesized
+        // event so the renderer's diagnostic <details> populates.
+        let logTail = null;
+        const setupLogPath = path.join(os.tmpdir(), 'freqphull-setup.log');
+        try {
+          if (fs.existsSync(setupLogPath)) {
+            const lines = readUtf8(setupLogPath).split(/\r?\n/);
+            logTail = lines.slice(-50).join('\n');
+          }
+        } catch {}
+        emit('error', {
+          message: 'Setup ended unexpectedly (code ' + code + ')',
+          hint: tail || 'See ' + setupLogPath + ' for details',
+          log_tail: logTail,
+          log_path: setupLogPath,
+        });
+      }
     }
     setupProc = null;
   });

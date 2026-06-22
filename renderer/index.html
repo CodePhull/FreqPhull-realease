@@ -3726,6 +3726,14 @@ button > .ic:only-child,
     <div id="setup-error" class="hidden">
       <div class="setup-error-msg" id="setup-error-msg"></div>
       <div class="setup-error-hint" id="setup-error-hint"></div>
+      <!-- v0.3.4: collapsible diagnostic. Server-side now reads the local
+           setup log on non-zero exit and includes its tail in the error
+           payload. Users can copy it for support without hunting in %TEMP%. -->
+      <details id="setup-error-diag-wrap" class="setup-error-diag-wrap" style="margin-top:8px;display:none">
+        <summary style="cursor:pointer;font-size:12px;color:var(--muted);padding:6px 4px;user-select:none">Show diagnostic log (for support)</summary>
+        <pre id="setup-error-diag" style="max-height:200px;overflow:auto;font-family:'Consolas','Cascadia Code',monospace;font-size:11px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;margin:6px 0 0;color:var(--off);white-space:pre-wrap;word-break:break-word"></pre>
+        <button class="btn xs" id="setup-error-diag-copy" onclick="copySetupDiag()" style="margin-top:6px">Copy to clipboard</button>
+      </details>
       <div class="setup-buttons">
         <button class="btn pri" onclick="retryEnginesSetup()" style="width:100%;height:44px">Retry</button>
         <button class="btn xs" onclick="skipEnginesSetup()" style="width:100%;margin-top:8px">Continue without engines</button>
@@ -3762,7 +3770,7 @@ button > .ic:only-child,
       <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><polygon points="5,5 5,19 15,12"/><rect x="16" y="5" width="3" height="14"/></svg>
     </button>
     <button id="sp-fv-mini-loop" class="sp-fv-mini-mode-btn" tabindex="-1" onmousedown="this.blur()" onclick="toggleLoopMode();this.blur()" title="Loop">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 2.5 14.5 4.5 12.5 6.5"/><path d="M1.5 7.5V6a2 2 0 0 1 2-2h11"/><path d="M3.5 13.5 1.5 11.5 3.5 9.5"/><path d="M14.5 8.5V10a2 2 0 0 1-2 2h-11"/></svg>
     </button>
   </div>
   <span class="sp-fv-mini-time-cur" id="sp-fv-mini-time-cur">0:00</span>

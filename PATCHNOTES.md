@@ -11,6 +11,25 @@ along the way.
 
 ## v0.3.4 (2026-06-21)
 
+**Setup-failure forensics — `exit 1` is no longer a dead end**
+
+The beta tester's log showed `setup-engines: exit 1` with ZERO diagnostic info about what actually failed. Pip output was being written to the script's local log file (`$env:TEMP\freqphull-setup.log`) but never reached either the server log or the renderer. Setup could fail for any of 20+ reasons (offline, AV blocking pip, corporate proxy, missing VC++ runtime, broken Python install, low disk space) and we'd see the same useless "exit 1".
+
+Three new diagnostic paths, all firing automatically:
+
+1. **PowerShell side:** `EmitError` now reads the tail of the script's local log file (last 40 lines, includes pip stderr + stdout) and ships it in the error event's `log_tail` field. So when the script fails at any explicit `EmitError` call, the actual cause travels in the same JSON message that triggers the error UI.
+
+2. **Server side:** On ANY non-zero setup exit (including hard crashes where `EmitError` never fired — parser explosion, OOM, kill -9), the server reads `freqphull-setup.log` directly from `%TEMP%` and dumps its last 50 lines into the server log with `[setup-log]` prefix. This is the belt+suspenders: even if every other diagnostic mechanism failed, the actual error STILL lands in the log file we already collect.
+
+3. **Renderer side:** The setup error modal now has a collapsible "Show diagnostic log (for support)" `<details>` section. Hidden by default so the modal stays clean. Click to expand → monospace pre with the log tail and the source file path. "Copy to clipboard" button so users can paste it into a Discord support thread in one tap, no screenshots of 200-line traces needed.
+
+When the next beta tester hits a setup failure, we'll see exactly which command exited non-zero and exactly what pip said about it. The next pip-fails-because-X bug will be a one-shot fix.
+
+**Loop icon fuzzy at 14px**
+- Player's loop button used a 24x24 viewBox rendered at 14x14 with stroke-width 1.8 — effective stroke ~1.05px that didn't snap to the pixel grid, geometry that ran right to the viewBox edges. At a glance it looked broken/blurry.
+- Redrawn with a 16x16 viewBox (matches the rendered size more closely) and stroke-width 1.6, geometry pulled in from the edges so antialiasing doesn't clip. Same metaphor (two arrows forming a loop), crisper render.
+
+
 **Installer + first-launch hardening pass — triple-checked for new-user reliability**
 
 **Python launcher args got dropped at spawn time.** discoverPython() correctly cached `{cmd: 'py', args: ['-3']}` when the Windows Python launcher was the chosen interpreter, but EVERY spawn() call site was just passing the bare `pythonCmd` (`py`) without the cached args. Result: running `py` instead of `py -3`. Most machines have one Python so it works by accident, but on any machine with Python 2 still installed (or with the launcher configured to default to a specific older version), `py` resolves wrong and analysis fails with cryptic syntax errors from Python 2 trying to run Python 3 code. Fixed at all SEVEN spawn sites: analyze, fingerprint, bg-analyze, transcribe via inner pipeline, stems, mastering, and the main analyze script. Each now does `spawn(pythonCmd, [...getPythonArgs(), ...scriptArgs], opts)` so the launcher gets every flag it was given.
