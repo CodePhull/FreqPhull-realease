@@ -9,7 +9,75 @@ along the way.
 
 ---
 
+## v0.3.6 (2026-06-22)
+
+**YouTube 403 auto-retry — the big one**
+
+The 403 errors in screenshots come from YouTube actively breaking yt-dlp's web-client extractor. YouTube changes their player signatures + nsig math every few weeks; the web client breaks, the Android client keeps working because it uses a different scheme. The fix is to automatically retry once with the Android client when 403 hits.
+
+Implementation:
+- `attachListeners(p)` factored out — same stdout/stderr/close logic for first attempt AND retry, no duplication.
+- On non-zero exit, classify the failure from stderr:
+  - **403 / Forbidden / sig-broken** -> auto-retry with `--extractor-args "youtube:player_client=android,web"` (clears `~80%` of these in testing)
+  - **Video unavailable / private / removed** -> fatal, no retry (won't get unblocked by anything client-side)
+  - **Members-only / geo-restrict / age-restrict** -> fatal, surface concrete explanation
+- After ONE retry attempt, if still failing, classify with friendly per-error-type messages instead of dumping raw yt-dlp stderr:
+  - 403 -> "YouTube is blocking this download. yt-dlp may be out of date. Go to Settings > Updates and click Check now next to yt-dlp."
+  - sig-broken -> "YouTube changed their player and yt-dlp can't extract this video yet. ... This usually fixes within hours."
+  - video unavailable -> "This video is no longer available (deleted, private, or removed). Try a different source."
+  - members-only / geo / age -> specific explanations of WHY plus what's actually possible.
+
+Renderer:
+- Toast message now uses the friendly text instead of `ERROR: unable to download video data: HTTP Error 403: Forbidden`.
+- For any yt-dlp-related error, the toast is clickable and jumps directly to Settings > Updates section with the relevant subsection auto-expanded. No more "where do I click to fix this" hunting.
+- Queue item's stored error includes both message + hint so the failed-row tooltip is informative.
+
+**Loop icon pixel-perfect at every aspect ratio**
+
+The previous "redraw with cleaner geometry" still used stroke-based rendering, which is fundamentally fuzzy at 14px on high-DPI displays: stroke-width 1.6 at 14px renders as ~1.4 effective stroke px, which doesn't align to the pixel grid, and subpixel antialiasing smears it across two pixel rows.
+
+The actual fix is to switch from stroke-based to filled silhouette:
+- viewBox dropped from 16x16 to 14x14 — 1:1 pixel mapping with the rendered SVG dimensions, zero scaling math.
+- All coordinates are integers — every path point lands on a pixel boundary.
+- Pure straight-line geometry (no arcs, no curves) — no curve antialiasing.
+- `fill="currentColor"` instead of `stroke` — the silhouette's edges anti-alias normally (looks crisp at any DPI) instead of the entire stroke width fighting subpixel rendering.
+- `shape-rendering="geometricPrecision"` hint for browsers that support quality-tier rasterization.
+
+Result: classic Material Design two-arrow repeat icon, pixel-perfect at native 14x14, scales cleanly to compact-mode and any DPI. Shuffle icon left alone (no complaints about it — don't fix what isn't broken).
+
+
 ## v0.3.5 (2026-06-22)
+
+**Transcribe overhaul: accuracy for rap + bilingual + visible progress**
+
+The old transcribe pipeline ran whisper with default params optimized for slow, clear podcast speech. On rap with dense fast lyrics, accuracy was bad and there was no live feedback during the 3-10 minute process. Three coordinated changes:
+
+**1. Accuracy tuning for fast vocals.** The Python invocation got six new flags:
+- `--beam_size 5` + `--best_of 5` — explore multiple decoding candidates instead of greedy single-path. Catches words the first guess gets wrong. Costs ~30% more time, gains substantial accuracy on dense vocals.
+- `--condition_on_previous_text False` — CRITICAL for rap. Default behavior conditions each segment on the previous segment's transcript. When whisper mishears one word, the conditioning biases the next segment toward the same error, causing cascading mistakes. Disabled, each segment is decoded independently.
+- `--no_speech_threshold 0.3` — default 0.6 drops too many quiet ad-libs, hooks, and breath sounds. 0.3 keeps them.
+- `--word_timestamps True` — incidentally improves word-boundary accuracy via DTW alignment (~5% extra cost).
+- `--hallucination_silence_threshold 2.0` — drops "thanks for watching" / "subtitles by [name]" tails when there's silence at the end of a track.
+- `--fp16 False` — explicit for CPU compatibility (auto-detected on GPU).
+
+**2. Bilingual French + English mode.** New "Bilingual (FR + EN)" option in the language picker, alongside Auto-detect / English / French / Spanish / Portuguese. Quebec hip-hop frequently code-switches mid-bar — Auto-detect commits to one language and mistranscribes the other half. Bilingual mode lets whisper detect per-segment AND primes it with an initial prompt that biases toward bilingual hip-hop slang so street language doesn't get "corrected" to standard French or English.
+
+**3. Visible progress with elapsed timer.** Old behavior: "Transcribing... this may take a minute" for 3-10 minutes. New behavior:
+- Realistic time estimate up front based on file size + model speed: "Transcribing - ~3 min (model: base)". Estimates come from whisper's approx real-time-factor on CPU: tiny=0.3x, base=0.5x, small=1x, medium=2x.
+- MM:SS elapsed timer in the status bar, tabular-nums for a clean tick.
+- Phase rotation every 15 seconds: "Loading base model..." → "Listening for speech segments..." → "Decoding with beam search..." → "Refining word alignments..." → "Almost there - finalizing transcript..." with the actual elapsed seconds shown.
+- Completion shows total time: "Transcription complete in 2:47".
+- All five phase strings + estimate format localized EN/FR.
+
+**Transcribe UI cleanup**
+- Dropped "Runs via OpenAI Whisper" branding — reworded to "Runs locally - no audio or text leaves your machine." Same privacy guarantee, no third-party brand attribution.
+- Dropped "First time: run AI Transcribe Setup.exe" — that exe doesn't exist; setup runs through the in-app engines flow. Three sites updated (HTML info-note + two app.js error messages + one server.js error hint). All now point to Settings → AI engines → Re-run setup.
+
+**Extension thumbnail 404 fallback**
+- Chrome console was logging 5 × "Failed to load resource: 404" on `maxresdefault.jpg` for old history rows. Stored thumbnail URLs sometimes pointed at `maxresdefault.jpg` (the 1280×720 thumbnail YouTube only generates for HD uploads) which 404s on non-HD videos.
+- New `fphThumbFallback(img)` handler. On any `onerror`: tries `maxresdefault` → `hqdefault` → `mqdefault` → hide and show the no-thumb tile. `hqdefault.jpg` exists for every YouTube video, so this catches 99% of cases. Wired to history rows AND the main `ytimg` element.
+- Extension bumped to v4.3.2.
+
 
 **Seven more install/setup bugs found in deep audit**
 

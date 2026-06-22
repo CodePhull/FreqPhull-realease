@@ -913,14 +913,40 @@ async function processDlQueue() {
 
   es.addEventListener('error', e => {
     es.close();
-    let msg = 'Download failed';
-    try { msg = JSON.parse(e.data).message; } catch {}
+    // v0.3.6: parse structured error payload from server. The download
+    // handler now sends {message, hint, code} for known failure modes
+    // (403, sig-broken, video-deleted, etc) so we can show actionable
+    // toasts instead of raw yt-dlp stderr.
+    let msg = 'Download failed', hint = '', code = '';
+    try {
+      const d = JSON.parse(e.data);
+      msg = d.message || 'Download failed';
+      hint = d.hint || '';
+      code = d.code || '';
+    } catch {}
+
     dlSt('Error: ' + msg, 'err');
-    showAppNotification('' + msg.slice(0, 40), 'err');
+
+    // If the hint mentions yt-dlp, make the toast clickable to jump to
+    // Settings > Updates section where they can hit "Check now".
+    const isYtdlpRelated = /yt-dlp/i.test(hint || msg);
+    const toastMsg = msg.length > 80 ? msg.slice(0, 77) + '...' : msg;
+    if (isYtdlpRelated && typeof switchTab === 'function') {
+      showAppNotification(toastMsg + ' (click to update yt-dlp)', 'err', () => {
+        switchTab('settings');
+        setTimeout(() => {
+          const wrap = document.querySelector('.settings-section[data-section="updates"]');
+          if (wrap && wrap.classList.contains('collapsed')) toggleSettingsSection('updates');
+          wrap && wrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 100);
+      }, 8000);
+    } else {
+      showAppNotification(toastMsg, 'err', null, 5000);
+    }
 
     // Mark this item errored, keep it in the queue
     item.status = 'error';
-    item.error = msg;
+    item.error = msg + (hint ? '\n' + hint : '');
     item.finishedAt = Date.now();
 
     updateDlQueueUI();
@@ -1719,7 +1745,7 @@ function runPythonAnalysis(filePath, histId, deep) {
         <div>
           <div style="font-size:13px;color:#e84040;font-weight:600;margin-bottom:4px">Analysis failed — check Diagnostic Log</div>
           <div style="font-size:12px;color:var(--muted);word-break:break-all">${errMsg.slice(0,200)}</div>
-          <div style="font-size:12px;color:var(--hint);margin-top:6px">Run <b style="color:var(--off)">AI Transcribe Setup.exe</b> if scipy/numpy not installed</div>
+          <div style="font-size:12px;color:var(--hint);margin-top:6px">If transcription fails, open Settings &rarr; AI engines &rarr; Re-run setup.</div>
         </div>
       </div>`;
     // Still do JS fallback for BPM/key
@@ -1808,7 +1834,7 @@ function applyAnalysisResult(result, histId) {
         <div>
           <div style="font-size:14px;color:var(--off);font-weight:500">Professional analysis unavailable</div>
           <div style="font-size:13px;color:var(--muted);margin-top:3px">
-            Run <strong style="color:var(--off)">AI Transcribe Setup.exe</strong> to install scipy &amp; numpy,
+            Open Settings &rarr; AI engines &rarr; Re-run setup,
             then reload the track for full Loudness / Spectral Balance data.
           </div>
         </div>
@@ -3667,11 +3693,94 @@ function scheduleNoteSave() {
   noteTimer=setTimeout(async()=>{if(!currentHistId){document.getElementById('notes-saved').textContent='';return;}await fetch(API+'/history/'+currentHistId+'/notes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({notes:document.getElementById('notes-box').value})});document.getElementById('notes-saved').textContent='Saved';},1200);
 }
 function startTranscribe(e){if(e.target.files[0])startTranscribeFile(e.target.files[0]);}
-async function startTranscribeFile(file){
-  trSt('Transcribing… this may take a minute','spin');document.getElementById('trans-card').classList.remove('hidden');document.getElementById('transcript-out').value='';
-  const fd=new FormData();fd.append('audio',file);fd.append('model',document.getElementById('wmodel').value);fd.append('language',document.getElementById('wlang').value);
-  try{const r=await fetch(API+'/transcribe',{method:'POST',body:fd});const d=await r.json();if(!r.ok)throw new Error(d.error+(d.hint?'\n\n'+d.hint:''));document.getElementById('transcript-out').value=d.transcript;trSt('Transcription complete','ok');if(currentHistId)fetch(API+'/history/'+currentHistId+'/transcript',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transcript:d.transcript})});}
-  catch(e){trSt('Error: '+e.message,'err');}
+// v0.3.5: transcribe timer + richer status. The old "Transcribing... this may
+// take a minute" left users staring at a frozen UI for 3-10 minutes on
+// longer files. Show MM:SS elapsed and a phase hint that rotates through
+// what's actually happening (loading model, processing, finalizing).
+let _transcribeTimerHandle = null;
+let _transcribeStartedAt = 0;
+function _formatTranscribeElapsed(ms) {
+  const totalSec = Math.floor(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return m + ':' + (sec < 10 ? '0' : '') + sec;
+}
+function _startTranscribeTimer() {
+  _transcribeStartedAt = Date.now();
+  const el = document.getElementById('trans-timer');
+  if (el) { el.style.display = ''; el.textContent = '0:00'; }
+  if (_transcribeTimerHandle) clearInterval(_transcribeTimerHandle);
+  _transcribeTimerHandle = setInterval(() => {
+    const el = document.getElementById('trans-timer');
+    if (!el) return;
+    el.textContent = _formatTranscribeElapsed(Date.now() - _transcribeStartedAt);
+  }, 500);
+}
+function _stopTranscribeTimer() {
+  if (_transcribeTimerHandle) { clearInterval(_transcribeTimerHandle); _transcribeTimerHandle = null; }
+  const el = document.getElementById('trans-timer');
+  if (el) el.style.display = 'none';
+}
+
+async function startTranscribeFile(file) {
+  const model = document.getElementById('wmodel').value;
+  // Realistic time estimate for the status hint, based on Whisper's
+  // approx real-time-factor on CPU: tiny=0.3x, base=0.5x, small=1x,
+  // medium=2x. The file's size is a rough proxy for duration (MP3
+  // ~1 MB/min, WAV ~10 MB/min). This is a HINT, not a promise.
+  const mbToMin = (file.type && file.type.indexOf('wav') !== -1) ? 0.1 : 1.0;
+  const estDurationMin = Math.max(1, (file.size / 1048576) * mbToMin);
+  const rtfs = { tiny: 0.3, base: 0.5, small: 1.0, medium: 2.0 };
+  const estProcessMin = Math.ceil(estDurationMin * (rtfs[model] || 1.0));
+  const estText = estProcessMin < 2 ? (t('transEstShort') || 'a moment') : (t('transEstMin') || '~{n} min').replace('{n}', estProcessMin);
+
+  trSt((t('transStartHint') || 'Transcribing - {est} (model: {model})').replace('{est}', estText).replace('{model}', model), 'spin');
+  document.getElementById('trans-card').classList.remove('hidden');
+  document.getElementById('transcript-out').value = '';
+  _startTranscribeTimer();
+
+  // Rotate the status text every 15s so users see something happening
+  // even though the backend is single-shot (no live progress events
+  // from Whisper itself — it's all one Python subprocess).
+  const phases = [
+    (t('transPhaseLoading')   || 'Loading {model} model into memory...').replace('{model}', model),
+    (t('transPhaseListening') || 'Listening for speech segments...'),
+    (t('transPhaseDecoding')  || 'Decoding with beam search (5 candidates)...'),
+    (t('transPhaseAligning')  || 'Refining word alignments...'),
+    (t('transPhaseAlmost')    || 'Almost there - finalizing transcript...'),
+  ];
+  let phaseIdx = 0;
+  const phaseHandle = setInterval(() => {
+    phaseIdx = Math.min(phases.length - 1, phaseIdx + 1);
+    const elapsed = (Date.now() - _transcribeStartedAt) / 1000;
+    trSt(phases[phaseIdx] + ' (' + Math.round(elapsed) + 's)', 'spin');
+  }, 15000);
+
+  const fd = new FormData();
+  fd.append('audio', file);
+  fd.append('model', model);
+  fd.append('language', document.getElementById('wlang').value);
+
+  try {
+    const r = await fetch(API + '/transcribe', { method: 'POST', body: fd });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error + (d.hint ? '\n\n' + d.hint : ''));
+    document.getElementById('transcript-out').value = d.transcript;
+    const totalSec = Math.round((Date.now() - _transcribeStartedAt) / 1000);
+    trSt((t('transComplete') || 'Transcription complete in {time}').replace('{time}', _formatTranscribeElapsed(totalSec * 1000)), 'ok');
+    if (currentHistId) {
+      fetch(API + '/history/' + currentHistId + '/transcript', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transcript: d.transcript }),
+      });
+    }
+  } catch (e) {
+    trSt('Error: ' + e.message, 'err');
+  } finally {
+    clearInterval(phaseHandle);
+    _stopTranscribeTimer();
+  }
 }
 function copyTranscript(){navigator.clipboard.writeText(document.getElementById('transcript-out').value);}
 function saveTranscript(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([document.getElementById('transcript-out').value],{type:'text/plain'}));a.download='transcript.txt';a.click();}
@@ -8792,6 +8901,15 @@ const T = {
     enginesDiagDescGeneric:'Background analysis is paused. Run setup to install Python and the required packages.',
     enginesDiagDescDeps:'Python is installed but a required package failed to install. Re-run setup to retry.',
     enginesDiagRetry:'Re-run setup',
+    transPhaseLoading:'Loading {model} model into memory...',
+    transPhaseListening:'Listening for speech segments...',
+    transPhaseDecoding:'Decoding with beam search (5 candidates)...',
+    transPhaseAligning:'Refining word alignments...',
+    transPhaseAlmost:'Almost there - finalizing transcript...',
+    transEstShort:'a moment',
+    transEstMin:'~{n} min',
+    transComplete:'Transcription complete in {time}',
+    transStartHint:'Transcribing - {est} (model: {model})',
     enginesReady:'Python engine ready. Background analysis resumed.',
 
     // ── v0.3.1: Settings sections ──
@@ -9242,6 +9360,15 @@ const T = {
     enginesDiagDescGeneric:"L'analyse en arriere-plan est en pause. Lancez la configuration pour installer Python et les paquets requis.",
     enginesDiagDescDeps:"Python est installe mais un paquet requis n'a pas pu etre installe. Relancez la configuration pour reessayer.",
     enginesDiagRetry:'Relancer la configuration',
+    transPhaseLoading:'Chargement du modele {model}...',
+    transPhaseListening:'Detection des segments de parole...',
+    transPhaseDecoding:'Decodage par exploration (5 candidats)...',
+    transPhaseAligning:'Alignement precis des mots...',
+    transPhaseAlmost:'Presque termine - finalisation...',
+    transEstShort:'un instant',
+    transEstMin:'~{n} min',
+    transComplete:'Transcription terminee en {time}',
+    transStartHint:'Transcription - {est} (modele: {model})',
     enginesReady:"Moteur Python pret. L'analyse en arriere-plan a repris.",
 
     // ── v0.3.1: Sections de parametres ──

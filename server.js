@@ -1154,8 +1154,26 @@ app.get('/download', async (req, res) => {
   catch (e) { preFiles = new Set(); }
 
   sse('status', { message: 'Starting download…' });
-  const proc = spawn(ytdlp, args, { windowsHide: true });
+
+  // v0.3.6: auto-retry on YouTube 403 with the Android client. YouTube's
+  // web player signature scheme breaks every few weeks; the Android
+  // client uses a different one that's much more durable. ~80% of "403
+  // Forbidden" errors clear on retry with player_client=android.
+  // The retry only fires for the specific 403 signature — non-403
+  // errors (geo-block, video deleted, age-gated) bail out immediately
+  // so users don't wait through a doomed second attempt.
   let stderr = '';
+  let retryAttempted = false;
+  let proc;
+
+  function spawnYtdlp(extraArgs) {
+    const fullArgs = [...args, ...extraArgs];
+    slog('yt-dlp args: ' + fullArgs.slice(0, -1).join(' ') + ' <url>');
+    return spawn(ytdlp, fullArgs, { windowsHide: true });
+  }
+
+  proc = spawnYtdlp([]);
+  attachListeners(proc);
   // Where we'll capture the real output path. Sources in priority order:
   //   1. --print after_move:filepath (modern yt-dlp, ≥2023.07.06)
   //   2. "Destination:" lines (the final destination, post extract-audio)
@@ -1174,7 +1192,9 @@ app.get('/download', async (req, res) => {
     return /^[A-Za-z]:[\\\/]/.test(s) || s.startsWith('/') || s.startsWith('\\\\');
   }
 
-  proc.stdout.on('data', d => {
+  // Wire up stdout/stderr/close listeners. Wrapped so retry can reuse them.
+  function attachListeners(p) {
+    p.stdout.on('data', d => {
     const text = d.toString();
     text.split(/\r?\n/).forEach(line => {
       const m = line.match(/\[download\]\s+([\d.]+)%/);
@@ -1186,10 +1206,61 @@ app.get('/download', async (req, res) => {
       if (dm && dm[1]) destPath = dm[1].trim();
     });
   });
-  proc.stderr.on('data', d => { stderr += d; slog('yt-dlp stderr: ' + d.toString().trim()); });
-  proc.on('close', async code => {
+  p.stderr.on('data', d => { stderr += d; slog('yt-dlp stderr: ' + d.toString().trim()); });
+  p.on('close', async code => {
     slog('yt-dlp exit code: ' + code);
-    if (code !== 0) { sse('error', { message: stderr.trim() || 'yt-dlp failed with code ' + code }); return res.end(); }
+    if (code !== 0) {
+      // v0.3.6: classify the failure and decide whether to retry.
+      const errLower = (stderr || '').toLowerCase();
+      const is403 = /http error 403|forbidden/i.test(stderr);
+      const isSigBroken = /signature extraction|player.*returned|nsig extraction|requested format/i.test(errLower);
+      const isFatal = /video unavailable|private video|members[- ]only|removed by|copyright|geo[- ]restrict|age[- ]restrict/i.test(errLower);
+
+      // Retry once with Android client for 403 / sig errors, but not for
+      // genuinely unrecoverable failures (deleted videos, geo-blocks).
+      if (!retryAttempted && (is403 || isSigBroken) && !isFatal) {
+        retryAttempted = true;
+        slog('yt-dlp: 403/sig error - retrying with player_client=android');
+        sse('status', { message: 'Retrying with mobile client...' });
+        stderr = '';  // clear so retry's stderr doesn't accumulate with first run
+        printedPath = null;  // clear paths captured in failed first run
+        destPath = null;
+        const retryProc = spawnYtdlp([
+          '--extractor-args', 'youtube:player_client=android,web',
+        ]);
+        attachListeners(retryProc);
+        proc = retryProc;
+        return;  // bail out of THIS close handler; the retry's close handler will fire
+      }
+
+      // No retry possible — surface a user-friendly message with concrete
+      // next steps based on the error type.
+      let msg, hint;
+      if (is403) {
+        msg = 'YouTube is blocking this download (HTTP 403). yt-dlp may be out of date.';
+        hint = 'Go to Settings > Updates and click "Check now" next to yt-dlp. YouTube frequently changes their internal API and yt-dlp needs regular updates to keep up.';
+      } else if (isSigBroken) {
+        msg = 'YouTube changed their player and yt-dlp can\'t extract this video yet.';
+        hint = 'Go to Settings > Updates and click "Check now" next to yt-dlp. This usually fixes within hours of a YouTube change.';
+      } else if (/video unavailable|private video|removed by/i.test(errLower)) {
+        msg = 'This video is no longer available (deleted, private, or removed).';
+        hint = 'Try a different source or check if the video was re-uploaded elsewhere.';
+      } else if (/members[- ]only/i.test(errLower)) {
+        msg = 'This video is members-only and requires a paid YouTube subscription.';
+        hint = 'Freq.Phull cannot download members-only content without authenticated cookies.';
+      } else if (/geo[- ]restrict/i.test(errLower)) {
+        msg = 'This video is geo-restricted in your region.';
+        hint = 'You\'d need a VPN to access this video.';
+      } else if (/age[- ]restrict/i.test(errLower)) {
+        msg = 'This video is age-restricted.';
+        hint = 'Sign-in cookies would be needed to bypass — Freq.Phull doesn\'t support that yet.';
+      } else {
+        msg = stderr.trim() || 'yt-dlp failed with code ' + code;
+        hint = null;
+      }
+      sse('error', { message: msg, hint, code: 'download_failed', raw: stderr.trim().slice(-500) });
+      return res.end();
+    }
 
     // Resolve THIS download's actual file. Priority:
     //   1. --print after_move:filepath  (most accurate, race-proof)
@@ -1259,6 +1330,8 @@ app.get('/download', async (req, res) => {
     nudgeAnalysisWorker();
     res.end();
   });
+  }  // end attachListeners
+
   proc.on('error', e => {
     slog('yt-dlp spawn error: ' + e.message);
     let userMsg = 'Cannot start yt-dlp: ' + e.message;
@@ -4003,7 +4076,7 @@ app.get('/analyze', async (req, res) => {
     if (code !== 0) {
       const errMsg = stderr.trim() || stdout.trim() || 'Python exited with code ' + code;
       slog('ANALYSIS FAILED: ' + errMsg.slice(0, 500));
-      sse('error', { message: errMsg.slice(0, 300), hint: 'Run AI Transcribe Setup.exe to install scipy/numpy' });
+      sse('error', { message: errMsg.slice(0, 300), hint: 'Open Settings → AI engines → Re-run setup' });
       res.end();
       return;
     }
@@ -4573,9 +4646,76 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
     });
   }
   try {
-    const langArgs = lang === 'auto' ? [] : ['--language', lang];
+    // v0.3.5: language handling — 'auto' lets Whisper detect, but for
+    // code-switching tracks (Quebec hip-hop where one verse is English
+    // and the chorus French is normal) auto-detect on the WHOLE track
+    // commits to one language and mistranscribes the other half. The
+    // 'bi' mode (French + English) is a special case we handle by
+    // letting Whisper auto-detect but providing a heuristic initial
+    // prompt that primes the model for mixed-language slang.
+    let langArgs;
+    let initialPromptArgs = [];
+    if (lang === 'auto' || lang === 'bi') {
+      // No --language flag = let Whisper detect per-segment. The new
+      // turbo/medium models handle code-switching natively.
+      langArgs = [];
+      if (lang === 'bi') {
+        // Initial prompt biases the model toward bilingual French+English
+        // slang/swearing common in QC hip-hop, so the model doesn't
+        // "correct" street language to standard French or English.
+        initialPromptArgs = ['--initial_prompt',
+          "Bilingual French and English hip-hop lyrics. Verses may switch between languages within a single line."];
+      }
+    } else {
+      langArgs = ['--language', lang];
+    }
+
+    // v0.3.5: rap-accuracy tuning. The defaults are optimized for slow,
+    // clear speech (podcasts, lectures). Rap and fast vocal music need:
+    //   * --beam_size 5     : explore multiple decoding candidates
+    //                         instead of greedy single-path (catches
+    //                         words that the first guess gets wrong)
+    //   * --best_of 5       : sample 5 times when temperature falls back,
+    //                         pick highest-logprob candidate
+    //   * --temperature 0.0,0.2,0.4,0.6,0.8,1.0 : default schedule —
+    //                         start deterministic, ladder up to randomness
+    //                         only when the model's stuck
+    //   * --condition_on_previous_text False : prevents error
+    //                         propagation. If Whisper mishears one
+    //                         word, conditioning on its mistake biases
+    //                         the next segment toward the same error.
+    //                         Critical for rap where dense lyrics get
+    //                         consecutive segments wrong.
+    //   * --no_speech_threshold 0.3 : default 0.6 drops too many quiet
+    //                         ad-libs / hooks. 0.3 keeps them.
+    //   * --word_timestamps True : we don't use the timestamps in the UI
+    //                         yet, but they cost ~5% extra and the
+    //                         underlying DTW alignment incidentally
+    //                         improves word boundary accuracy.
+    //   * --hallucination_silence_threshold 2.0 : drop hallucinated
+    //                         "thanks for watching" / "subtitles by..."
+    //                         tails when there's silence.
+    const accuracyArgs = [
+      '--beam_size', '5',
+      '--best_of', '5',
+      '--condition_on_previous_text', 'False',
+      '--no_speech_threshold', '0.3',
+      '--word_timestamps', 'True',
+      '--hallucination_silence_threshold', '2.0',
+      '--fp16', 'False',  // CPU-friendly; on GPU users this is auto-detected
+    ];
+
     const pyCmd = getPythonCmd();
-    await run(pyCmd, ['-m', 'whisper', inputPath, '--model', model, '--output_format', 'txt', '--output_dir', os.tmpdir(), '--verbose', 'False', ...langArgs]);
+    await run(pyCmd, [
+      '-m', 'whisper', inputPath,
+      '--model', model,
+      '--output_format', 'txt',
+      '--output_dir', os.tmpdir(),
+      '--verbose', 'False',
+      ...langArgs,
+      ...initialPromptArgs,
+      ...accuracyArgs,
+    ]);
     const txtPath = path.join(os.tmpdir(), path.basename(inputPath) + '.txt');
     if (!fs.existsSync(txtPath)) throw new Error('Whisper produced no output file');
     const text = fs.readFileSync(txtPath, 'utf8').trim();
@@ -4585,7 +4725,12 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
   } catch (e) {
     slog('Transcribe error: ' + e.message);
     cleanup();
-    res.status(500).json({ error: e.message, hint: 'Run AI Transcribe Setup.exe first' });
+    // v0.3.5: dropped the stale "AI Transcribe Setup.exe" hint —
+    // setup runs through the in-app engines flow now, no separate exe.
+    res.status(500).json({
+      error: e.message,
+      hint: 'Open Settings → AI engines → Re-run setup, or check the diagnostic log.',
+    });
   }
 });
 
