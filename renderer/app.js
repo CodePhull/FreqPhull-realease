@@ -209,7 +209,44 @@ function pollBackend() {
     });
 }
 
+
+// First-run crash-reporting notice. Default is ON now (opt-out), so we
+// owe the user a one-time disclosure. localStorage flag means it only
+// fires the first time the renderer ever boots — never again.
+async function maybeShowCrashReportNotice() {
+  if (localStorage.getItem('fph_crash_notice_seen') === '1') return;
+  try {
+    const r = await fetch(API + '/crash-report-pref');
+    const j = await r.json();
+    // user_set=true means they've already made an explicit choice.
+    // Don't pester them with the first-run notice in that case.
+    if (j.user_set) {
+      localStorage.setItem('fph_crash_notice_seen', '1');
+      return;
+    }
+  } catch { return; /* backend not ready yet — try again later */ }
+  // Small delayed notification so it doesn't compete with boot toasts.
+  setTimeout(() => {
+    if (typeof showAppNotification !== 'function') return;
+    showAppNotification(
+      t('crashReportFirstRun') || 'Crash reports are on by default. Opt out in Settings > Privacy.',
+      'info',
+      () => {
+        if (typeof switchTab === 'function') switchTab('settings');
+        setTimeout(() => {
+          const wrap = document.querySelector('.settings-section[data-section="privacy"]');
+          if (wrap && wrap.classList.contains('collapsed')) toggleSettingsSection('privacy');
+          wrap && wrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 100);
+      },
+      8000
+    );
+    localStorage.setItem('fph_crash_notice_seen', '1');
+  }, 4000);
+}
+
 function onBackendReady() {
+  maybeShowCrashReportNotice();
   if (backendOnline) return;
   backendOnline = true;
   diagLog('Backend is ready! Hiding loading screen.', 'ok');
@@ -1237,7 +1274,7 @@ function _dismissNotif(el) {
 
 function setupDrops() {
   makeDrop('drop-analyze', f => readForAnalysis(f));
-  makeDrop('drop-trans', f => startTranscribeFile(f));
+  makeDrop('drop-trans', f => stageTranscribeFile(f));
 }
 function makeDrop(id, handler) {
   const z = document.getElementById(id); if (!z) return;
@@ -3697,7 +3734,29 @@ function scheduleNoteSave() {
   clearTimeout(noteTimer);document.getElementById('notes-saved').textContent='Saving…';
   noteTimer=setTimeout(async()=>{if(!currentHistId){document.getElementById('notes-saved').textContent='';return;}await fetch(API+'/history/'+currentHistId+'/notes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({notes:document.getElementById('notes-box').value})});document.getElementById('notes-saved').textContent='Saved';},1200);
 }
-function startTranscribe(e){if(e.target.files[0])startTranscribeFile(e.target.files[0]);}
+// Stage the file rather than auto-starting. Gives the user a chance to
+// pick the right model + language before kicking off a long process.
+let _pendingTranscribeFile = null;
+function startTranscribe(e) {
+  if (e.target.files[0]) stageTranscribeFile(e.target.files[0]);
+}
+function stageTranscribeFile(file) {
+  _pendingTranscribeFile = file;
+  const btn = document.getElementById('btn-trans-start');
+  if (btn) btn.disabled = false;
+  const txt = document.getElementById('trans-txt');
+  if (txt) txt.textContent = (t('transReady') || 'Ready') + ': ' + file.name;
+  const dot = document.getElementById('trans-dot');
+  if (dot) dot.className = 'dot';  // neutral
+}
+function clickTranscribeStart() {
+  if (!_pendingTranscribeFile) return;
+  const file = _pendingTranscribeFile;
+  _pendingTranscribeFile = null;
+  const btn = document.getElementById('btn-trans-start');
+  if (btn) btn.disabled = true;
+  startTranscribeFile(file);
+}
 // Transcribe progress: MM:SS elapsed + rotating phase hint.
 let _transcribeTimerHandle = null;
 let _transcribeStartedAt = 0;
@@ -8908,6 +8967,9 @@ const T = {
     crashReportDesc:'Send anonymized crash reports so bugs get fixed faster. Off by default. File paths and YouTube URLs are scrubbed before sending. No audio, no library content, no personal data.',
     crashReportOn:'Crash reporting enabled. Restart to take effect.',
     crashReportOff:'Crash reporting disabled. Restart to take effect.',
+    transReady:'Ready',
+    transStartBtn:'Start transcription',
+    crashReportFirstRun:'Crash reports are on by default to help us fix bugs faster. You can opt out in Settings > Privacy.',
     transPhaseLoading:'Loading {model} model into memory...',
     transPhaseListening:'Listening for speech segments...',
     transPhaseDecoding:'Decoding with beam search (5 candidates)...',
@@ -9175,7 +9237,7 @@ const T = {
     exportWav:'<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v16M5 13l7 7 7-7"/></svg> Export WAV', dragHint:'After grabbing, drag from Chrome\'s download bar straight into FL Studio',
     notes:'NOTES', notesPlaceholder:'Lyrics, ideas…',
     // Transcribe tab
-    transTitle:'Transcribe', transSub:'Use AI to convert audio to text — powered by Whisper',
+    transTitle:'Transcribe', transSub:'Convert audio to text - runs locally, offline.',
     transModel:'Model', transLang:'Language', transAuto:'Auto',
     transCopy:'Copy', transSave:'Save .txt',
     // Separator tab
@@ -9373,6 +9435,10 @@ const T = {
     crashReportDesc:'Envoyez des rapports anonymes pour aider a corriger les bugs. Desactive par defaut. Les chemins de fichiers et URL YouTube sont anonymises avant envoi. Aucun audio, aucune bibliotheque, aucune donnee personnelle.',
     crashReportOn:'Rapports d\'erreurs actives. Redemarrer pour prendre effet.',
     crashReportOff:'Rapports d\'erreurs desactives. Redemarrer pour prendre effet.',
+    transReady:'Pret',
+    transStartBtn:'Demarrer la transcription',
+    crashReportFirstRun:'Les rapports d\'erreur sont actives par defaut pour nous aider a corriger les bugs. Vous pouvez les desactiver dans Parametres > Confidentialite.',
+    spTagged:'Etiquete',
     transPhaseLoading:'Chargement du modele {model}...',
     transPhaseListening:'Detection des segments de parole...',
     transPhaseDecoding:'Decodage par exploration (5 candidats)...',
@@ -9640,7 +9706,7 @@ const T = {
     exportWav:'<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v16M5 13l7 7 7-7"/></svg> Exporter en WAV', dragHint:'Après le téléchargement, glissez la piste depuis la barre de Chrome directement dans FL Studio',
     notes:'NOTES', notesPlaceholder:'Paroles, idées…',
     // Transcribe tab
-    transTitle:'Transcrire', transSub:'Utilisez l\'IA pour convertir l\'audio en texte — propulsé par Whisper',
+    transTitle:'Transcrire', transSub:'Convertir l\'audio en texte - fonctionne hors ligne.',
     transModel:'Modèle', transLang:'Langue', transAuto:'Auto',
     transCopy:'Copier', transSave:'Enregistrer en .txt',
     // Separator tab
@@ -9996,24 +10062,32 @@ function applyLang() {
 
 async function setCrashReportingEnabled(enabled) {
   try {
-    await fetch(API + '/prefs', {
+    const r = await fetch(API + '/crash-report-pref', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ crash_report_enabled: enabled ? 1 : 0 }),
+      body: JSON.stringify({ enabled: !!enabled }),
     });
-    showAppNotification(enabled ? t('crashReportOn') : t('crashReportOff'),
-                        enabled ? 'ok' : 'info', null, 3000);
+    const j = await r.json();
+    if (!j.ok) throw new Error('Server could not save');
+    // Sync the toggle to what the server actually persisted (in case
+    // the request was clamped or transformed for any reason).
+    const el = document.getElementById('crash-report-toggle');
+    if (el) el.checked = !!j.enabled;
+    showAppNotification(j.enabled ? t('crashReportOn') : t('crashReportOff'),
+                        j.enabled ? 'ok' : 'info', null, 3000);
   } catch (e) {
     showAppNotification('Could not save: ' + e.message, 'err');
+    // Roll back the toggle to the actual persisted state on failure.
+    _hydrateCrashReportToggle();
   }
 }
 
 async function _hydrateCrashReportToggle() {
   try {
-    const r = await fetch(API + '/prefs');
-    const p = await r.json();
+    const r = await fetch(API + '/crash-report-pref');
+    const j = await r.json();
     const el = document.getElementById('crash-report-toggle');
-    if (el) el.checked = !!p.crash_report_enabled;
+    if (el) el.checked = !!j.enabled;
   } catch {}
 }
 

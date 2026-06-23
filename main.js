@@ -12,10 +12,10 @@ function _readCrashReportPref() {
   try {
     const userData = app.getPath('userData');
     const f = path.join(userData, 'privacy.json');
-    if (!fs.existsSync(f)) return false;           // default OFF (opt-in)
+    if (!fs.existsSync(f)) return true;            // default ON (opt-out)
     const j = JSON.parse(fs.readFileSync(f, 'utf8'));
-    return j.crash_report_enabled === true;        // explicit true = on
-  } catch { return false; }
+    return j.crash_report_enabled !== false;       // explicit false = off
+  } catch { return true; }
 }
 const _crashReportEnabled = _readCrashReportPref();
 if (!_crashReportEnabled) process.env.FREQPHULL_NO_CRASH_REPORT = '1';

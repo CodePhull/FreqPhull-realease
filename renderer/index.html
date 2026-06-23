@@ -3413,6 +3413,7 @@ button > .ic:only-child,
           <select id="wmodel" style="flex:1;height:42px;font-size:13px;padding:0 12px"><option value="tiny">Tiny — fastest</option><option value="base" selected>Base — recommended</option><option value="small">Small</option><option value="medium">Medium — best</option></select>
           <select id="wlang" style="flex:1;height:42px;font-size:13px;padding:0 12px"><option value="auto">Auto-detect</option><option value="bi">Bilingual (FR + EN)</option><option value="en">English</option><option value="fr">French</option><option value="es">Spanish</option><option value="pt">Portuguese</option></select>
         </div>
+        <button class="btn pri mt" id="btn-trans-start" onclick="clickTranscribeStart()" disabled style="width:100%;height:44px" data-i18n="transStartBtn">Start transcription</button>
       </div>
       <div class="status" id="trans-status"><div class="dot" id="trans-dot"></div><span id="trans-txt">Drop an audio file above to begin</span><span id="trans-timer" class="trans-timer" style="display:none;margin-left:auto;font-variant-numeric:tabular-nums;color:var(--muted);font-size:12px"></span></div>
       <div class="card hidden" id="trans-card">

@@ -2797,20 +2797,51 @@ app.post('/prefs', (req, res) => {
   for (const [k, v] of Object.entries(body)) {
     if (typeof k === 'string' && k.length < 100) setPref(k, v);
   }
-  // Crash-report toggle: also write a flat file at userData. main.js
-  // reads it before spawning anything else, since DB isn't available
-  // that early.
-  if ('crash_report_enabled' in body) {
-    try {
-      const f = path.join(DATA, 'privacy.json');
-      const cur = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {};
-      cur.crash_report_enabled = body.crash_report_enabled === 1 || body.crash_report_enabled === true;
-      fs.writeFileSync(f, JSON.stringify(cur, null, 2));
-    } catch (e) { slog('privacy.json write failed: ' + e.message); }
-  }
   // Prefs drive the watch-folder daemon — re-evaluate on every change.
   restartStockpileWatcher();
   res.json({ ok: true });
+});
+
+// Crash-report pref lives in privacy.json (read by main.js at startup,
+// before the DB is loaded). The UI hits THIS endpoint, not /prefs, so
+// the toggle state always matches what main.js actually applied.
+// Default ON (opt-out). Going through /prefs caused (a) type confusion
+// since sql.js returns prefs as strings and !!"0" is true, and (b)
+// drift between the DB pref and the file pref.
+function _readCrashPref() {
+  try {
+    const f = path.join(DATA, 'privacy.json');
+    if (!fs.existsSync(f)) return true;            // default ON
+    const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+    return j.crash_report_enabled !== false;       // explicit false = off
+  } catch { return true; }
+}
+function _writeCrashPref(enabled) {
+  const f = path.join(DATA, 'privacy.json');
+  let cur = {};
+  try { if (fs.existsSync(f)) cur = JSON.parse(fs.readFileSync(f, 'utf8')); } catch {}
+  cur.crash_report_enabled = !!enabled;
+  cur.user_set = true;
+  try {
+    if (!fs.existsSync(DATA)) fs.mkdirSync(DATA, { recursive: true });
+    fs.writeFileSync(f, JSON.stringify(cur, null, 2));
+    return true;
+  } catch (e) { slog('privacy.json write failed: ' + e.message); return false; }
+}
+
+app.get('/crash-report-pref', (_, res) => {
+  const f = path.join(DATA, 'privacy.json');
+  let userSet = false;
+  try {
+    if (fs.existsSync(f)) userSet = !!JSON.parse(fs.readFileSync(f, 'utf8')).user_set;
+  } catch {}
+  res.json({ enabled: _readCrashPref(), user_set: userSet });
+});
+
+app.post('/crash-report-pref', (req, res) => {
+  const enabled = !!(req.body && req.body.enabled);
+  const ok = _writeCrashPref(enabled);
+  res.json({ ok, enabled });
 });
 
 // ── Auto-match core (shared by the HTTP endpoint, the watch-folder

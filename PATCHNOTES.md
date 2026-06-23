@@ -4,6 +4,13 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
+## 0.3.9 (2026-06-23)
+
+- Crash-reporting toggle was unreliable: hydrated from `/prefs` which returns sql.js TEXT values as strings, and `!!"0"` is `true` — so toggling off then reopening Settings would show ON. Plus the toggle defaulted to OFF because there was no DB pref to read while the actual state (privacy.json) said ON. Dedicated `/crash-report-pref` GET/POST endpoints now read and write `privacy.json` directly, with clean boolean responses. `user_set` flag distinguishes a default-ON state from an explicit user choice, so the first-run notice only shows when the user really hasn't decided. Toggle now snaps back to the actual persisted state if the save fails.
+- Transcribe no longer auto-starts. Dropping or picking a file now stages it (shows the filename in status) and enables a Start button. User picks model + language, then clicks Start.
+- Removed "powered by Whisper" from the transcribe subtitle. New copy: "Convert audio to text - runs locally, offline."
+- Crash reporting default flipped to ON (opt-out). First-run shows a one-time toast disclosing it; click it to jump to Settings > Privacy and opt out. `localStorage.fph_crash_notice_seen` flag means it only fires once per renderer install.
+
 ## 0.3.8 (2026-06-22)
 
 **Sentry crash reporting (opt-in).**
