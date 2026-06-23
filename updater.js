@@ -40,7 +40,7 @@ function send(channel, payload) {
   if (mainWin && !mainWin.isDestroyed() && mainWin.webContents) {
     try { mainWin.webContents.send(channel, payload); } catch {}
   }
-  // v0.2.8: also forward to the branded updater window if open.
+  // also forward to the branded updater window if open.
   try { bridgeToUpdaterWindow(channel, payload); } catch {}
 }
 
@@ -143,7 +143,7 @@ function setupUpdater(opts) {
     manualCheckInProgress = false;
   });
   autoUpdater.on('error', (err) => {
-    // v0.3.0: benign errors get downgraded to "up to date" so users
+    // benign errors get downgraded to "up to date" so users
     // don't see scary red toasts for things that aren't actionable
     // (missing latest.yml, offline, dev-mode no-releases). Still
     // logged for diagnostics.
@@ -205,7 +205,7 @@ function setupUpdater(opts) {
     // window shows briefly (helpful for users to know what's happening).
     // Set isForceRunAfter=true so app comes back up automatically.
     try {
-      autoUpdater.quitAndInstall(true, true);  // v0.3.2: silent install — NSIS dialog suppressed so our branded HK window is the only visible UI during the update handoff
+      autoUpdater.quitAndInstall(true, true);  // silent install — NSIS dialog suppressed so our branded HK window is the only visible UI during the update handoff
       return { ok: true };
     } catch (e) {
       mainLog('[updater] install failed: ' + e.message);
@@ -245,7 +245,7 @@ function setupUpdater(opts) {
   // info-level (verbose log only) instead of error-level so the logs
   // don't fill up with red flags for a non-problem. Same for the interval
   // check below. All other errors still log as errors.
-  // v0.3.0: classify "benign" updater errors — conditions where there's
+  // classify "benign" updater errors — conditions where there's
   // genuinely no update the user can install, even though electron-updater
   // technically raised an error. Treating these as errors spams users
   // with red toasts that mean nothing actionable. Instead we downgrade
@@ -266,7 +266,7 @@ function setupUpdater(opts) {
   };
   // Backward compat alias (used below at every check site)
   const isNoReleasesError = isBenignUpdaterError;
-  // v0.2.8: boot check fires SOONER (1500ms vs 8s) so users see the
+  // boot check fires SOONER (1500ms vs 8s) so users see the
   // update prompt almost immediately on launch. A 'checking' event is
   // also sent to the renderer for a brief status indicator so it's
   // visible that we're checking — silent boot was confusing users.

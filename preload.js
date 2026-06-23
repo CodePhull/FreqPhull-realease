@@ -22,7 +22,7 @@ contextBridge.exposeInMainWorld('api', {
   // ── Auto-updater bridge ────────────────────────────────────────────────
   // Renderer-side surface for electron-updater. Methods invoke into the
   // main process; events fire callbacks on update lifecycle changes.
-  // v0.2.8: Hardware acceleration toggle + relaunch (separate APIs;
+  // Hardware acceleration toggle + relaunch (separate APIs;
   // not updater methods, just colocated with related concerns).
   bootFlags: {
     get: () => ipcRenderer.invoke('boot-flags:get'),
@@ -43,7 +43,7 @@ contextBridge.exposeInMainWorld('api', {
     // Cached 'update-available' payload from a check that ran before the
     // renderer's listeners attached (or null). See updater.js.
     getPending:  () => ipcRenderer.invoke('updater:getPending'),
-    // v0.2.8: open the branded updater BrowserWindow (the screen with
+    // open the branded updater BrowserWindow (the screen with
     // version cards, EN/FR toggle, what's new, install button).
     openWindow:  () => ipcRenderer.invoke('updater:openWindow'),
     // Event subscriptions. Each returns an unsubscribe function so callers

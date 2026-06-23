@@ -913,10 +913,7 @@ async function processDlQueue() {
 
   es.addEventListener('error', e => {
     es.close();
-    // v0.3.6: parse structured error payload from server. The download
-    // handler now sends {message, hint, code} for known failure modes
-    // (403, sig-broken, video-deleted, etc) so we can show actionable
-    // toasts instead of raw yt-dlp stderr.
+    // Parse {message, hint, code} from the server-side classifier.
     let msg = 'Download failed', hint = '', code = '';
     try {
       const d = JSON.parse(e.data);
@@ -927,10 +924,18 @@ async function processDlQueue() {
 
     dlSt('Error: ' + msg, 'err');
 
-    // If the hint mentions yt-dlp, make the toast clickable to jump to
-    // Settings > Updates section where they can hit "Check now".
+    // Toast jumps to Settings > Updates when the hint involves yt-dlp.
     const isYtdlpRelated = /yt-dlp/i.test(hint || msg);
     const toastMsg = msg.length > 80 ? msg.slice(0, 77) + '...' : msg;
+    // Send the structured payload to Sentry so we can track the
+    // distribution of failure modes across users.
+    if (code === 'download_failed') {
+      try {
+        window.reportSoftError('renderer.download-failed', new Error(msg), {
+          hint, errorCode: code,
+        });
+      } catch {}
+    }
     if (isYtdlpRelated && typeof switchTab === 'function') {
       showAppNotification(toastMsg + ' (click to update yt-dlp)', 'err', () => {
         switchTab('settings');
@@ -1782,7 +1787,7 @@ function applyAnalysisResult(result, histId) {
   // Show engine badge + Camelot + content type
   const histLbl = document.getElementById('hist-lbl');
   if (histLbl) {
-    // v0.3.3: build the badge in pieces (engine label + camelot +
+    // build the badge in pieces (engine label + camelot +
     // optional content type) so each segment is a plain string with
     // zero markup. textContent gets a clean final string.
     const segs = [];
@@ -3693,10 +3698,7 @@ function scheduleNoteSave() {
   noteTimer=setTimeout(async()=>{if(!currentHistId){document.getElementById('notes-saved').textContent='';return;}await fetch(API+'/history/'+currentHistId+'/notes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({notes:document.getElementById('notes-box').value})});document.getElementById('notes-saved').textContent='Saved';},1200);
 }
 function startTranscribe(e){if(e.target.files[0])startTranscribeFile(e.target.files[0]);}
-// v0.3.5: transcribe timer + richer status. The old "Transcribing... this may
-// take a minute" left users staring at a frozen UI for 3-10 minutes on
-// longer files. Show MM:SS elapsed and a phase hint that rotates through
-// what's actually happening (loading model, processing, finalizing).
+// Transcribe progress: MM:SS elapsed + rotating phase hint.
 let _transcribeTimerHandle = null;
 let _transcribeStartedAt = 0;
 function _formatTranscribeElapsed(ms) {
@@ -3724,10 +3726,7 @@ function _stopTranscribeTimer() {
 
 async function startTranscribeFile(file) {
   const model = document.getElementById('wmodel').value;
-  // Realistic time estimate for the status hint, based on Whisper's
-  // approx real-time-factor on CPU: tiny=0.3x, base=0.5x, small=1x,
-  // medium=2x. The file's size is a rough proxy for duration (MP3
-  // ~1 MB/min, WAV ~10 MB/min). This is a HINT, not a promise.
+  // Rough ETA from Whisper's CPU real-time-factor + file size.
   const mbToMin = (file.type && file.type.indexOf('wav') !== -1) ? 0.1 : 1.0;
   const estDurationMin = Math.max(1, (file.size / 1048576) * mbToMin);
   const rtfs = { tiny: 0.3, base: 0.5, small: 1.0, medium: 2.0 };
@@ -3739,9 +3738,7 @@ async function startTranscribeFile(file) {
   document.getElementById('transcript-out').value = '';
   _startTranscribeTimer();
 
-  // Rotate the status text every 15s so users see something happening
-  // even though the backend is single-shot (no live progress events
-  // from Whisper itself — it's all one Python subprocess).
+  // Rotate status every 15s — Whisper has no live progress events.
   const phases = [
     (t('transPhaseLoading')   || 'Loading {model} model into memory...').replace('{model}', model),
     (t('transPhaseListening') || 'Listening for speech segments...'),
@@ -3801,14 +3798,13 @@ function subscribeToServerEvents() {
   _eventsSubscribed = true;
   try {
     const es = new EventSource(API + '/events');
-    // v0.3.3: engines unavailable. The server-side circuit breaker
+    window._es = es;  // exposed so one-shot listeners can attach without opening another connection
+    // engines unavailable. The server-side circuit breaker
     // tripped because Python isn't installed or detectable. Show one
     // friendly notification with a Run-setup CTA instead of users
     // wondering why downloads land without BPM/key forever.
     es.addEventListener('engines-unavailable', (ev) => {
-      // v0.3.3: payload now carries reason + detail
-      //   reason: 'python-missing' | 'deps-missing'
-      //   detail: name of missing module (when deps-missing), else null
+      // payload: { reason: 'python-missing' | 'deps-missing', detail }
       let payload = {};
       try { payload = JSON.parse(ev.data || '{}'); } catch {}
       const sigKey = (payload.reason || 'python-missing') + ':' + (payload.detail || '');
@@ -3834,6 +3830,7 @@ function subscribeToServerEvents() {
         }, 100);
       }, 0);
       refreshEnginesDiagRow();
+  _hydrateCrashReportToggle();
     });
     es.addEventListener('engines-available', () => {
       window._enginesUnavailableShown = false;
@@ -4824,12 +4821,11 @@ async function startFingerprintBackfill() {
     const prog = document.getElementById('dup-backfill-progress');
     if (prog) prog.textContent = `Started — ${j.queued} queued`;
     showAppNotification(`Fingerprint backfill started — ${j.queued} tracks queued`, 'info');
-    // Subscribe to SSE progress events. The /events channel already exists
-    // from patch 15s for history updates.
-    if (window._backfillES) { try { window._backfillES.close(); } catch {} }
-    const es = new EventSource(API + '/events');
-    window._backfillES = es;
-    es.addEventListener('fingerprint-backfill', e => {
+    // Reuse the main /events connection instead of opening a second one.
+    // Two EventSources to the same endpoint means the server broadcasts
+    // every event twice to the same renderer, doubling parse + dispatch
+    // work for nothing.
+    const handler = (e) => {
       try {
         const data = JSON.parse(e.data);
         if (data.state === 'progress' || data.state === 'start') {
@@ -4837,13 +4833,18 @@ async function startFingerprintBackfill() {
         } else if (data.state === 'complete') {
           if (prog) prog.textContent = `Complete — ${data.done}/${data.total}`;
           showAppNotification(`Fingerprint backfill complete — ${data.done} tracks hashed`, 'done');
-          es.close();
-          window._backfillES = null;
-          // Auto-refresh the duplicate finder to show new matches
+          // Detach this listener; one-shot
+          if (window._es) window._es.removeEventListener('fingerprint-backfill', handler);
           setTimeout(() => openDuplicateFinder(), 800);
         }
       } catch {}
-    });
+    };
+    // Detach any previous backfill listener before re-attaching
+    if (window._backfillHandler && window._es) {
+      window._es.removeEventListener('fingerprint-backfill', window._backfillHandler);
+    }
+    window._backfillHandler = handler;
+    if (window._es) window._es.addEventListener('fingerprint-backfill', handler);
   } catch (e) {
     showAppNotification('' + e.message, 'err');
   }
@@ -4904,7 +4905,7 @@ setTimeout(async () => {
   } catch {}
 }, 3000);
 
-// v0.2.5: rAF-coalesced re-render. A playlist of 30 grabs lands as 30
+// rAF-coalesced re-render. A playlist of 30 grabs lands as 30
 // history-changed + 30 bg-analyze SSE events; without this wrapper each
 // one triggered a full _renderHistoryImpl() (innerHTML rewrite of the
 // whole list). Now: any number of requestRenderHistory() calls inside
@@ -4923,7 +4924,7 @@ function requestRenderHistory(){
 // synchronous render can still call _renderHistoryImpl() directly.
 function renderHistory() { requestRenderHistory(); }
 
-// v0.2.9: real Hood Knights gothic HK monogram as the fallback thumb.
+// real Hood Knights gothic HK monogram as the fallback thumb.
 // PNG composite (256x256, dark tile + desaturated brand mark at 45%
 // alpha) encoded as base64 so it lives entirely in the JS bundle —
 // no network request, no file path resolution, decodes once and the
@@ -4998,7 +4999,7 @@ function _renderHistoryImpl(){
     list.innerHTML = '<div class="hist-empty">' + empty + '</div>';
     return;
   }
-  // v0.2.8: row-level DOM reconciliation to eliminate the refresh
+  // row-level DOM reconciliation to eliminate the refresh
   // stutter. Previously list.innerHTML = ... destroyed every row on
   // every render, throwing away decoded image bitmaps and forcing
   // tags to lazy-load all over again. Now we build the row HTML the
@@ -5028,7 +5029,7 @@ function _renderHistoryImpl(){
     // Without the mirror check, history rows never light up because the
     // play-from-history flow goes through the Analyzer, leaving
     // globalPlayer.track null.
-    // v0.2.5: distinguish ACTIVE (track loaded) from PLAYING (audio
+    // distinguish ACTIVE (track loaded) from PLAYING (audio
     // actually advancing). Mirror mode used to drop the row highlight
     // as soon as the user paused — visually you "lost your place" the
     // moment you hit stop. Now the row stays lit while the track is
@@ -6120,7 +6121,7 @@ async function toggleHardwareAcceleration(checked) {
 }
 
 // ── Extension repo link + how-to modal (v0.2.8) ────────────────────
-// v0.2.9: corrected — the extension folder doesn't live on /tree/main.
+// corrected — the extension folder doesn't live on /tree/main.
 // It's published as a .zip on the Releases page (per the repo README).
 // "Open repo" goes to the Releases page so users can download the latest
 // version immediately.
@@ -8676,10 +8677,7 @@ function skipEnginesSetup() {
 let setupPollTimer = null;
 let setupFinished = false; // local flag set on done/error so polling stops
 
-// v0.3.5: protect against double-click on the Run Setup button.
-// Without this, two rapid clicks fire two parallel SSE connections,
-// and the UI can end up in a half-confirmed half-progress state if
-// the second click's state-clear races the first's response.
+// Double-click guard for the Run Setup button.
 let setupStartInFlight = false;
 function startEnginesSetup() {
   if (setupStartInFlight) return;
@@ -8801,12 +8799,16 @@ function startSetupPolling() {
 }
 
 function showSetupError(msg, hint, logTail, logPath) {
+  try {
+    window.reportSoftError('renderer.setup-error-shown', new Error(msg), {
+      hint, hasLogTail: !!logTail,
+    });
+  } catch {}
   document.getElementById('setup-progress').classList.add('hidden');
   document.getElementById('setup-error').classList.remove('hidden');
   document.getElementById('setup-error-msg').textContent = msg;
   document.getElementById('setup-error-hint').textContent = hint || '';
-  // v0.3.4: show the diagnostic log tail if the server sent one.
-  // Hidden by default (<details> collapsed) so the modal stays clean.
+  // Show the log tail if the server attached one.
   const wrap = document.getElementById('setup-error-diag-wrap');
   const pre = document.getElementById('setup-error-diag');
   if (logTail && wrap && pre) {
@@ -8817,8 +8819,7 @@ function showSetupError(msg, hint, logTail, logPath) {
   }
 }
 
-// Copy the diagnostic to clipboard so users can paste it into support
-// chats without taking a screenshot of a 200-line trace.
+// Copy diagnostic to clipboard for support pastes.
 function copySetupDiag() {
   const pre = document.getElementById('setup-error-diag');
   if (!pre) return;
@@ -8893,7 +8894,7 @@ function stepToHuman(step) {
 
 const T = {
   en: {
-    // ── v0.3.3: engines circuit-breaker ──
+    // ── engines circuit-breaker ──
     enginesMissing:'Python engine not detected. Click to set it up — automatic BPM/key analysis is paused until then.',
     enginesDepsMissing:'Engine dependencies missing. Click to run setup again - analysis is paused until then.',
     enginesDiagTitle:'Engines unavailable',
@@ -8901,6 +8902,12 @@ const T = {
     enginesDiagDescGeneric:'Background analysis is paused. Run setup to install Python and the required packages.',
     enginesDiagDescDeps:'Python is installed but a required package failed to install. Re-run setup to retry.',
     enginesDiagRetry:'Re-run setup',
+    settingsSec_privacy:'Privacy',
+    settingsSec_privacyDesc:'Crash reporting toggle',
+    crashReportName:'Crash reporting',
+    crashReportDesc:'Send anonymized crash reports so bugs get fixed faster. Off by default. File paths and YouTube URLs are scrubbed before sending. No audio, no library content, no personal data.',
+    crashReportOn:'Crash reporting enabled. Restart to take effect.',
+    crashReportOff:'Crash reporting disabled. Restart to take effect.',
     transPhaseLoading:'Loading {model} model into memory...',
     transPhaseListening:'Listening for speech segments...',
     transPhaseDecoding:'Decoding with beam search (5 candidates)...',
@@ -8912,7 +8919,7 @@ const T = {
     transStartHint:'Transcribing - {est} (model: {model})',
     enginesReady:'Python engine ready. Background analysis resumed.',
 
-    // ── v0.3.1: Settings sections ──
+    // ── Settings sections ──
     settingsSec_general:'General',
     settingsSec_generalDesc:'Language and library location',
     settingsSec_library:'Library',
@@ -8932,12 +8939,12 @@ const T = {
     settingsSec_about:'About',
     settingsSec_aboutDesc:'Version and credits',
 
-    // ── v0.2.9: row-level Remove (only in select mode now) ──
+    // ── row-level Remove (only in select mode now) ──
     histRemove:'Remove',
 
-    // ── v0.2.8: branded updater window button ──
+    // ── branded updater window button ──
 
-    // ── v0.2.8: hardware acceleration ──
+    // ── hardware acceleration ──
     hwAccelName:'Hardware acceleration',
     hwAccelDesc:"Uses the GPU for rendering, animations, and the analyzer canvases. Recommended ON for most users. Turn OFF only if you see graphical glitches, white flashes, or your laptop's fan ramps up just from idle scrolling - some integrated GPUs handle Electron poorly. Requires an app restart to take effect.",
     hwAccelUnavailable:'Hardware acceleration toggle unavailable on this build',
@@ -8947,7 +8954,7 @@ const T = {
     hwAccelRestartBody:'This setting only takes effect after restarting Freq.Phull. Restart now?',
     hwAccelRestartNow:'Restart now',
     hwAccelRestartLater:'Restart later',
-    // ── v0.2.8: extension link + how-to ──
+    // ── extension link + how-to ──
     extLinkName:'Browser extension',
     extLinkDesc:'A Chrome extension that adds a Grab button to YouTube so you can pull beats straight into Freq.Phull. Updated independently from the main app via the same GitHub repo.',
     extLinkOpen:'Open page',
@@ -9352,7 +9359,7 @@ const T = {
     close:'Close', by:'by', save:'Save', delete:'Delete',
   },
   fr: {
-    // ── v0.3.3: disjoncteur moteur Python ──
+    // ── disjoncteur moteur Python ──
     enginesMissing:"Moteur Python introuvable. Cliquez pour le configurer — l'analyse automatique BPM/cle est en pause.",
     enginesDepsMissing:"Dependances du moteur manquantes. Cliquez pour relancer la configuration - l'analyse est en pause.",
     enginesDiagTitle:'Moteurs indisponibles',
@@ -9360,6 +9367,12 @@ const T = {
     enginesDiagDescGeneric:"L'analyse en arriere-plan est en pause. Lancez la configuration pour installer Python et les paquets requis.",
     enginesDiagDescDeps:"Python est installe mais un paquet requis n'a pas pu etre installe. Relancez la configuration pour reessayer.",
     enginesDiagRetry:'Relancer la configuration',
+    settingsSec_privacy:'Confidentialite',
+    settingsSec_privacyDesc:'Rapports d\'erreurs',
+    crashReportName:'Rapports d\'erreurs',
+    crashReportDesc:'Envoyez des rapports anonymes pour aider a corriger les bugs. Desactive par defaut. Les chemins de fichiers et URL YouTube sont anonymises avant envoi. Aucun audio, aucune bibliotheque, aucune donnee personnelle.',
+    crashReportOn:'Rapports d\'erreurs actives. Redemarrer pour prendre effet.',
+    crashReportOff:'Rapports d\'erreurs desactives. Redemarrer pour prendre effet.',
     transPhaseLoading:'Chargement du modele {model}...',
     transPhaseListening:'Detection des segments de parole...',
     transPhaseDecoding:'Decodage par exploration (5 candidats)...',
@@ -9371,7 +9384,7 @@ const T = {
     transStartHint:'Transcription - {est} (modele: {model})',
     enginesReady:"Moteur Python pret. L'analyse en arriere-plan a repris.",
 
-    // ── v0.3.1: Sections de parametres ──
+    // ── Sections de parametres ──
     settingsSec_general:'General',
     settingsSec_generalDesc:'Langue et emplacement de la bibliotheque',
     settingsSec_library:'Bibliotheque',
@@ -9391,12 +9404,12 @@ const T = {
     settingsSec_about:'A propos',
     settingsSec_aboutDesc:'Version et credits',
 
-    // ── v0.2.9: Bouton Supprimer par ligne (mode selection uniquement) ──
+    // ── Bouton Supprimer par ligne (mode selection uniquement) ──
     histRemove:'Supprimer',
 
-    // ── v0.2.8: bouton fenetre de mise a jour ──
+    // ── bouton fenetre de mise a jour ──
 
-    // ── v0.2.8: acceleration materielle ──
+    // ── acceleration materielle ──
     hwAccelName:'Acceleration materielle',
     hwAccelDesc:"Utilise le GPU pour le rendu, les animations et les canvas de l'analyseur. Recommande ACTIVE pour la plupart des utilisateurs. Desactivez uniquement si vous voyez des artefacts graphiques, des flashs blancs, ou si le ventilateur de votre ordinateur s'emballe juste en faisant defiler la page - certains GPU integres gerent mal Electron. Un redemarrage de l'application est requis.",
     hwAccelUnavailable:"Le toggle d'acceleration materielle est indisponible sur cette version",
@@ -9406,7 +9419,7 @@ const T = {
     hwAccelRestartBody:'Ce parametre ne prendra effet qu\'apres avoir redemarre Freq.Phull. Redemarrer maintenant ?',
     hwAccelRestartNow:'Redemarrer maintenant',
     hwAccelRestartLater:'Redemarrer plus tard',
-    // ── v0.2.8: lien extension + tutoriel ──
+    // ── lien extension + tutoriel ──
     extLinkName:'Extension de navigateur',
     extLinkDesc:'Une extension Chrome qui ajoute un bouton Grab sur YouTube pour envoyer les beats directement vers Freq.Phull. Mise a jour independamment de l\'app principale via le meme depot GitHub.',
     extLinkOpen:'Ouvrir la page',
@@ -9980,10 +9993,32 @@ function applyLang() {
 }
 
 // ── Settings page ─────────────────────────────────────────────────────────────
+
+async function setCrashReportingEnabled(enabled) {
+  try {
+    await fetch(API + '/prefs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ crash_report_enabled: enabled ? 1 : 0 }),
+    });
+    showAppNotification(enabled ? t('crashReportOn') : t('crashReportOff'),
+                        enabled ? 'ok' : 'info', null, 3000);
+  } catch (e) {
+    showAppNotification('Could not save: ' + e.message, 'err');
+  }
+}
+
+async function _hydrateCrashReportToggle() {
+  try {
+    const r = await fetch(API + '/prefs');
+    const p = await r.json();
+    const el = document.getElementById('crash-report-toggle');
+    if (el) el.checked = !!p.crash_report_enabled;
+  } catch {}
+}
+
 function refreshEnginesDiagRow() {
-  // v0.3.3: show/hide the diagnostic strip + update its message based on
-  // the current breaker state. Pulled from /bg-analyze/status which now
-  // returns breaker_tripped + breaker_reason + breaker_detail.
+  // Drive the diagnostic strip from /bg-analyze/status.
   const row = document.getElementById('engines-diag-row');
   if (!row) return;
   fetch(API + '/bg-analyze/status').then(r => r.json()).then(st => {
@@ -10264,6 +10299,23 @@ function renderSettings() {
               </div>
               <button class="btn sm" onclick="viewLogs()">${t('logsName')}</button>
             </div>
+      </div></div>
+    </div>
+    <div class="settings-section" data-section="privacy">
+      <button class="settings-section-header" type="button" onclick="toggleSettingsSection('privacy')" aria-expanded="true" aria-controls="settings-body-privacy">
+        <span class="settings-section-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 4 5v7c0 5 3.5 9 8 10 4.5-1 8-5 8-10V5z"/></svg></span>
+        <span class="settings-section-title">${t('settingsSec_privacy')}</span>
+        <span class="settings-section-count">${t('settingsSec_privacyDesc')}</span>
+        <svg class="settings-section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+      <div class="settings-section-body" id="settings-body-privacy"><div class="settings-section-body-inner">
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-name">${t('crashReportName')}</div>
+            <div class="setting-desc">${t('crashReportDesc')}</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="crash-report-toggle" onchange="setCrashReportingEnabled(this.checked)"/><span class="slider"></span></label>
+        </div>
       </div></div>
     </div>
     <div class="settings-section" data-section="about">
@@ -10649,7 +10701,7 @@ async function manualCheckForUpdates() {
   const desc = document.getElementById('update-check-desc');
   const origDesc = desc ? desc.textContent : '';
   if (btn) { btn.disabled = true; btn.innerHTML = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> ' + t('checkingBtn'); }
-  // v0.3.0: known-benign updater errors get treated as "up to date"
+  // known-benign updater errors get treated as "up to date"
   // here too — match what updater.js does on the main side. Without
   // this, the user clicked "Check now" and saw a red error toast even
   // for non-problems (missing latest.yml, offline, etc.).
@@ -11980,11 +12032,11 @@ function updatePrevNextButtons() {
   if (nextBtn) nextBtn.disabled = !hasList || ctx.index >= ctx.tracks.length - 1;
 }
 
-// v0.2.5: scroll the currently-active history row into view so
+// scroll the currently-active history row into view so
 // pressing ←/→ for prev/next never strands the user looking at the
 // wrong list location. No-op if no matching row is visible (we're
 // on a different tab) or if the row is already in view.
-// v0.2.6: respect the mini player's scroll-lock toggle. When the user
+// respect the mini player's scroll-lock toggle. When the user
 // turns it OFF, they're explicitly opting to keep browsing History
 // while skipping tracks in the background — don't yank the scroll.
 function scrollLockEnabled() {
@@ -12712,7 +12764,7 @@ window.addEventListener('keydown', (e) => {
       updateMiniPlayerTime();
     }
   } else if (e.code === 'ArrowLeft' && !e.altKey && !e.shiftKey) {
-    // ← jumps to previous track (v0.2.4: was Ctrl+← only; promoted to
+    // ← jumps to previous track (was Ctrl+← only; promoted to
     // bare ← because that's what users actually expect from a media
     // player. Alt+← still seeks back 5s — handled above.)
     e.preventDefault();
@@ -13269,7 +13321,7 @@ function _setupUpdater() {
     }
   });
 
-  // v0.2.8: surface the boot check so users see it happen instead of
+  // surface the boot check so users see it happen instead of
   // a silent network call. The toast auto-dismisses; users don't have
   // to interact, they just get confirmation that we checked.
   let _bootCheckToastShown = false;
@@ -13413,7 +13465,7 @@ async function onUpdateBannerPrimary() {
       _renderUpdateBanner();
     }
   } else if (_updateState === 'READY') {
-    // v0.3.0: branded install handoff. Instead of calling install()
+    // branded install handoff. Instead of calling install()
     // directly (which would surrender the screen to NSIS), we open
     // the HK updater window in INSTALLING state first. It shows a
     // full-screen branded "installing update X.X.X..." overlay with
@@ -13429,7 +13481,7 @@ async function onUpdateBannerPrimary() {
         // Tiny delay so the window is ready-to-show before we tell
         // electron-updater to quit + install. Without this beat, the
         // app sometimes quits before the BrowserWindow has rendered.
-        // v0.3.2: longer beat so the branded INSTALLING UPDATE screen
+        // longer beat so the branded INSTALLING UPDATE screen
         // is fully rendered (hero title + pulse animation visible)
         // before the app actually quits. With silent NSIS the user
         // sees HK branding from click through to relaunch.
@@ -13461,11 +13513,11 @@ function onUpdateBannerLater() {
 // live in that one place. Also: a body-level mousedown handler below
 // drops focus from stuck input fields so Space/arrows work after the
 // very first click outside the URL field.)
-// v0.2.7: tiny mousedown handler that records where on a primary button
+// tiny mousedown handler that records where on a primary button
 // the user clicked, so the ::before ripple in CSS originates there
 // instead of the geometric center. Composite-only — no DOM injection.
 (function installPrimaryButtonRipple(){
-  // v0.2.7: passive=true tells the browser we won't preventDefault,
+  // passive=true tells the browser we won't preventDefault,
   // so it can dispatch this on the compositor thread without waiting
   // for us. Free perf win.
   document.addEventListener('mousedown', (e) => {
@@ -13477,7 +13529,7 @@ function onUpdateBannerLater() {
   }, { capture: true, passive: true });
 })();
 
-// v0.3.1: Settings sections — collapsible categories. Persisted state
+// Settings sections — collapsible categories. Persisted state
 // in localStorage so user choices survive across sessions. Defaults are
 // opinionated: "general", "library", "maintenance", "updates" open;
 // the rest collapsed so the page isn't overwhelming on first load.
@@ -13517,13 +13569,43 @@ function toggleSettingsSection(id) {
   _saveSettingsSectionState(state);
 }
 
-// ─── v0.3.3 SVG-in-textContent guard ─────────────────────────────
-// During the emoji->SVG sweep we had several sites where an SVG string
-// got assigned via .textContent (so it rendered as literal markup in
-// the page instead of as an icon). This guard wraps textContent for
-// every Node so any future regression gets caught instantly: a
-// console.warn with stack trace, and the raw markup is silently stripped
-// to a safe text fallback. Runs once at module load, idempotent.
+// Sentry. The main process initialized @sentry/electron/main which
+// auto-installs the renderer side via IPC. Expose a small soft-error
+// reporter (window.reportSoftError) so renderer-side failure handlers
+// can flag interesting bugs the user sees but never crash on.
+(function _initRendererSentry() {
+  let Sentry = null;
+  try { Sentry = require('@sentry/electron/renderer'); }
+  catch { return; /* package not installed */ }
+  // Renderer-side rate limit (same constants as the Node helper).
+  const RATE_MAX = 10, RATE_WINDOW_MS = 60 * 60 * 1000;
+  const rateLimits = new Map();
+  window.reportSoftError = function (category, error, context) {
+    if (!Sentry || !Sentry.captureException) return;
+    const now = Date.now();
+    const arr = (rateLimits.get(category) || []).filter((t) => now - t < RATE_WINDOW_MS);
+    if (arr.length >= RATE_MAX) { rateLimits.set(category, arr); return; }
+    arr.push(now); rateLimits.set(category, arr);
+    try {
+      Sentry.withScope((scope) => {
+        scope.setLevel('warning');
+        scope.setTag('category', category);
+        if (context) for (const [k, v] of Object.entries(context)) {
+          try { scope.setExtra(k, v); } catch {}
+        }
+        if (error instanceof Error) Sentry.captureException(error);
+        else Sentry.captureMessage(String(error), 'warning');
+      });
+    } catch { /* swallow */ }
+  };
+})();
+// Stub so call sites work even when Sentry isn't loaded.
+if (typeof window.reportSoftError !== 'function') {
+  window.reportSoftError = function () {};
+}
+
+// Guard against SVG markup leaking into textContent assignments.
+// Strips tags + warns with stack trace so the next regression is obvious.
 (function installTextContentGuard(){
   try {
     const desc = Object.getOwnPropertyDescriptor(Node.prototype, 'textContent');
@@ -13553,7 +13635,7 @@ function toggleSettingsSection(id) {
   }
 })();
 
-// v0.3.0: Back-to-top floating button. Observes scroll on #main and
+// Back-to-top floating button. Observes scroll on #main and
 // toggles a .show class past 400px. Click smooth-scrolls to top.
 // Reduced-motion users get an instant jump.
 (function installBackToTopButton(){

@@ -1,6 +1,6 @@
 {
   "name": "freqphull",
-  "version": "0.3.6",
+  "version": "0.3.8",
   "description": "Freq.Phull",
   "main": "main.js",
   "scripts": {
@@ -128,5 +128,9 @@
     ],
     "electronVersion": "28.3.3"
   },
-  "author": "Cynphull"
+  "author": "Cynphull",
+  "optionalDependencies": {
+    "@sentry/electron": "^5.6.0",
+    "@sentry/node": "^7.119.0"
+  }
 }

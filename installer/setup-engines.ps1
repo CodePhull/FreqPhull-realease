@@ -1,14 +1,12 @@
-# Freq.Phull -- Engines Setup
-# Installs the Freq.Phull engine runtime stack and pre-downloads
-# all model weights so the user never sees a "downloading model..." wait at runtime.
-#
-# Emits one JSON line per status update on stdout for the Electron app to parse.
-# Errors are logged to %TEMP%\freqphull-setup.log AND emitted as JSON.
+# Freq.Phull engines setup.
+# Installs Python, audio packages, and Whisper/Demucs models.
+# Emits one JSON line per status update on stdout; full log goes
+# to %TEMP%\freqphull-setup.log.
 
 $ErrorActionPreference = "Continue"
 $logFile = "$env:TEMP\freqphull-setup.log"
 
-# Reset log file each run so users don't see ancient errors
+# Fresh log per run.
 if (Test-Path $logFile) { Remove-Item $logFile -Force -ErrorAction SilentlyContinue }
 
 # ============================================================================
@@ -38,10 +36,8 @@ function EmitStatus($step, $progress, $msg, $detail = "") {
 }
 
 function EmitError($message, $hint = "") {
-    # v0.3.4: include the last 40 lines of the local log file in the
-    # error payload so we can diagnose pip failures, network blocks,
-    # missing VC++ redist, etc. Without this we are blind to anything
-    # that did not trip a specific check in the script.
+    # Attach the log tail so the renderer + server can show what
+    # actually failed (pip output, etc).
     $logTail = ""
     try {
         if (Test-Path $logFile) {
@@ -62,19 +58,16 @@ Log "=== Freq.Phull Engines Setup ==="
 Log "PSVersion: $($PSVersionTable.PSVersion)"
 Log "OS: $([System.Environment]::OSVersion.VersionString)"
 
-# Wrap everything in a try block so any unexpected error becomes a clean JSON message
+# Top-level guard: any unhandled error becomes a JSON event.
 try {
 
 # ============================================================================
 # Step 0: Pre-flight environment checks
 # ============================================================================
-# These run BEFORE anything that takes time so we fail fast with actionable
-# messages instead of crashing 10 minutes into a pip install. Every one of
-# these was added in response to a specific class of "setup failed mid-way"
-# report from users on fresh machines.
+# Fail fast with actionable errors before any long-running step.
 EmitStatus "preflight" 1 "Checking system requirements..."
 
-# OS version: PyTorch 2.x wheels need Windows 10+. Windows 7/8 will silently
+# PyTorch 2.x wheels require Windows 10+. Older OS will
 # fail at C extension load time with cryptic errors. Refuse upfront.
 try {
     $osVer = [System.Environment]::OSVersion.Version
@@ -494,11 +487,7 @@ function Invoke-Py {
     & $pythonCmd $allArgs
 }
 
-# v0.3.4: pip-install with automatic --no-cache-dir retry.
-# Most "pip succeeded once, broken now" failures come from a stale
-# or corrupt wheel in ~/.cache/pip. If the first install fails for
-# ANY reason, retry once bypassing the cache. Catches the issue
-# automatically instead of asking the user to know about it.
+# pip install with a --no-cache-dir retry on failure.
 function Invoke-PipInstall {
     param(
         [string[]] $Packages,
@@ -533,22 +522,12 @@ try {
 # ============================================================================
 # Step 2.5: Install core numerical stack (numpy + scipy)
 # ============================================================================
-# These are pulled in as deps of torch later, but installing them up front
-# means:
-#   * If they fail (e.g. user is offline at startup), we see a small clear
-#     error within 30 seconds instead of a cryptic torch-related one
-#     after a 200 MB download.
-#   * If the user already has numpy/scipy installed system-wide, pip skips
-#     them - no harm done.
-#   * The bg-analyze worker's analyze.py only needs numpy/scipy/scikit-learn;
-#     even if torch later fails, analysis still works for users who don't
-#     use stems.
+# Pulled in transitively by torch, but install up front so an
+# unreachable pypi or missing VC++ runtime fails fast instead of
+# breaking partway through the torch download.
 EmitStatus "installing_numerical" 20 "Installing numpy + scipy (audio analysis core)..."
 try {
-    # v0.3.4: use Invoke-PipInstall so a corrupt pip cache (a SILENT
-    # failure mode for users who ran a broken Python setup earlier)
-    # gets auto-retried with --no-cache-dir. We never have to ask
-    # users to know about pip cache poisoning.
+    # Routes through Invoke-PipInstall so cache-poisoning retries.
     $okNumerical = Invoke-PipInstall `
         -Packages @("numpy>=1.24,<2.1", "scipy>=1.10", "scikit-learn>=1.3", "soundfile>=0.12") `
         -Label "numerical" `
@@ -1105,16 +1084,11 @@ $markerJson = $markerData | ConvertTo-Json
 # Write WITHOUT BOM. Out-File -Encoding utf8 emits BOM on PowerShell 5.1, which
 # breaks Node's JSON.parse. Use .NET's UTF8Encoding($false) instead.
 $markerFile = Join-Path $markerDir "engines-ready.json"
-# v0.3.4: ATOMIC write. Without this, a process kill mid-write
-# leaves engines-ready.json as a partial fragment that fails
-# JSON.parse on the server side -> user is told setup "failed"
-# when it actually finished. Write to .tmp then atomic rename.
+# Atomic write via .tmp + rename. A kill mid-WriteAllText
+# leaves a partial JSON, which fails on the server side.
 $markerTmp = "$markerFile.tmp"
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
 [System.IO.File]::WriteAllText($markerTmp, $markerJson, $utf8NoBom)
-# Move-Item -Force is atomic on Windows when both paths are on the
-# same volume (replace target if exists; readers see either old or
-# new, never partial).
 Move-Item -Path $markerTmp -Destination $markerFile -Force
 
 EmitDone

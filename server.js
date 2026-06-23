@@ -8,6 +8,15 @@ const multer    = require('multer');
 
 const PORT = process.env.PORT || 47891;
 const RES  = process.env.RESOURCES_PATH || __dirname;
+
+// Sentry. Opt-in only — no DSN means no init.
+let _serverVersion = '0.0.0';
+try { _serverVersion = require('./package.json').version || '0.0.0'; } catch {}
+const sentry = require('./sentry-init.js');
+sentry.init('node', _serverVersion, {
+  userOptOut: process.env.FREQPHULL_NO_CRASH_REPORT === '1',
+});
+const report = (category, err, ctx) => sentry.reportSoftError('node', category, err, ctx);
 const DATA = process.env.USER_DATA || path.join(os.homedir(), '.freqphull');
 
 // ── Server-side log ───────────────────────────────────────────────────────────
@@ -40,21 +49,48 @@ function _safeWrite(stream, line) {
     // durable record. Never re-throw from inside the logger.
   }
 }
+// Logger: cache the dir-exists check, buffer writes, flush on a
+// short interval. fs.appendFileSync on every line is fine for a few
+// dozen log entries per session but adds up across thousands.
+let _logBuf = '';
+let _logFlushTimer = null;
+let _logDirEnsured = false;
+
+function _ensureLogDir() {
+  if (_logDirEnsured) return;
+  try { if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true }); }
+  catch {}
+  _logDirEnsured = true;
+}
+
+function _flushLog() {
+  if (!_logBuf) return;
+  const out = _logBuf;
+  _logBuf = '';
+  if (_logFlushTimer) { clearTimeout(_logFlushTimer); _logFlushTimer = null; }
+  _ensureLogDir();
+  try { fs.appendFileSync(logPath, out); } catch {}
+}
+
 function slog(msg) {
   let line;
   try {
     line = '[' + new Date().toISOString() + '] [server] ' + msg;
   } catch {
-    // Defensive: even building the line shouldn't throw, but if it
-    // does (e.g. msg is a circular object), don't propagate.
     line = '[' + new Date().toISOString() + '] [server] <unprintable log message>';
   }
   if (!_stdoutDead) _safeWrite(process.stdout, line);
-  try {
-    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-    fs.appendFileSync(logPath, line + '\n');
-  } catch {}
+  _logBuf += line + '\n';
+  if (!_logFlushTimer) {
+    _logFlushTimer = setTimeout(() => { _logFlushTimer = null; _flushLog(); }, 200);
+  }
 }
+
+// Force-flush in every exit path so we never lose diagnostics.
+process.on('beforeExit', _flushLog);
+process.on('SIGTERM', _flushLog);
+process.on('SIGINT', _flushLog);
+process.on('uncaughtException', (e) => { _flushLog(); throw e; });
 
 // Also catch EPIPE on stdout/stderr at the stream level - some Node
 // versions emit 'error' on the stream before the synchronous write
@@ -114,7 +150,7 @@ async function initDB() {
     slog('sql.js loaded, initializing...');
     const sqlJs = await initSqlJs();
     slog('sql.js initialized');
-    // v0.3.3: corruption-resilient open. If the SQLite file is malformed,
+    // corruption-resilient open. If the SQLite file is malformed,
     // backup the bad bytes for forensics and create a fresh empty DB.
     // Better to lose history once than to fail-to-start forever.
     if (fs.existsSync(DB_PATH)) {
@@ -253,10 +289,36 @@ async function initDB() {
   }
 }
 
+// Debounced DB persistence. sql.js holds the database in memory; every
+// `db.export()` serializes the whole blob, every fs.writeFileSync flushes
+// it to disk synchronously. With dbRun calling saveDB on every insert,
+// a 5000-row library writes 5+ MB per history change. Coalesce.
+let _dbSaveTimer = null;
+let _dbSavePending = false;
+const DB_SAVE_DEBOUNCE_MS = 500;
+
+function _flushDB() {
+  if (!db) return;
+  _dbSavePending = false;
+  if (_dbSaveTimer) { clearTimeout(_dbSaveTimer); _dbSaveTimer = null; }
+  try { fs.writeFileSync(DB_PATH, Buffer.from(db.export())); }
+  catch (e) { slog('DB save error: ' + e.message); }
+}
+
 function saveDB() {
   if (!db) return;
-  try { fs.writeFileSync(DB_PATH, Buffer.from(db.export())); } catch(e) { slog('DB save error: ' + e.message); }
+  _dbSavePending = true;
+  if (_dbSaveTimer) return;  // already scheduled
+  _dbSaveTimer = setTimeout(() => {
+    _dbSaveTimer = null;
+    if (_dbSavePending) _flushDB();
+  }, DB_SAVE_DEBOUNCE_MS);
 }
+
+// Force-flush on process exit so we never lose data in flight.
+process.on('beforeExit', () => { if (_dbSavePending) _flushDB(); });
+process.on('SIGTERM',    () => { if (_dbSavePending) _flushDB(); });
+process.on('SIGINT',     () => { if (_dbSavePending) _flushDB(); });
 
 function dbAll(sql, params = []) {
   if (!db) return [];
@@ -515,7 +577,7 @@ repairMarkerOnce();
 let _cachedPythonCmd = null;
 let _cachedPythonCheckedAt = 0;
 
-// v0.3.3: robust Python discovery. The old version returned a bare
+// robust Python discovery. The old version returned a bare
 // 'python' as fallback, which on most Windows machines resolves to
 // the Microsoft Store ALIAS — a fake python.exe at
 // %LOCALAPPDATA%\\Microsoft\\WindowsApps\\python.exe that prints
@@ -669,40 +731,23 @@ function getPythonCmd() {
   return cmd || (process.platform === 'win32' ? 'python' : 'python3');
 }
 
-// v0.3.3: callable from /engines/setup so the freshly-installed Python
+// callable from /engines/setup so the freshly-installed Python
 // is detected immediately without waiting for the 60s cache to expire.
 function clearPythonCache() {
   _cachedPythonCmd = null;
   _cachedPythonCheckedAt = 0;
 }
 
-// ════════════════════════════════════════════════════════════════════
-// v0.3.3 engines-broken circuit breaker
-// ════════════════════════════════════════════════════════════════════
-// The bg-analyze worker re-fires on every download/ingest event. If
-// engines are broken, that re-triggers a failing spawn — 3 retries per
-// track, indefinitely, filling logs with the same error. The breaker
-// short-circuits that loop and tells the renderer to surface a CTA
-// instead of leaving the user wondering why downloads land with no
-// BPM/key forever.
-//
-// Trip conditions (any of these):
-//   1. Exit code 9009 (Windows ERROR_BAD_COMMAND — Python alias / not found)
-//   2. Stderr contains "Python was not found" or "Microsoft Store" (alias trap)
-//   3. Exit code 1 with stderr containing "ModuleNotFoundError" or
-//      "ImportError" — Python exists but its environment is incomplete
-//
-// Reset: /engines/setup exit 0 (setup succeeded), or app restart.
-// Each variant has a distinct "reason" the renderer can use to show
-// the right message: "python-missing" vs "deps-missing".
+// Engines-broken breaker. Bg-analyze re-fires on every download so we
+// need a way to stop respawning failing Python. Trips on exit 9009 /
+// MS Store alias, or ModuleNotFoundError / ImportError. Reset on a
+// successful setup-engines run.
 
 let _enginesBrokenBreaker = false;
 let _enginesBrokenReason = null;     // 'python-missing' | 'deps-missing' | null
 let _enginesBrokenDetail = null;     // first failing module name, if known
 
-// Backward-compat alias. Old code reads/writes _pythonMissingBreaker;
-// keep the symbol so older call sites don't break. Both names update
-// in lockstep.
+// Legacy alias for older call sites.
 let _pythonMissingBreaker = false;
 
 function tripEnginesBrokenBreaker(reason, detail) {
@@ -735,7 +780,7 @@ function resetEnginesBrokenBreaker() {
   clearPythonCache();
   slog('ENGINES BREAKER RESET: bg-analyze / transcribe / stems re-enabled.');
   try { broadcastEvent('engines-available', {}); } catch {}
-  // v0.3.4: kick the worker to drain tracks that queued up during the
+  // kick the worker to drain tracks that queued up during the
   // outage. Safe because nudgeAnalysisWorker is itself idempotent and
   // skipped while setupRunning.
   try { nudgeAnalysisWorker(); } catch {}
@@ -1155,7 +1200,7 @@ app.get('/download', async (req, res) => {
 
   sse('status', { message: 'Starting download…' });
 
-  // v0.3.6: auto-retry on YouTube 403 with the Android client. YouTube's
+  // auto-retry on YouTube 403 with the Android client. YouTube's
   // web player signature scheme breaks every few weeks; the Android
   // client uses a different one that's much more durable. ~80% of "403
   // Forbidden" errors clear on retry with player_client=android.
@@ -1210,7 +1255,7 @@ app.get('/download', async (req, res) => {
   p.on('close', async code => {
     slog('yt-dlp exit code: ' + code);
     if (code !== 0) {
-      // v0.3.6: classify the failure and decide whether to retry.
+      // classify the failure and decide whether to retry.
       const errLower = (stderr || '').toLowerCase();
       const is403 = /http error 403|forbidden/i.test(stderr);
       const isSigBroken = /signature extraction|player.*returned|nsig extraction|requested format/i.test(errLower);
@@ -1259,6 +1304,16 @@ app.get('/download', async (req, res) => {
         hint = null;
       }
       sse('error', { message: msg, hint, code: 'download_failed', raw: stderr.trim().slice(-500) });
+      // Only report categories that suggest action: signature breaks
+      // are interesting (means yt-dlp needs an update), 403s after
+      // retry are interesting. Geo/age/private aren't actionable.
+      if (is403 || isSigBroken) {
+        report('ytdlp.' + (isSigBroken ? 'signature-broken' : 'forbidden'),
+          new Error(msg), {
+            retryAttempted,
+            stderrTail: stderr.trim().slice(-500),
+          });
+      }
       return res.end();
     }
 
@@ -2715,7 +2770,7 @@ function setPref(key, value) {
   saveDB();
 }
 
-// v0.2.5: debounced batch save. Hot loops (auto-organize, adopt-orphans,
+// debounced batch save. Hot loops (auto-organize, adopt-orphans,
 // fingerprint backfill) used to call saveDB() once per row — 479 disk
 // writes for an orphan import. Now they call requestDeferredSave()
 // instead and a single flush happens 500ms after the last call. Reduces
@@ -2741,6 +2796,17 @@ app.post('/prefs', (req, res) => {
   const body = req.body || {};
   for (const [k, v] of Object.entries(body)) {
     if (typeof k === 'string' && k.length < 100) setPref(k, v);
+  }
+  // Crash-report toggle: also write a flat file at userData. main.js
+  // reads it before spawning anything else, since DB isn't available
+  // that early.
+  if ('crash_report_enabled' in body) {
+    try {
+      const f = path.join(DATA, 'privacy.json');
+      const cur = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {};
+      cur.crash_report_enabled = body.crash_report_enabled === 1 || body.crash_report_enabled === true;
+      fs.writeFileSync(f, JSON.stringify(cur, null, 2));
+    } catch (e) { slog('privacy.json write failed: ' + e.message); }
   }
   // Prefs drive the watch-folder daemon — re-evaluate on every change.
   restartStockpileWatcher();
@@ -3828,13 +3894,19 @@ function analyzeOneInBackground(row) {
           try { fs.unlinkSync(wavTmp); } catch (e) {}
           if (code !== 0) {
             slog('bg-analyze id=' + row.id + ' python exit=' + code + ': ' + stderr.slice(0, 200));
-            // v0.3.3: classify the failure and trip the breaker if it's
+            // classify the failure and trip the breaker if it's
             // a "no point retrying" condition (Python missing, MS Store
             // alias, or missing pip packages). Stops the spawn-fail loop
             // and tells the renderer to surface a setup CTA.
             const cls = classifyEngineFailure(code, stderr);
             if (cls.trip) {
               tripEnginesBrokenBreaker(cls.reason, cls.detail);
+            } else {
+              // Genuine Python crash with engines installed — track it.
+              report('bg-analyze.python-crash', new Error('analyze.py exit ' + code), {
+                historyId: row.id,
+                stderr: (stderr || '').slice(0, 800),
+              });
             }
             analyzeWorker.failed.set(row.id, (analyzeWorker.failed.get(row.id) || 0) + 1);
             return resolve(false);
@@ -3876,6 +3948,10 @@ function analyzeOneInBackground(row) {
             resolve(true);
           } catch (e) {
             slog('bg-analyze id=' + row.id + ' parse error: ' + e.message);
+            report('bg-analyze.parse-failure', e, {
+              historyId: row.id,
+              stdout: (stdout || '').slice(0, 800),
+            });
             analyzeWorker.failed.set(row.id, (analyzeWorker.failed.get(row.id) || 0) + 1);
             resolve(false);
           }
@@ -3884,6 +3960,7 @@ function analyzeOneInBackground(row) {
       .catch(function(e){
         if (safe.tempCopy) { try { fs.unlinkSync(safe.tempCopy); } catch (e2) {} }
         slog('bg-analyze id=' + row.id + ' ffmpeg failed: ' + e.message);
+        report('bg-analyze.ffmpeg-failure', e, { historyId: row.id });
         try { fs.unlinkSync(wavTmp); } catch (e2) {}
         analyzeWorker.failed.set(row.id, (analyzeWorker.failed.get(row.id) || 0) + 1);
         resolve(false);
@@ -3915,10 +3992,10 @@ async function analysisWorkerLoop() {
 // Debounced wake-up. A playlist of 30 grabs lands as 30 download-done
 // events; we want ONE worker startup that drains all 30 serially.
 function nudgeAnalysisWorker() {
-  // v0.3.3: short-circuit when engines are known-broken so we don't
+  // short-circuit when engines are known-broken so we don't
   // burn cycles spawning failing Python over and over.
   if (_enginesBrokenBreaker) return;
-  // v0.3.4: also pause during in-progress engine setup. Without this,
+  // also pause during in-progress engine setup. Without this,
   // a download that arrives during the 4-min setup spawns analyze.py,
   // which fails with ModuleNotFoundError, which trips the breaker, which
   // shows a confusing "engines missing" toast WHILE setup is making
@@ -4628,7 +4705,7 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
   const inputPath = req.file.path, model = req.body.model || 'base', lang = req.body.language || 'auto';
   slog('Transcribe: model=' + model + ' lang=' + lang);
   const cleanup = () => { try { fs.unlinkSync(inputPath); } catch {} };
-  // v0.3.3: skip the spawn entirely if the engines breaker is tripped.
+  // skip the spawn entirely if the engines breaker is tripped.
   // Different hint based on what's actually broken (Python missing vs
   // dependencies missing) so the user knows what action to take.
   if (_enginesBrokenBreaker) {
@@ -4646,7 +4723,7 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
     });
   }
   try {
-    // v0.3.5: language handling — 'auto' lets Whisper detect, but for
+    // language handling — 'auto' lets Whisper detect, but for
     // code-switching tracks (Quebec hip-hop where one verse is English
     // and the chorus French is normal) auto-detect on the WHOLE track
     // commits to one language and mistranscribes the other half. The
@@ -4670,7 +4747,7 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
       langArgs = ['--language', lang];
     }
 
-    // v0.3.5: rap-accuracy tuning. The defaults are optimized for slow,
+    // rap-accuracy tuning. The defaults are optimized for slow,
     // clear speech (podcasts, lectures). Rap and fast vocal music need:
     //   * --beam_size 5     : explore multiple decoding candidates
     //                         instead of greedy single-path (catches
@@ -4724,8 +4801,12 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
     res.json({ transcript: text });
   } catch (e) {
     slog('Transcribe error: ' + e.message);
+    report('transcribe.failed', e, {
+      model: req.body && req.body.model,
+      language: req.body && req.body.language,
+    });
     cleanup();
-    // v0.3.5: dropped the stale "AI Transcribe Setup.exe" hint —
+    // dropped the stale "AI Transcribe Setup.exe" hint —
     // setup runs through the in-app engines flow now, no separate exe.
     res.status(500).json({
       error: e.message,
@@ -5335,16 +5416,16 @@ app.get('/setup-engines', (req, res) => {
     setupState.endedAt = Date.now();
     slog('setup-engines: exit ' + code);
     if (code === 0) {
-      // v0.3.3: setup just succeeded — refresh Python discovery and
+      // setup just succeeded — refresh Python discovery and
       // release the engines-broken breaker so analysis resumes.
       resetEnginesBrokenBreaker();
-      // v0.3.4: nudge worker explicitly in case the breaker was never
+      // nudge worker explicitly in case the breaker was never
       // tripped (e.g. first-time install with no prior failures) — we
       // still want any queued tracks to start analyzing immediately.
       clearPythonCache();
       try { nudgeAnalysisWorker(); } catch {}
     }
-    // v0.3.4: on ANY non-zero exit, read the setup script's local log
+    // on ANY non-zero exit, read the setup script's local log
     // file and dump its tail to the server log. Even if EmitError
     // didn't fire (parser crash, killed process, etc.) we still see
     // exactly what went wrong. This is what we were missing in user
@@ -5366,10 +5447,15 @@ app.get('/setup-engines', (req, res) => {
       } catch (e) {
         slog('setup-engines: failed to read local log: ' + e.message);
       }
+      // Soft-report any non-zero setup exit. This is the failure mode
+      // that matters most for new users — we want to know what's
+      // breaking on fresh installs.
+      report('setup.failed', new Error('setup-engines exit ' + code), {
+        stderrTail: stderrBuf.slice(-5).join(' | ').slice(-400),
+      });
       if (!lastErrorEmitted) {
         const tail = stderrBuf.slice(-5).join(' | ').slice(-400);
-        // v0.3.4: also send the log file content in the synthesized
-        // event so the renderer's diagnostic <details> populates.
+        // Synthesize log_tail so the diagnostic <details> populates.
         let logTail = null;
         const setupLogPath = path.join(os.tmpdir(), 'freqphull-setup.log');
         try {
@@ -5436,11 +5522,8 @@ app.get('/setup-status', (_, res) => {
 
 // Explicit cancel - kills the running setup process (used by a Cancel button
 // in the UI; routine disconnect from req.close() doesn't trigger this)
-// v0.3.4: kill the entire process TREE, not just PowerShell.
-// PowerShell spawns python.exe, which spawns pip.exe, which spawns
-// installers. Plain setupProc.kill() only kills PowerShell — the
-// children become orphans, keep downloading models the user canceled,
-// hold files open, hog bandwidth. taskkill /T /F walks the tree.
+// Kill the whole tree. Plain proc.kill() on Windows only signals
+// PowerShell; the python/pip grandchildren orphan and keep running.
 function killSetupProcessTree(proc) {
   if (!proc || !proc.pid) return;
   try {
@@ -5466,7 +5549,7 @@ app.post('/setup-cancel', (_, res) => {
     setupProc = null;
   }
   setupRunning = false;
-  // v0.3.5: clean up leftover state from a cancelled run so the next
+  // clean up leftover state from a cancelled run so the next
   // setup starts from a clean slate.
   try { fs.unlinkSync(path.join(os.tmpdir(), 'freqphull-setup.pid')); } catch {}
   try {
@@ -5535,7 +5618,7 @@ const _httpServer = app.listen(PORT, '127.0.0.1', () => {
   }
 });
 
-// v0.3.3: port-collision detection. Old code silently failed and the
+// port-collision detection. Old code silently failed and the
 // renderer would just see "server not ready" forever. Now we log it,
 // exit non-zero, and main.js shows the user a clear dialog (see main.js
 // _handleServerExit hook).
@@ -5553,7 +5636,7 @@ _httpServer.on('error', (err) => {
   }
 });
 
-// v0.3.3: periodic temp sweep (every 6h). Was previously inside the
+// periodic temp sweep (every 6h). Was previously inside the
 // app.listen callback; moved out so it survives the listen() error
 // path (port collision shouldn't disable temp cleanup if a future
 // version retries on a different port).

@@ -3,12 +3,32 @@ const path  = require('path');
 const fs    = require('fs');
 const { fork } = require('child_process');
 const { setupUpdater } = require('./updater.js');
+const sentry = require('./sentry-init.js');
 
-// v0.3.4: tracks consecutive crash restarts so we can stop respawning
-// forever if the backend is permanently broken.
+// Read privacy.json early so the opt-out flag is set before any child
+// process inherits the env. The file is written by the Settings UI's
+// crash-report toggle.
+function _readCrashReportPref() {
+  try {
+    const userData = app.getPath('userData');
+    const f = path.join(userData, 'privacy.json');
+    if (!fs.existsSync(f)) return false;           // default OFF (opt-in)
+    const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+    return j.crash_report_enabled === true;        // explicit true = on
+  } catch { return false; }
+}
+const _crashReportEnabled = _readCrashReportPref();
+if (!_crashReportEnabled) process.env.FREQPHULL_NO_CRASH_REPORT = '1';
+
+const _sentry = sentry.init('main', app.getVersion(), {
+  userOptOut: !_crashReportEnabled,
+});
+const report = (category, err, ctx) => sentry.reportSoftError('main', category, err, ctx);
+
+// Crash-restart counter; stops endless respawn of a broken backend.
 let backendRestartCount = 0;
 
-// v0.2.8: branded standalone updater window. Replaces the inline banner
+// branded standalone updater window. Replaces the inline banner
 // for users who want the dedicated experience. The banner still works
 // (small, non-intrusive); this is opened either programmatically when
 // an update arrives, or when the renderer asks via 'updater:openWindow'.
@@ -19,7 +39,7 @@ function openUpdaterWindow(initialState) {
     if (initialState) updaterWindow.webContents.send('updater-state', initialState);
     return updaterWindow;
   }
-  // v0.3.0: when initialState.installing is true we open this as a
+  // when initialState.installing is true we open this as a
   // takeover screen — bigger, no minimize/close, always on top so the
   // user never accidentally focuses the main window during the quit.
   const isInstalling = !!(initialState && initialState.installing);
@@ -43,7 +63,7 @@ function openUpdaterWindow(initialState) {
   updaterWindow.once('ready-to-show', () => {
     try { updaterWindow.show(); } catch {}
     if (initialState) {
-      // v0.3.0: special pass-through for installing mode
+      // special pass-through for installing mode
       if (initialState.installing) {
         updaterWindow.webContents.send('updater-state', {
           phase: 'installing',
@@ -70,7 +90,7 @@ ipcMain.on('updater-window-minimize', () => {
 ipcMain.on('updater-window-install', () => {
   // Forward to the main updater autoUpdater (registered via setupUpdater)
   const { autoUpdater } = require('electron-updater');
-  // v0.3.2: silent install (isSilent=true) so NSIS doesn't show its
+  // silent install (isSilent=true) so NSIS doesn't show its
   // own "Installing, please wait..." dialog. Our branded HK window is
   // the only visible UI from click → relaunch.
   try { autoUpdater.quitAndInstall(true, true); }
@@ -361,18 +381,19 @@ function startBackend() {
     backendProcess.stdout?.on('data', d => {
       const msg = d.toString().trim();
       log('[srv] ' + msg);
-      // v0.3.3: server emits __FREQPHULL_FATAL__ <reason> for hard
+      // server emits __FREQPHULL_FATAL__ <reason> for hard
       // startup failures (port already taken, etc.). Show the user a
       // proper dialog instead of letting them stare at a blank app.
       if (msg.includes('__FREQPHULL_FATAL__')) {
-        // v0.3.4: extract ONLY the first line after the marker. The
-        // stdout data event can deliver multiple log lines per chunk;
-        // taking everything after the marker can pull in subsequent
-        // log noise and corrupt the dialog message.
+        // Just the first line — stdout chunks can contain trailing log
+        // lines that would otherwise be appended to the dialog message.
         const after = msg.split('__FREQPHULL_FATAL__')[1] || '';
         const firstLine = after.split(/[\r\n]/)[0] || '';
         const reason = firstLine.trim();
         log('FATAL server error: ' + reason);
+        report('backend.fatal-startup', new Error(reason || 'unknown fatal'), {
+          marker: '__FREQPHULL_FATAL__',
+        });
         try {
           let title = 'Freq.Phull cannot start';
           let detail = 'The backend reported: ' + reason;
@@ -389,9 +410,8 @@ function startBackend() {
         setTimeout(() => app.exit(2), 500);
         return;
       }
-      // v0.3.4: stricter readiness signal — port number AND the
-      // literal "ready" string. Defends against future log lines that
-      // happen to mention 47891 firing a false ready event.
+      // Require both the port and "ready" — defends against future
+      // log lines incidentally mentioning 47891.
       if (msg.includes('47891') && /ready/i.test(msg) && !backendReady) {
         log('Backend online!');
         backendReady = true;
@@ -407,14 +427,15 @@ function startBackend() {
       backendReady = false;
       updateTrayMenu();
       if (code !== 0 && code !== null && !isQuitting) {
-        // v0.3.4: cap restart attempts. Without this, a permanently
-        // broken backend (e.g. corrupt server.js, missing native dep)
-        // would respawn every 2s forever — log spam, CPU waste, no
-        // path out for the user. After 5 tries surface a real dialog
-        // and exit so the user knows something is genuinely wrong.
+        // Cap at 5 restarts so a permanently-broken backend doesn't
+        // burn forever; show a real dialog on the way out.
         backendRestartCount = (backendRestartCount || 0) + 1;
         if (backendRestartCount > 5) {
           log('Backend crashed 5+ times — giving up.');
+          report('backend.crash-loop', new Error('Backend crashed 5+ times'), {
+            lastExitCode: code,
+            restartCount: backendRestartCount,
+          });
           try {
             dialog.showErrorBox(
               'Freq.Phull backend keeps crashing',
@@ -433,8 +454,7 @@ function startBackend() {
         log('Backend crashed, restarting in 2s (attempt ' + backendRestartCount + '/5)...');
         setTimeout(startBackend, 2000);
       } else if (code === 0) {
-        // Clean exit — reset the counter so future crashes use the
-        // full retry budget.
+        // Clean exit: reset the counter.
         backendRestartCount = 0;
       }
     });

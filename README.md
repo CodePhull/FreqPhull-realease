@@ -4,96 +4,110 @@
 [![Downloads](https://img.shields.io/github/downloads/CodePhull/FreqPhull-realease/total?style=for-the-badge&color=22c55e)](https://github.com/CodePhull/FreqPhull-realease/releases)
 [![Platform](https://img.shields.io/badge/Windows-10%2B-blue?style=for-the-badge)](https://github.com/CodePhull/FreqPhull-realease/releases/latest)
 
-**Local-first beat toolkit for music producers.** Download tracks from YouTube, analyze BPM/key/loudness, separate stems with AI, master with reference matching, organize a sample library — all running on your own machine. No subscriptions, no upload limits, no sending your audio to someone else's server.
+Local beat toolkit for producers. YouTube downloads, BPM/key/loudness
+analysis, AI stem separation, mastering with reference matching, and a
+sample library — running entirely on the user's machine.
 
-Built by **Cynphull / Hood Knights** ©.
+By Cynphull, Hood Knights.
 
----
+## Download
 
-## ⬇️ Download
+[Releases page](https://github.com/CodePhull/FreqPhull-realease/releases/latest)
+→ grab `Freq.Phull-Setup-x.x.x.exe`. That's the whole install path. The
+source tree on this page is only useful if you want to build it yourself.
 
-### 👉 **[Download the latest installer](https://github.com/CodePhull/FreqPhull-realease/releases/latest)**
+## Features
 
-Go to the **[Releases page](https://github.com/CodePhull/FreqPhull-realease/releases/latest)** and grab `Freq.Phull-Setup-x.x.x.exe`. That's all you need — don't clone the repository unless you want to build from source.
-
-> **Heads up:** You're on the source-code page right now. The actual app is in [**Releases**](https://github.com/CodePhull/FreqPhull-realease/releases/latest) (link on the right sidebar of the repo).
-
----
-
-## What it does
-
-| Tool | What it's for |
+| Tool | Purpose |
 |---|---|
-| **Download** | Grab audio from a YouTube URL as MP3, WAV, or FLAC. Persistent queue with duplicate detection. |
-| **Analyze** | Detect BPM, musical key, LUFS loudness, true-peak, crest factor, spectral balance. |
-| **Separator** | AI stem separation — vocals, drums, bass, and harmonic instruments. Optional lead/back vocal split, de-reverb, vocal + instrumental ensemble, fullness restoration. |
-| **Mastering** | Rule-based presets plus reference-track matching EQ. |
-| **Stockpile** | Tag and organize your library into style folders with auto-matching. |
-| **History** | Everything you've processed, searchable and filterable by folder/favorite/untagged. |
+| Download | YouTube → MP3 / WAV / FLAC. Persistent queue, duplicate detection. |
+| Analyze | BPM, key, LUFS, true-peak, crest factor, spectral balance. |
+| Separator | AI stem split (vocals, drums, bass, harmonic). Optional lead/back vocal isolation, de-reverb, ensemble. |
+| Mastering | Rule-based presets and reference-track EQ matching. |
+| Stockpile | Library tagging into style folders with auto-matching. |
+| History | Searchable, filterable by folder / favorite / untagged. |
+| Transcribe | Local Whisper. Bilingual (FR + EN) for code-switching tracks. |
 
-A companion **Chrome extension** lets you grab + analyze YouTube tracks straight from the browser; it talks to the same local engine.
+A companion Chrome extension downloads and analyzes tracks from
+youtube.com directly, talking to the same local backend.
 
----
+## Installation
 
-## Install (end users)
-
-1. Download `Freq.Phull-Setup-x.x.x.exe` from the [Releases page](https://github.com/CodePhull/FreqPhull-realease/releases/latest).
-2. Run it. Windows SmartScreen may warn because the build isn't code-signed — click **More info → Run anyway**.
-3. On first launch the app installs its AI engines (Python packages for separation/analysis). This is a one-time setup and needs an internet connection.
+1. Download the latest `Freq.Phull-Setup-x.x.x.exe` from
+   [Releases](https://github.com/CodePhull/FreqPhull-realease/releases/latest).
+2. Run it. The build isn't code-signed, so SmartScreen will warn — click
+   **More info** → **Run anyway**.
+3. First launch runs a one-time engine setup (Python + audio packages).
+   Needs internet.
 
 ### If downloads or analysis fail immediately
 
-The app bundles `yt-dlp.exe` and `ffmpeg.exe`. Windows Defender sometimes quarantines these on first run. If you see "missing or blocked" errors:
+The build bundles `yt-dlp.exe` and `ffmpeg.exe`. Defender occasionally
+quarantines one of these. If the app reports "missing or blocked":
 
-1. Open **Windows Security -> Virus & threat protection -> Manage settings -> Exclusions**.
-2. Add the Freq.Phull install folder as an exclusion.
-3. Restart the app.
+1. Open **Windows Security → Virus & threat protection → Manage settings
+   → Exclusions**.
+2. Add the Freq.Phull install folder.
+3. Restart.
 
-### If AI engines setup fails with "PyTorch can't load its native libraries" or `WinError 127`
+### If engine setup fails with `WinError 127` or "PyTorch can't load native libraries"
 
-PyTorch needs a Windows system component called Visual C++ Redistributable. **Freq.Phull now installs it automatically when missing** — so this should be rare. If you still hit it:
+PyTorch needs the Visual C++ 2015–2022 Redistributable. The setup script
+installs it automatically when missing. If it didn't:
 
-1. **Most likely cause:** the auto-install needed admin rights and didn't have them. Right-click the Freq.Phull shortcut → **Run as administrator** → re-run engine setup.
-2. **Manual fallback:** download and install https://aka.ms/vs/17/release/vc_redist.x64.exe yourself (takes ~30 seconds), then re-run engine setup.
-3. **If it still fails:** add these folders to your antivirus exclusions and retry:
-   - `%LOCALAPPDATA%\Programs\Python`
-   - `%USERPROFILE%\.cache`
-
----
-
----
+- Re-run engine setup with **Run as administrator** (the auto-install needs
+  elevation).
+- Manual: install [vc_redist.x64.exe](https://aka.ms/vs/17/release/vc_redist.x64.exe)
+  yourself (~30 seconds), then re-run engine setup.
+- Add to AV exclusions: `%LOCALAPPDATA%\Programs\Python` and
+  `%USERPROFILE%\.cache`.
 
 ## Auto-updates
 
-The app uses [electron-updater](https://www.electron.build/auto-update) pointed at this repo's GitHub Releases. On launch it checks for a newer published release and offers to download + install it.
-
+The app uses [electron-updater](https://www.electron.build/auto-update)
+pointed at this repo's GitHub Releases. It checks on launch and offers to
+download + install newer versions.
 
 ## Architecture
 
 ```
 Electron shell (main.js)
- |- Renderer (renderer/) ........ UI: tabs, mini-DAW, history, stockpile
- |- Local backend (server.js) ... Express on 127.0.0.1:47891
- |   |- /download ............... yt-dlp wrapper (SSE progress)
- |   |- /analyze ................ analyze.py (BPM/key/loudness)
- |   |- /stems .................. stems.py (AI separation pipeline)
- |   |- /master ................. mastering.py (presets + reference match)
- |   |- /stockpile/* ............ library tagging + folders
- |   |- /history ................ processed-track DB (SQLite via sql.js)
- |   |- /events ................. SSE channel; live history updates
- |- Python engines .............. PyTorch + audio-separator (CPU)
+ ├── Renderer (renderer/) ........ UI: tabs, mini-DAW, history, stockpile
+ ├── Local backend (server.js) ... Express on 127.0.0.1:47891
+ │    ├── /download .............. yt-dlp wrapper (SSE progress)
+ │    ├── /analyze ............... analyze.py (BPM, key, loudness)
+ │    ├── /stems ................. stems.py (AI separation)
+ │    ├── /transcribe ............ whisper
+ │    ├── /master ................ mastering.py (presets + ref-match EQ)
+ │    ├── /stockpile/* ........... library tagging + folders
+ │    ├── /history ............... SQLite via sql.js
+ │    └── /events ................ SSE; live history updates
+ └── Python engines .............. PyTorch + audio-separator (CPU)
 ```
 
-The backend stays on `127.0.0.1` and is the single source of truth. Multiple clients (the desktop window, additional windows, the Chrome extension) all talk to it, and a server-sent-events channel keeps their History views in sync — a download that finishes in the extension shows up in the desktop app automatically.
-
----
+The backend stays bound to `127.0.0.1`. Multiple clients (the desktop
+window, additional windows, the Chrome extension) all talk to it. An
+SSE channel keeps their History views in sync — a download finished in
+the extension shows up in the desktop app without a refresh.
 
 ## Privacy
 
-Everything runs locally. Your audio files, library, and processing history never leave your machine. The only outbound network calls are: fetching YouTube media you explicitly request, the one-time engine setup, and the update check against GitHub Releases.
+Everything runs locally. Audio files, library, and processing history
+never leave the machine. Outbound traffic is limited to: fetching the
+YouTube media the user asks for, the one-time engine setup (pypi), and
+the update check against GitHub.
 
----
+### Crash reporting (opt-in)
+
+Disabled by default. Toggle in Settings → Privacy. When enabled, the
+app sends anonymized crash reports to Sentry to help track down bugs.
+File paths and YouTube URLs are scrubbed before sending — no audio,
+no library content, no personal data. Requires a build with the
+`FREQPHULL_SENTRY_DSN` environment variable set.
+
+To opt out without rebuilding: set `FREQPHULL_NO_CRASH_REPORT=1`
+in the environment, or toggle off in Settings.
 
 ## License
 
-See [LICENSE.md](LICENSE.md). Hood Knights (c).
+See [LICENSE.md](LICENSE.md). Hood Knights ©.
