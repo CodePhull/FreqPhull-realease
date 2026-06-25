@@ -3461,7 +3461,13 @@ button > .ic:only-child,
 
       <!-- Search + Filter + Select Mode Toggle -->
       <div class="row mb" style="gap:6px">
-        <input type="search" id="hist-search" placeholder="Search tracks…" style="flex:1;height:42px;font-size:14px;padding:0 14px" oninput="renderHistory()"/>
+        <div class="hist-search-wrap" style="flex:1;position:relative">
+          <input type="search" id="hist-search" placeholder="Search tracks…" style="width:100%;height:42px;font-size:14px;padding:0 78px 0 14px" oninput="onHistSearchInput()"/>
+          <span id="hist-search-count" style="position:absolute;right:36px;top:50%;transform:translateY(-50%);font-size:11px;color:var(--muted);pointer-events:none;font-variant-numeric:tabular-nums;display:none"></span>
+          <button type="button" id="hist-search-clear" onclick="clearHistSearch()" title="Clear search (Esc)" aria-label="Clear search" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);width:26px;height:26px;border:0;background:transparent;color:var(--muted);cursor:pointer;border-radius:4px;display:none;align-items:center;justify-content:center">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
+          </button>
+        </div>
         <!-- Category filter — driven by stockpile folders. "All tracks" is
              the default; user can also pick Untagged, Favorites, or a
              specific folder. Built by populateHistoryFilterDropdown(). -->

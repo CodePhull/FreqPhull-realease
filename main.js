@@ -5,23 +5,17 @@ const { fork } = require('child_process');
 const { setupUpdater } = require('./updater.js');
 const sentry = require('./sentry-init.js');
 
-// Read privacy.json early so the opt-out flag is set before any child
-// process inherits the env. The file is written by the Settings UI's
-// crash-report toggle.
-function _readCrashReportPref() {
-  try {
-    const userData = app.getPath('userData');
-    const f = path.join(userData, 'privacy.json');
-    if (!fs.existsSync(f)) return true;            // default ON (opt-out)
-    const j = JSON.parse(fs.readFileSync(f, 'utf8'));
-    return j.crash_report_enabled !== false;       // explicit false = off
-  } catch { return true; }
-}
-const _crashReportEnabled = _readCrashReportPref();
-if (!_crashReportEnabled) process.env.FREQPHULL_NO_CRASH_REPORT = '1';
+// One-time cleanup: earlier builds wrote a privacy.json with the
+// opt-out toggle state. It's no longer consulted; remove the leftover.
+try {
+  const stale = path.join(app.getPath('userData'), 'privacy.json');
+  if (fs.existsSync(stale)) fs.unlinkSync(stale);
+} catch {}
 
+// Crash reporting is always on for production builds.
+// FREQPHULL_NO_CRASH_REPORT=1 is honored as a dev-only escape hatch.
 const _sentry = sentry.init('main', app.getVersion(), {
-  userOptOut: !_crashReportEnabled,
+  userOptOut: process.env.FREQPHULL_NO_CRASH_REPORT === '1',
 });
 const report = (category, err, ctx) => sentry.reportSoftError('main', category, err, ctx);
 
@@ -87,8 +81,14 @@ ipcMain.on('updater-window-close', () => {
 ipcMain.on('updater-window-minimize', () => {
   if (updaterWindow && !updaterWindow.isDestroyed()) { try { updaterWindow.minimize(); } catch {} }
 });
+ipcMain.on('updater-window-check', () => {
+  // Manual re-check from the updater window's TRY AGAIN button.
+  try {
+    const { autoUpdater } = require('electron-updater');
+    autoUpdater.checkForUpdates();
+  } catch (e) { log('[updater-window] re-check failed: ' + e.message); }
+});
 ipcMain.on('updater-window-install', () => {
-  // Forward to the main updater autoUpdater (registered via setupUpdater)
   const { autoUpdater } = require('electron-updater');
   // silent install (isSilent=true) so NSIS doesn't show its
   // own "Installing, please wait..." dialog. Our branded HK window is

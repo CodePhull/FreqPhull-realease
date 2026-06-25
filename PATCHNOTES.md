@@ -4,6 +4,44 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
+## 0.4.1 (2026-06-25)
+
+UX polish pass — no design changes, just things that should have been there.
+
+**Keyboard shortcuts.** `/` and `Ctrl+F` focus the visible search input.
+`Esc` closes any open modal, and if no modal is open, clears the focused
+search input. `Ctrl+1` through `Ctrl+9` switch tabs (analyze, transcribe,
+separator, master, history, stockpile, settings).
+
+**History search wrapper.** The search input now sits in a relative
+container with a result counter (`5 / 142` on the right of the field
+while searching) and an `×` clear button. Both hide when the search is
+empty. The native `::-webkit-search-cancel-button` is masked so we have
+one consistent control instead of two competing ones.
+
+**Right-click context menu on history rows.** Eight actions: Open in
+Analyze, Send to Stem Separator, Send to Transcribe, Favorite/Unfavorite,
+Copy title, Copy source URL, Show in folder, Remove from history.
+Auto-dismisses on scroll, resize, outside click, or Esc.
+
+**Clipboard URL paste suggestion.** When the URL input gets focused
+and (a) it's empty AND (b) the clipboard contains a YouTube URL, an
+inline hint appears below the input with a one-click `Paste` button.
+Recognizes youtube.com/watch, /playlist, /shorts, /embed, and youtu.be.
+Auto-dismisses after 8 seconds.
+
+**Toast deduplication.** Identical toasts now stack into a single
+notification with a `×N` counter badge instead of cluttering the corner.
+The timer resets each time so you can see when the latest one fired,
+and a brief scale-pulse signals the bump. Fixes the screenshot-of-four-
+identical-errors case.
+
+**Extension download 404 redirect.** When `/extension/download` returns
+404 (no extension asset attached to the latest release yet), the app
+now opens the releases page automatically with an info toast — instead
+of just showing a red error. Releases need an attached
+`freqpull-ext-vX.X.X.zip` to enable the one-click download path.
+
 ## 0.4.0 (2026-06-25)
 
 **Sentry, end-to-end verifiable**

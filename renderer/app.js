@@ -167,7 +167,10 @@ window.addEventListener('DOMContentLoaded', () => {
   // when audio plays (live curve overlays this).
   if (typeof _paintEmptySpectrum === 'function') _paintEmptySpectrum();
   const urlIn = document.getElementById('url-in');
-  if (urlIn) urlIn.addEventListener('keydown', e => { if (e.key === 'Enter') fetchInfo(); });
+  if (urlIn) {
+    urlIn.addEventListener('keydown', e => { if (e.key === 'Enter') fetchInfo(); });
+    urlIn.addEventListener('focus', _maybeSuggestClipboardPaste);
+  }
   // app-ready is marked later in onBackendReady() — after the first history
   // render completes — so the user never sees the empty-then-populated
   // history list flash. Anti-FOUC is layered: body opacity stays 0 until
@@ -1147,9 +1150,37 @@ function showAppNotification(msg, type, onClick, durationMs) {
   const stack = _getNotifStack();
   const t = _NOTIF_TYPE_MAP[type] || 'info';
   const duration = (typeof durationMs === 'number') ? durationMs : 5500;
+  const msgStr = String(msg == null ? '' : msg);
+
+  // Dedupe: if an identical toast is already showing, bump its counter
+  // and reset its timer instead of stacking another one.
+  for (const existing of stack.querySelectorAll('.app-notif')) {
+    if (existing.dataset.msg === msgStr && existing.dataset.type === t) {
+      const count = (parseInt(existing.dataset.count, 10) || 1) + 1;
+      existing.dataset.count = count;
+      const badge = existing.querySelector('.app-notif-count');
+      if (badge) badge.textContent = '×' + count;
+      else {
+        const b = document.createElement('span');
+        b.className = 'app-notif-count';
+        b.textContent = '×' + count;
+        const body = existing.querySelector('.app-notif-body');
+        if (body) body.appendChild(b);
+      }
+      // Reset the timer + a small pulse so the user notices the bump.
+      _scheduleNotifTimer(existing, duration);
+      existing.classList.remove('bump');
+      void existing.offsetWidth;
+      existing.classList.add('bump');
+      return;
+    }
+  }
 
   const el = document.createElement('div');
   el.className = 'app-notif ' + t;
+  el.dataset.msg = msgStr;
+  el.dataset.type = t;
+  el.dataset.count = '1';
   el.setAttribute('role', t === 'err' ? 'alert' : 'status');
   el.setAttribute('aria-live', t === 'err' ? 'assertive' : 'polite');
 
@@ -4943,6 +4974,85 @@ function requestRenderHistory(){
 // Keep the public name backward-compatible so existing call sites
 // (and any future ones) just work. Anything that needs a guaranteed
 // synchronous render can still call _renderHistoryImpl() directly.
+
+
+// v0.4.1: Auto-paste suggestion. On URL-input focus, peek at the
+// clipboard. If it contains a YouTube URL and the input is empty, show
+// a small inline tooltip offering a one-click paste. Privacy-safe: we
+// never read clipboard without an active user gesture (focus counts).
+async function _maybeSuggestClipboardPaste() {
+  const urlIn = document.getElementById('url-in');
+  if (!urlIn || urlIn.value.trim()) return;          // already has content
+  if (!navigator.clipboard || !navigator.clipboard.readText) return;
+  let text;
+  try { text = await navigator.clipboard.readText(); }
+  catch { return; /* permission denied is fine — no nag */ }
+  if (!text) return;
+  text = text.trim();
+  if (text.length > 500) return;                     // not a URL
+  // Match common YouTube URL shapes, including youtu.be and music.youtube.com
+  const isYt = /^https?:\/\/(?:www\.|m\.|music\.)?(?:youtube\.com\/(?:watch|playlist|shorts\/|embed\/)|youtu\.be\/)/i.test(text);
+  if (!isYt) return;
+
+  // Remove any existing hint before adding a fresh one.
+  const old = document.getElementById('url-paste-hint');
+  if (old) old.remove();
+
+  const hint = document.createElement('div');
+  hint.id = 'url-paste-hint';
+  hint.className = 'url-paste-hint';
+  // Truncate the preview so long URLs don't blow up the layout.
+  const preview = text.length > 60 ? text.slice(0, 57) + '...' : text;
+  hint.innerHTML =
+    '<span class="url-paste-hint-label">' + (t('clipboardDetected') || 'Clipboard:') + ' </span>' +
+    '<span class="url-paste-hint-url"></span>' +
+    '<button type="button" class="url-paste-hint-btn">' + (t('paste') || 'Paste') + '</button>' +
+    '<button type="button" class="url-paste-hint-close" aria-label="Dismiss">' +
+      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>' +
+    '</button>';
+  hint.querySelector('.url-paste-hint-url').textContent = preview;
+  urlIn.parentNode.insertBefore(hint, urlIn.nextSibling);
+
+  const paste = () => {
+    urlIn.value = text;
+    hint.remove();
+    urlIn.focus();
+    if (typeof fetchInfo === 'function') fetchInfo();
+  };
+  hint.querySelector('.url-paste-hint-btn').onclick = paste;
+  hint.querySelector('.url-paste-hint-close').onclick = () => hint.remove();
+  // Auto-dismiss after 8s so it doesn't linger
+  setTimeout(() => hint.remove(), 8000);
+}
+
+// v0.4.1: History search helpers — show/hide clear button + result counter.
+function onHistSearchInput() {
+  const el = document.getElementById('hist-search');
+  const btn = document.getElementById('hist-search-clear');
+  if (btn) btn.style.display = (el && el.value) ? 'flex' : 'none';
+  renderHistory();
+}
+function clearHistSearch() {
+  const el = document.getElementById('hist-search');
+  if (!el) return;
+  el.value = '';
+  el.focus();
+  const btn = document.getElementById('hist-search-clear');
+  if (btn) btn.style.display = 'none';
+  renderHistory();
+}
+function _updateHistSearchCount(shown, total) {
+  const el = document.getElementById('hist-search-count');
+  const search = document.getElementById('hist-search');
+  if (!el || !search) return;
+  if (search.value) {
+    el.textContent = shown + ' / ' + total;
+    el.style.display = '';
+  } else {
+    el.style.display = 'none';
+  }
+}
+
 function renderHistory() { requestRenderHistory(); }
 
 // real Hood Knights gothic HK monogram as the fallback thumb.
@@ -4969,6 +5079,98 @@ window._thumbFail = function(img) {
   }
 };
 
+
+
+// v0.4.1: Right-click context menu on history rows. Standard set of
+// quick actions so users don't have to hunt through tabs. Built fresh
+// per right-click and removed on any outside interaction.
+let _historyCtxMenuEl = null;
+function _closeHistoryCtxMenu() {
+  if (_historyCtxMenuEl) {
+    try { _historyCtxMenuEl.remove(); } catch {}
+    _historyCtxMenuEl = null;
+    window.removeEventListener('scroll', _closeHistoryCtxMenu, true);
+    window.removeEventListener('resize', _closeHistoryCtxMenu);
+  }
+}
+function showHistoryContextMenu(ev, id) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  _closeHistoryCtxMenu();
+  const row = histData.find(h => h.id === id);
+  if (!row) return;
+
+  const items = [
+    { label: t('ctxOpenAnalyze')   || 'Open in Analyze',     act: () => loadFromHistory(id) },
+    { label: t('ctxSendStems')     || 'Send to Stem Separator', act: () => sendHistoryToStems(id) },
+    { label: t('ctxSendTranscribe')|| 'Send to Transcribe',  act: () => sendHistoryToTranscribe(id) },
+    { sep: true },
+    { label: row.is_favorite ? (t('ctxUnfavorite') || 'Unfavorite') : (t('ctxFavorite') || 'Favorite'),
+      act: () => toggleHistoryFavorite(id) },
+    { label: t('ctxCopyTitle')     || 'Copy title',          act: () => navigator.clipboard.writeText(row.title || '').then(() => showAppNotification(t('copied') || 'Copied', 'ok', null, 1500)) },
+    { label: t('ctxCopyUrl')       || 'Copy source URL',     act: () => row.source_url ? navigator.clipboard.writeText(row.source_url).then(() => showAppNotification(t('copied') || 'Copied', 'ok', null, 1500)) : showAppNotification(t('noSourceUrl') || 'No URL stored for this track', 'info') },
+    { label: t('ctxShowFolder')    || 'Show in folder',      act: () => fetch(API + '/open-folder?path=' + encodeURIComponent((row.file_path || '').replace(/[\\/][^\\/]+$/, ''))) },
+    { sep: true },
+    { label: t('ctxRemove') || 'Remove from history', danger: true, act: () => deleteHistory(id) },
+  ];
+
+  const m = document.createElement('div');
+  m.className = 'hist-ctx-menu';
+  m.setAttribute('role', 'menu');
+  m.innerHTML = items.map((it, i) =>
+    it.sep
+      ? '<div class="hist-ctx-sep"></div>'
+      : '<button type="button" class="hist-ctx-item' + (it.danger ? ' danger' : '') + '" data-i="' + i + '" role="menuitem">' + escapeHtml(it.label) + '</button>'
+  ).join('');
+  document.body.appendChild(m);
+  _historyCtxMenuEl = m;
+
+  // Position — clamp to viewport.
+  const pad = 4;
+  const r = m.getBoundingClientRect();
+  let x = ev.clientX, y = ev.clientY;
+  if (x + r.width + pad > window.innerWidth)  x = window.innerWidth - r.width - pad;
+  if (y + r.height + pad > window.innerHeight) y = window.innerHeight - r.height - pad;
+  m.style.left = Math.max(pad, x) + 'px';
+  m.style.top  = Math.max(pad, y) + 'px';
+
+  m.addEventListener('click', (e) => {
+    const btn = e.target.closest('button.hist-ctx-item');
+    if (!btn) return;
+    const i = parseInt(btn.dataset.i, 10);
+    _closeHistoryCtxMenu();
+    try { items[i].act(); } catch (err) { showAppNotification('Action failed: ' + err.message, 'err'); }
+  });
+
+  // Defer the outside-click listener by a tick so the very click that
+  // opened the menu doesn't immediately close it.
+  setTimeout(() => {
+    document.addEventListener('click', _closeHistoryCtxMenu, { once: true });
+  }, 0);
+  window.addEventListener('scroll', _closeHistoryCtxMenu, true);
+  window.addEventListener('resize', _closeHistoryCtxMenu);
+}
+
+// Helper actions called by context menu. Some already exist (loadFromHistory,
+// deleteHistory); these are convenience wrappers for the rest.
+function sendHistoryToStems(id) {
+  const row = histData.find(h => h.id === id);
+  if (!row || !row.file_path) return showAppNotification('No file path for this track', 'info');
+  if (typeof switchTab === 'function') switchTab('separator');
+  // Existing flow: stage the file via the file path. UI will pick it up.
+  if (typeof window.stageStemsFromPath === 'function') window.stageStemsFromPath(row.file_path);
+  else showAppNotification('Switched to Stem Separator. Drop the file there to start.', 'info');
+}
+function sendHistoryToTranscribe(id) {
+  const row = histData.find(h => h.id === id);
+  if (!row || !row.file_path) return showAppNotification('No file path for this track', 'info');
+  if (typeof switchTab === 'function') switchTab('transcribe');
+  if (typeof window.stageTranscribeFromPath === 'function') {
+    window.stageTranscribeFromPath(row.file_path, row.title || '');
+  } else {
+    showAppNotification('Switched to Transcribe. Drop the file there to start.', 'info');
+  }
+}
 
 function _renderHistoryImpl(){
   const q=(document.getElementById('hist-search')?.value||'').toLowerCase(),list=document.getElementById('hist-list');
@@ -5001,6 +5203,7 @@ function _renderHistoryImpl(){
   const matchesSearch = (h) =>
     !q || (h.title || '').toLowerCase().includes(q) || (h.channel || '').toLowerCase().includes(q);
   const rows = histData.filter(h => matchesSearch(h) && matchesFilter(h));
+  _updateHistSearchCount(rows.length, histData.length);
   // Pulse detection: rows whose id is newer than the highest id we'd
   // rendered before. On the first render we just set the baseline (no
   // pulse — otherwise every row would flash on app open). After that,
@@ -5087,7 +5290,7 @@ function _renderHistoryImpl(){
     // by the cleanup pass below so subsequent re-renders don't re-flash.
     const isNew = prevSeenHistId > 0 && (h.id || 0) > prevSeenHistId;
     const pulseClass = isNew ? ' row-pulse' : '';
-    return `<div class="${rowClass}${pulseClass}" data-id="${h.id}"${rowTitle} ${onclick} draggable="true" ondragstart="dragHistoryRowToExternal(event, ${h.id})">${checkbox}${playBtn}<img class="hist-thumb" loading="lazy" decoding="async" src="${resolveThumb(h.thumbnail)}" onerror="window._thumbFail(this)" alt=""/>${favBtn}<div class="hist-info"><div class="hist-title">${h.title||'(untitled)'}</div><div class="hist-meta">${[h.channel,h.created_at?.slice(0,16),fmtSec(h.duration)].filter(Boolean).join(' · ')}</div>${tagStrip}</div><div class="hist-badges">${h.bpm?`<span class="badge bpm">${Math.round(h.bpm)} BPM</span>`:''}${h.key_note?`<span class="badge key">${h.key_note} ${h.key_mode||''}</span>`:''}${h.format?`<span class="badge">${h.format.toUpperCase()}</span>`:''}</div>${selectMode?`<button class="btn xs danger" onclick="event.stopPropagation();deleteHistory(${h.id})">${t('histRemove')}</button>`:`<button class="btn xs" tabindex="-1" onmousedown="this.blur()" onclick="event.stopPropagation();openSimilarTracks(${h.id});this.blur()" title="${t('simBtn')}">≈</button>`}</div>`;
+    return `<div class="${rowClass}${pulseClass}" data-id="${h.id}"${rowTitle} ${onclick} oncontextmenu="showHistoryContextMenu(event, ${h.id})" draggable="true" ondragstart="dragHistoryRowToExternal(event, ${h.id})">${checkbox}${playBtn}<img class="hist-thumb" loading="lazy" decoding="async" src="${resolveThumb(h.thumbnail)}" onerror="window._thumbFail(this)" alt=""/>${favBtn}<div class="hist-info"><div class="hist-title">${h.title||'(untitled)'}</div><div class="hist-meta">${[h.channel,h.created_at?.slice(0,16),fmtSec(h.duration)].filter(Boolean).join(' · ')}</div>${tagStrip}</div><div class="hist-badges">${h.bpm?`<span class="badge bpm">${Math.round(h.bpm)} BPM</span>`:''}${h.key_note?`<span class="badge key">${h.key_note} ${h.key_mode||''}</span>`:''}${h.format?`<span class="badge">${h.format.toUpperCase()}</span>`:''}</div>${selectMode?`<button class="btn xs danger" onclick="event.stopPropagation();deleteHistory(${h.id})">${t('histRemove')}</button>`:`<button class="btn xs" tabindex="-1" onmousedown="this.blur()" onclick="event.stopPropagation();openSimilarTracks(${h.id});this.blur()" title="${t('simBtn')}">≈</button>`}</div>`;
   } // end buildHistoryRowHTML
 
   // Build a fingerprint for each row so we can detect which ones
@@ -6159,6 +6362,19 @@ async function downloadExtensionZip(btn) {
     const r = await fetch(API + '/extension/download', { method: 'POST' });
     const j = await r.json();
     if (!r.ok) {
+      // The 404 case (no extension asset attached) is the common one
+      // when the release was published without the zip. Open the
+      // releases page directly so the user can grab whatever is there
+      // instead of being stuck behind a wall of red toasts.
+      if (r.status === 404 && j.fallback_url) {
+        if (window.api && window.api.openExternal) window.api.openExternal(j.fallback_url);
+        else window.open(j.fallback_url, '_blank');
+        showAppNotification(
+          t('extDownloadFallback') || 'Opening releases page — grab the latest zip there.',
+          'info', null, 5000
+        );
+        return;
+      }
       showAppNotification(
         (t('extDownloadFailed') || 'Download failed') + ': ' + (j.error || 'unknown'),
         'err', () => {
@@ -8973,6 +9189,17 @@ const T = {
     crashReportTestSent:'Test event sent',
     crashReportTestFailed:'Test send failed',
     crashReportDiagLoading:'Checking...',
+    ctxOpenAnalyze:'Open in Analyze',
+    ctxSendStems:'Send to Stem Separator',
+    ctxSendTranscribe:'Send to Transcribe',
+    ctxFavorite:'Favorite',
+    ctxUnfavorite:'Unfavorite',
+    ctxCopyTitle:'Copy title',
+    ctxCopyUrl:'Copy source URL',
+    ctxShowFolder:'Show in folder',
+    ctxRemove:'Remove from history',
+    copied:'Copied',
+    noSourceUrl:'No URL stored for this track',
     transReady:'Ready',
     transStartBtn:'Start transcription',
     transPhaseLoading:'Loading {model} model into memory...',
@@ -9036,6 +9263,9 @@ const T = {
     extDownloadDone:'Extension downloaded',
     extDownloadFailed:'Download failed',
     extHowToOpenManual:'Open releases page',
+    extDownloadFallback:'Opening releases page — grab the latest zip there.',
+    clipboardDetected:'Clipboard:',
+    paste:'Paste',
     extHowToStep2Title:'Open your extensions page',
     extHowToStep2Desc:'Paste this in your browser address bar and hit Enter:',
     extHowToStep3Title:'Enable Developer mode',
@@ -9450,6 +9680,17 @@ const T = {
     crashReportTestSent:'Evenement test envoye',
     crashReportTestFailed:'Echec de l\'envoi',
     crashReportDiagLoading:'Verification...',
+    ctxOpenAnalyze:'Ouvrir dans Analyse',
+    ctxSendStems:'Envoyer au separateur de pistes',
+    ctxSendTranscribe:'Envoyer a la transcription',
+    ctxFavorite:'Ajouter aux favoris',
+    ctxUnfavorite:'Retirer des favoris',
+    ctxCopyTitle:'Copier le titre',
+    ctxCopyUrl:'Copier l\'URL source',
+    ctxShowFolder:'Ouvrir le dossier',
+    ctxRemove:'Retirer de l\'historique',
+    copied:'Copie',
+    noSourceUrl:'Aucune URL enregistree pour cette piste',
     transReady:'Pret',
     transStartBtn:'Demarrer la transcription',
     spTagged:'Etiquete',
@@ -9514,6 +9755,9 @@ const T = {
     extDownloadDone:'Extension telechargee',
     extDownloadFailed:'Echec du telechargement',
     extHowToOpenManual:'Ouvrir la page des releases',
+    extDownloadFallback:'Ouverture de la page des releases — recuperez le zip la-bas.',
+    clipboardDetected:'Presse-papiers :',
+    paste:'Coller',
     extHowToStep2Title:'Ouvrez votre page d\'extensions',
     extHowToStep2Desc:'Collez ceci dans la barre d\'adresse de votre navigateur et appuyez sur Entree :',
     extHowToStep3Title:'Activez le Mode developpeur',
@@ -12801,6 +13045,97 @@ window.addEventListener('DOMContentLoaded', () => {
 // Global keyboard shortcuts that apply across the whole app (not just
 // when the mini player is open). Tab back/forward navigation works
 // anywhere, anytime — like browser shortcuts.
+
+// v0.4.1: Global keyboard shortcuts.
+// Esc -> close any open modal/overlay, then unfocus search inputs
+// '/' -> focus the visible search input
+// Ctrl+1..9 -> switch tabs by index
+(function installGlobalShortcuts(){
+  // Tab order mirrors the visible button order in the topbar.
+  const TAB_ORDER = ['analyze','transcribe','separator','master','history','stockpile','settings'];
+
+  function activeModal() {
+    // Most opened-by-us modals add either .modal-overlay (not hidden) or .setup-modal
+    const overlay = document.querySelector('.modal-overlay:not(.hidden)');
+    if (overlay) return overlay;
+    const setup = Array.from(document.querySelectorAll('.setup-modal')).find(el => {
+      // setup-modal is created and appended on demand — assume any in DOM is open
+      const style = el.style && el.style.display;
+      return style !== 'none';
+    });
+    return setup || null;
+  }
+
+  function closeModal(modal) {
+    // Prefer the close button if one exists (preserves any teardown logic)
+    const btn = modal.querySelector('[data-dismiss], .modal-close, .setup-modal-close, button[aria-label="Close" i]');
+    if (btn) { try { btn.click(); return true; } catch {} }
+    // Fall back to .hidden toggle for modal-overlay; remove the node for setup-modal
+    if (modal.classList && modal.classList.contains('modal-overlay')) {
+      modal.classList.add('hidden');
+      return true;
+    }
+    if (modal.classList && modal.classList.contains('setup-modal')) {
+      try { modal.remove(); return true; } catch {}
+    }
+    return false;
+  }
+
+  function focusVisibleSearch() {
+    // History search is the most common; if Stockpile tab is open, use its.
+    const tab = document.querySelector('.tabbtn.on');
+    const which = tab ? tab.dataset.tab : null;
+    let id = 'hist-search';
+    if (which === 'stockpile') id = 'sp-search';
+    else if (which === 'transcribe') id = null;          // no search there
+    if (!id) return;
+    const el = document.getElementById(id);
+    if (el) { el.focus(); el.select && el.select(); }
+  }
+
+  window.addEventListener('keydown', (e) => {
+    // Esc: close modals first, then blur a focused search input.
+    if (e.key === 'Escape') {
+      const m = activeModal();
+      if (m && closeModal(m)) { e.preventDefault(); return; }
+      const a = document.activeElement;
+      if (a && a.tagName === 'INPUT' && a.type === 'search') {
+        if (a.value) { a.value = ''; a.dispatchEvent(new Event('input', { bubbles: true })); }
+        a.blur();
+        e.preventDefault();
+      }
+      return;
+    }
+
+    // Allow ALL further shortcuts to be ignored when user is typing.
+    const tag = (e.target && e.target.tagName) || '';
+    const editable = e.target && e.target.isContentEditable;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || editable) return;
+
+    // '/' focuses search. Plays well with Ctrl+F too.
+    if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      focusVisibleSearch();
+      e.preventDefault();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+      focusVisibleSearch();
+      e.preventDefault();
+      return;
+    }
+
+    // Ctrl+1..9 tab switching.
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+      const idx = parseInt(e.key, 10) - 1;
+      const name = TAB_ORDER[idx];
+      if (name && typeof switchTab === 'function') {
+        switchTab(name);
+        e.preventDefault();
+      }
+    }
+  });
+})();
+
 window.addEventListener('keydown', (e) => {
   // Don't capture while typing
   const tag = (e.target && e.target.tagName) || '';

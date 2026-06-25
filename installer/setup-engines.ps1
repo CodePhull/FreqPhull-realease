@@ -172,30 +172,39 @@ if (-not $netOk) {
     EmitError "Cannot reach the internet (python.org and pytorch.org both unreachable)" "Check internet/VPN/firewall. Corporate proxies often need configuration to allow pip downloads."
 }
 
-# Windows Defender / antivirus hint: PowerShell can't disable AV but real-time
-# scanning on the user profile drive can make pip installs 5-10x slower or
-# trigger false positives on torch's native binaries. Log a hint to the file
-# so support can recommend an exclusion if setup times out.
+# Disk space check. The combined install footprint is ~3 GB:
+#   Python runtime + pip cache + torch wheels + whisper/demucs models.
+# Bail now if the user profile drive has less than 3.5 GB free; pip
+# failures partway through a torch install are nasty to recover from.
+EmitStatus "preflight_disk" 2 "Checking disk space..."
+try {
+    $userDrive = (Get-Item $env:USERPROFILE).PSDrive.Name
+    $drive = Get-PSDrive -Name $userDrive -ErrorAction Stop
+    $freeGb = [math]::Round($drive.Free / 1GB, 2)
+    Log "Free space on ${userDrive}: ${freeGb} GB"
+    if ($freeGb -lt 3.5) {
+        EmitError "Not enough disk space for engine setup (${freeGb} GB free, need at least 3.5 GB)." "Free up space on drive $userDrive and rerun setup. Common culprits: %USERPROFILE%\AppData\Local\Temp, browser caches, old Steam libraries."
+    }
+} catch {
+    Log "Disk space check failed: $($_.Exception.Message)"
+}
+
+# Windows Defender real-time scanning on the user profile drive can make
+# pip 5-10x slower. We log a hint so support can suggest an exclusion.
 Log "HINT: If setup is slow or fails, add C:\Users\$env:USERNAME\AppData\Local\Programs\Python and ~\.cache to Windows Defender exclusions."
 
 # ============================================================================
-# Step 1: Find or install a COMPATIBLE Python (3.9 - 3.12)
+# Step 1: Find or install a compatible Python (3.9 - 3.12).
 # ============================================================================
-# Why constrained: the runtime stack only ships pre-built wheels for
-# Python 3.9-3.12 right now (as of mid-2026). Python 3.13/3.14 will pip-install
-# but the installs are broken in subtle ways - imports succeed but tensor ops
-# fail at runtime. Hard requirement: pick a version with real wheel coverage.
+# Pre-built wheels are only available for these versions; 3.13/3.14
+# wheels are still missing and torch installs but fails at runtime.
 EmitStatus "checking_python" 3 "Checking for Python..."
 
-# Returns 0 if version compatible, 1 if too old, 2 if too new, -1 if unparseable
-# ================================================================
-# Robust download with retries + integrity check (v0.2.5)
-# ================================================================
-# Wraps Invoke-WebRequest with: TLS 1.2, silent progress, configurable
-# retries with exponential backoff, minimum-size sanity check, and
-# multi-mirror fallback. Returns $true on success, $false on exhaustion.
-# Used by every download in this script so transient network blips,
-# CDN hiccups, and slow connections never crash the whole setup.
+# Returns 0 = compatible, 1 = too old, 2 = too new, -1 = unparseable
+
+# Wraps Invoke-WebRequest with TLS 1.2, retries with exponential
+# backoff, minimum-size sanity check, and multi-mirror fallback.
+# Used by every download; returns $true on success.
 function Invoke-RobustDownload {
     param(
         [string[]] $Urls,            # one or more mirrors, tried in order
@@ -589,24 +598,9 @@ try {
 }
 
 if (-not $vcRedistFound) {
-    # Auto-install path. The VC++ Redistributable is freely redistributable
-    # from Microsoft (no license restrictions on download or silent install)
-    # so we can fetch + run it ourselves instead of telling the user to do it.
-    #
-    # Sequence:
-    #   1. Check if we have admin rights. The redist writes to System32 so
-    #      a non-elevated install will fail with exit 1638 or similar.
-    #   2. Download vc_redist.x64.exe from Microsoft's permanent CDN URL.
-    #      `https://aka.ms/vs/17/release/vc_redist.x64.exe` is the official
-    #      direct link - they've kept it stable for years across VC++ 2015
-    #      through 2022.
-    #   3. Run with /install /quiet /norestart. Quiet = no UI. Norestart =
-    #      defer any required reboot (we never need to reboot for PyTorch
-    #      to load - it picks up new DLLs immediately).
-    #   4. Re-check the registry to confirm install took.
-    #
-    # If any step fails, we fall back to the manual instructions message
-    # so the user still has a path forward.
+    # Auto-install. VC++ Redist is freely redistributable from Microsoft.
+    # Need admin (writes to System32); aka.ms/vs/17 is the stable CDN url.
+    # On failure we surface a manual-install message and continue.
     Log "Visual C++ 2015-2022 Redistributable not detected - attempting auto-install"
     EmitStatus "installing_vcredist" 20 "Installing Visual C++ runtime..." "~14MB download from Microsoft"
 
