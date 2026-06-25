@@ -1,0 +1,4 @@
+{
+  "_comment": "Copy this file to sentry.config.json and fill in your DSN. The real file is gitignored. electron-builder copies it into the build automatically via the files glob in package.json.",
+  "dsn": "https://YOUR_KEY@oXXXXXX.ingest.us.sentry.io/XXXXXXX"
+}

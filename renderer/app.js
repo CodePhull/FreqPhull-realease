@@ -209,44 +209,7 @@ function pollBackend() {
     });
 }
 
-
-// First-run crash-reporting notice. Default is ON now (opt-out), so we
-// owe the user a one-time disclosure. localStorage flag means it only
-// fires the first time the renderer ever boots — never again.
-async function maybeShowCrashReportNotice() {
-  if (localStorage.getItem('fph_crash_notice_seen') === '1') return;
-  try {
-    const r = await fetch(API + '/crash-report-pref');
-    const j = await r.json();
-    // user_set=true means they've already made an explicit choice.
-    // Don't pester them with the first-run notice in that case.
-    if (j.user_set) {
-      localStorage.setItem('fph_crash_notice_seen', '1');
-      return;
-    }
-  } catch { return; /* backend not ready yet — try again later */ }
-  // Small delayed notification so it doesn't compete with boot toasts.
-  setTimeout(() => {
-    if (typeof showAppNotification !== 'function') return;
-    showAppNotification(
-      t('crashReportFirstRun') || 'Crash reports are on by default. Opt out in Settings > Privacy.',
-      'info',
-      () => {
-        if (typeof switchTab === 'function') switchTab('settings');
-        setTimeout(() => {
-          const wrap = document.querySelector('.settings-section[data-section="privacy"]');
-          if (wrap && wrap.classList.contains('collapsed')) toggleSettingsSection('privacy');
-          wrap && wrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }, 100);
-      },
-      8000
-    );
-    localStorage.setItem('fph_crash_notice_seen', '1');
-  }, 4000);
-}
-
 function onBackendReady() {
-  maybeShowCrashReportNotice();
   if (backendOnline) return;
   backendOnline = true;
   diagLog('Backend is ready! Hiding loading screen.', 'ok');
@@ -3889,7 +3852,6 @@ function subscribeToServerEvents() {
         }, 100);
       }, 0);
       refreshEnginesDiagRow();
-  _hydrateCrashReportToggle();
     });
     es.addEventListener('engines-available', () => {
       window._enginesUnavailableShown = false;
@@ -6186,6 +6148,44 @@ async function toggleHardwareAcceleration(checked) {
 // version immediately.
 const EXT_REPO_URL = 'https://github.com/CodePhull/FreqPhull-realease/releases';
 const EXT_REPO_ROOT = 'https://github.com/CodePhull/FreqPhull-realease';
+
+// One-click extension download. Hits /extension/download which fetches
+// the latest freqpull-ext-vX.X.X.zip from GitHub releases, streams it
+// to the user's Downloads folder, then reveals it in the file explorer.
+async function downloadExtensionZip(btn) {
+  const original = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = t('extDownloadProgress') || 'Downloading...'; }
+  try {
+    const r = await fetch(API + '/extension/download', { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok) {
+      showAppNotification(
+        (t('extDownloadFailed') || 'Download failed') + ': ' + (j.error || 'unknown'),
+        'err', () => {
+          if (j.fallback_url && window.api && window.api.openExternal) {
+            window.api.openExternal(j.fallback_url);
+          }
+        }, 6000
+      );
+      return;
+    }
+    showAppNotification(
+      (t('extDownloadDone') || 'Extension downloaded') + ': ' + j.filename + ' (' + j.version + ')',
+      'done', () => {
+        // Open the containing folder so the user can find the zip
+        fetch(API + '/open-folder?path=' + encodeURIComponent(j.path.replace(/[\\/][^\\/]+$/, '')));
+      }, 8000
+    );
+  } catch (e) {
+    showAppNotification(
+      (t('extDownloadFailed') || 'Download failed') + ': ' + e.message,
+      'err', null, 5000
+    );
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = original; }
+  }
+}
+
 function openExtensionPage() {
   if (window.api && window.api.openExternal) window.api.openExternal(EXT_REPO_URL);
   else window.open(EXT_REPO_URL, '_blank');
@@ -6213,7 +6213,8 @@ function openExtensionHowTo() {
           <li><div class="ext-howto-step-num">1</div><div class="ext-howto-step-body">
             <div class="ext-howto-step-title">${t('extHowToStep1Title')}</div>
             <div class="ext-howto-step-desc">${t('extHowToStep1Desc')}</div>
-            <button class="btn sm pri" onclick="openExtensionPage()">${t('extHowToStep1Btn')}</button>
+            <button class="btn sm pri" onclick="downloadExtensionZip(this)">${t('extDownloadBtn')}</button>
+            <button class="btn xs" style="margin-left:8px" onclick="openExtensionPage()">${t('extHowToOpenManual')}</button>
           </div></li>
           <li><div class="ext-howto-step-num">2</div><div class="ext-howto-step-body">
             <div class="ext-howto-step-title">${t('extHowToStep2Title')}</div>
@@ -8964,12 +8965,16 @@ const T = {
     settingsSec_privacy:'Privacy',
     settingsSec_privacyDesc:'Crash reporting toggle',
     crashReportName:'Crash reporting',
-    crashReportDesc:'Send anonymized crash reports so bugs get fixed faster. Off by default. File paths and YouTube URLs are scrubbed before sending. No audio, no library content, no personal data.',
-    crashReportOn:'Crash reporting enabled. Restart to take effect.',
-    crashReportOff:'Crash reporting disabled. Restart to take effect.',
+    crashReportDesc:'Anonymized crash reports are sent automatically so we can fix bugs faster. File paths, usernames, and YouTube URLs are scrubbed before transmission. No audio, no library content, and no personal data ever leaves your machine.',
+    crashReportStatus:'Active. Reports include error stacks + app version only.',
+    crashReportDiagBtn:'Run diagnostic',
+    crashReportTestBtn:'Send test event',
+    crashReportTestSending:'Sending...',
+    crashReportTestSent:'Test event sent',
+    crashReportTestFailed:'Test send failed',
+    crashReportDiagLoading:'Checking...',
     transReady:'Ready',
     transStartBtn:'Start transcription',
-    crashReportFirstRun:'Crash reports are on by default to help us fix bugs faster. You can opt out in Settings > Privacy.',
     transPhaseLoading:'Loading {model} model into memory...',
     transPhaseListening:'Listening for speech segments...',
     transPhaseDecoding:'Decoding with beam search (5 candidates)...',
@@ -9026,6 +9031,11 @@ const T = {
     extHowToStep1Title:'Download the extension folder',
     extHowToStep1Desc:'Open the Releases page and download the latest freqpull-ext zip, then unzip it somewhere you will not move it from (Documents works fine).',
     extHowToStep1Btn:'Open Releases page',
+    extDownloadBtn:'Download extension zip',
+    extDownloadProgress:'Downloading...',
+    extDownloadDone:'Extension downloaded',
+    extDownloadFailed:'Download failed',
+    extHowToOpenManual:'Open releases page',
     extHowToStep2Title:'Open your extensions page',
     extHowToStep2Desc:'Paste this in your browser address bar and hit Enter:',
     extHowToStep3Title:'Enable Developer mode',
@@ -9432,12 +9442,16 @@ const T = {
     settingsSec_privacy:'Confidentialite',
     settingsSec_privacyDesc:'Rapports d\'erreurs',
     crashReportName:'Rapports d\'erreurs',
-    crashReportDesc:'Envoyez des rapports anonymes pour aider a corriger les bugs. Desactive par defaut. Les chemins de fichiers et URL YouTube sont anonymises avant envoi. Aucun audio, aucune bibliotheque, aucune donnee personnelle.',
-    crashReportOn:'Rapports d\'erreurs actives. Redemarrer pour prendre effet.',
-    crashReportOff:'Rapports d\'erreurs desactives. Redemarrer pour prendre effet.',
+    crashReportDesc:'Des rapports anonymes sont envoyes automatiquement pour nous aider a corriger les bugs. Les chemins de fichiers, noms d\'utilisateur et URL YouTube sont anonymises avant transmission. Aucun audio, aucun contenu de bibliotheque, aucune donnee personnelle ne quitte jamais votre machine.',
+    crashReportStatus:'Actif. Rapports limites aux erreurs et a la version de l\'application.',
+    crashReportDiagBtn:'Diagnostic',
+    crashReportTestBtn:'Envoyer un evenement test',
+    crashReportTestSending:'Envoi...',
+    crashReportTestSent:'Evenement test envoye',
+    crashReportTestFailed:'Echec de l\'envoi',
+    crashReportDiagLoading:'Verification...',
     transReady:'Pret',
     transStartBtn:'Demarrer la transcription',
-    crashReportFirstRun:'Les rapports d\'erreur sont actives par defaut pour nous aider a corriger les bugs. Vous pouvez les desactiver dans Parametres > Confidentialite.',
     spTagged:'Etiquete',
     transPhaseLoading:'Chargement du modele {model}...',
     transPhaseListening:'Detection des segments de parole...',
@@ -9495,6 +9509,11 @@ const T = {
     extHowToStep1Title:'Telechargez le dossier de l\'extension',
     extHowToStep1Desc:'Ouvrez la page Releases et telechargez le dernier zip freqpull-ext, puis decompressez-le quelque part ou vous ne le deplacerez pas (Documents convient).',
     extHowToStep1Btn:'Ouvrir les Releases',
+    extDownloadBtn:'Telecharger l\'extension',
+    extDownloadProgress:'Telechargement...',
+    extDownloadDone:'Extension telechargee',
+    extDownloadFailed:'Echec du telechargement',
+    extHowToOpenManual:'Ouvrir la page des releases',
     extHowToStep2Title:'Ouvrez votre page d\'extensions',
     extHowToStep2Desc:'Collez ceci dans la barre d\'adresse de votre navigateur et appuyez sur Entree :',
     extHowToStep3Title:'Activez le Mode developpeur',
@@ -10060,35 +10079,65 @@ function applyLang() {
 
 // ── Settings page ─────────────────────────────────────────────────────────────
 
-async function setCrashReportingEnabled(enabled) {
+
+// Sentry diagnostic. Pulls the status from /sentry-status and shows a
+// short summary: DSN present? Package installed? Last event ID if any.
+async function showCrashReportDiag() {
+  const out = document.getElementById('crash-report-diag-out');
+  if (!out) return;
+  out.style.display = '';
+  out.textContent = t('crashReportDiagLoading') || 'Checking...';
   try {
-    const r = await fetch(API + '/crash-report-pref', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: !!enabled }),
-    });
+    const r = await fetch(API + '/sentry-status');
     const j = await r.json();
-    if (!j.ok) throw new Error('Server could not save');
-    // Sync the toggle to what the server actually persisted (in case
-    // the request was clamped or transformed for any reason).
-    const el = document.getElementById('crash-report-toggle');
-    if (el) el.checked = !!j.enabled;
-    showAppNotification(j.enabled ? t('crashReportOn') : t('crashReportOff'),
-                        j.enabled ? 'ok' : 'info', null, 3000);
+    const lines = [
+      'DSN configured:    ' + (j.dsn_present ? 'yes' : 'NO'),
+      'DSN source:        ' + (j.dsn_source || 'none'),
+      'Package installed: ' + (j.package_installed ? 'yes' : 'NO'),
+      'Sentry active:     ' + (j.active ? 'yes' : 'NO'),
+      'Process version:   ' + (j.version || 'unknown'),
+      'Last test event:   ' + (j.last_test_event_id || '(none sent)'),
+    ];
+    if (!j.dsn_present) {
+      lines.push('');
+      lines.push('Build was not configured with a Sentry DSN.');
+      lines.push('See sentry.config.example.json in the project root.');
+    } else if (!j.package_installed) {
+      lines.push('');
+      lines.push('Install @sentry/node and @sentry/electron in the build.');
+    }
+    out.textContent = lines.join('\n');
   } catch (e) {
-    showAppNotification('Could not save: ' + e.message, 'err');
-    // Roll back the toggle to the actual persisted state on failure.
-    _hydrateCrashReportToggle();
+    out.textContent = 'Could not reach backend: ' + e.message;
   }
 }
 
-async function _hydrateCrashReportToggle() {
+// Send a synthetic crash event through Sentry. Verifies the entire
+// pipeline end-to-end: DSN -> network -> Sentry dashboard.
+async function sendTestCrashReport() {
+  const btn = document.getElementById('crash-report-test-btn');
+  if (btn) { btn.disabled = true; btn.textContent = t('crashReportTestSending') || 'Sending...'; }
   try {
-    const r = await fetch(API + '/crash-report-pref');
+    const r = await fetch(API + '/sentry-test', { method: 'POST' });
     const j = await r.json();
-    const el = document.getElementById('crash-report-toggle');
-    if (el) el.checked = !!j.enabled;
-  } catch {}
+    if (j.ok) {
+      showAppNotification(
+        (t('crashReportTestSent') || 'Test event sent') +
+        (j.event_id ? ' (id: ' + j.event_id.slice(0, 8) + ')' : ''),
+        'done', null, 5000
+      );
+      showCrashReportDiag();
+    } else {
+      showAppNotification(
+        (t('crashReportTestFailed') || 'Could not send') + ': ' + (j.error || 'unknown'),
+        'err', null, 6000
+      );
+    }
+  } catch (e) {
+    showAppNotification('Could not reach backend: ' + e.message, 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = t('crashReportTestBtn'); }
+  }
 }
 
 function refreshEnginesDiagRow() {
@@ -10383,12 +10432,15 @@ function renderSettings() {
         <svg class="settings-section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
       </button>
       <div class="settings-section-body" id="settings-body-privacy"><div class="settings-section-body-inner">
-        <div class="setting-row">
-          <div class="setting-info">
-            <div class="setting-name">${t('crashReportName')}</div>
-            <div class="setting-desc">${t('crashReportDesc')}</div>
+        <div class="setting-row" style="flex-direction:column;align-items:stretch;padding:14px 16px">
+          <div class="setting-name" style="margin-bottom:6px">${t('crashReportName')}</div>
+          <div class="setting-desc" style="line-height:1.55">${t('crashReportDesc')}</div>
+          <div class="setting-desc" style="line-height:1.55;margin-top:8px;color:var(--muted);font-size:11px" id="crash-report-status">${t('crashReportStatus')}</div>
+          <div style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <button class="btn xs" id="crash-report-diag-btn" onclick="showCrashReportDiag()">${t('crashReportDiagBtn')}</button>
+            <button class="btn xs" id="crash-report-test-btn" onclick="sendTestCrashReport()">${t('crashReportTestBtn')}</button>
           </div>
-          <label class="switch"><input type="checkbox" id="crash-report-toggle" onchange="setCrashReportingEnabled(this.checked)"/><span class="slider"></span></label>
+          <pre id="crash-report-diag-out" style="display:none;margin-top:10px;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;font-family:Consolas,monospace;font-size:11px;color:var(--off);white-space:pre-wrap;line-height:1.5;max-height:160px;overflow:auto"></pre>
         </div>
       </div></div>
     </div>

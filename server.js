@@ -13,10 +13,13 @@ const RES  = process.env.RESOURCES_PATH || __dirname;
 let _serverVersion = '0.0.0';
 try { _serverVersion = require('./package.json').version || '0.0.0'; } catch {}
 const sentry = require('./sentry-init.js');
-sentry.init('node', _serverVersion, {
+const _sentryClient = sentry.init('node', _serverVersion, {
   userOptOut: process.env.FREQPHULL_NO_CRASH_REPORT === '1',
 });
 const report = (category, err, ctx) => sentry.reportSoftError('node', category, err, ctx);
+
+// Track the most recent test event ID for the diagnostic UI.
+let _lastTestEventId = null;
 const DATA = process.env.USER_DATA || path.join(os.homedir(), '.freqphull');
 
 // ── Server-side log ───────────────────────────────────────────────────────────
@@ -2792,6 +2795,129 @@ app.get('/prefs', (req, res) => {
   for (const r of dbAll('SELECT key, value FROM prefs')) out[r.key] = r.value;
   res.json(out);
 });
+// Sentry diagnostic + test event endpoints. The UI hits these from
+// Settings > Privacy to verify the pipeline end-to-end.
+// Extension download: fetch the latest freqpull-ext-v*.zip asset from
+// the GitHub release and stream it to the user's Downloads folder.
+// Saves users from having to clone or download the whole repo just to
+// pick up the extension.
+app.post('/extension/download', async (req, res) => {
+  const repoOwner = 'CodePhull';
+  const repoName = 'FreqPhull-realease';
+  const apiUrl = 'https://api.github.com/repos/' + repoOwner + '/' + repoName + '/releases/latest';
+  try {
+    const apiResp = await fetch(apiUrl, {
+      headers: { 'User-Agent': 'FreqPhull/' + _serverVersion, Accept: 'application/vnd.github+json' },
+    });
+    if (!apiResp.ok) {
+      throw new Error('GitHub API returned ' + apiResp.status);
+    }
+    const release = await apiResp.json();
+    const asset = (release.assets || []).find(a => /^freqpull-ext-.*\.zip$/i.test(a.name));
+    if (!asset) {
+      return res.status(404).json({
+        error: 'No extension asset attached to the latest release.',
+        hint: 'Latest release is ' + release.tag_name + '. Falling back to repo download.',
+        fallback_url: 'https://github.com/' + repoOwner + '/' + repoName + '/releases/latest',
+      });
+    }
+    // Pick a download destination. Prefer the user's real Downloads
+    // folder; fall back to %TEMP% if that isn't writable.
+    let downloadsDir;
+    try { downloadsDir = path.join(os.homedir(), 'Downloads'); }
+    catch { downloadsDir = os.tmpdir(); }
+    if (!fs.existsSync(downloadsDir)) downloadsDir = os.tmpdir();
+    const destPath = path.join(downloadsDir, asset.name);
+
+    // Stream the zip directly to disk so memory stays flat.
+    const dlResp = await fetch(asset.browser_download_url, {
+      headers: { 'User-Agent': 'FreqPhull/' + _serverVersion },
+    });
+    if (!dlResp.ok) throw new Error('Asset download returned ' + dlResp.status);
+    const out = fs.createWriteStream(destPath);
+    await new Promise((resolve, reject) => {
+      dlResp.body.pipe(out);
+      out.on('finish', resolve);
+      out.on('error', reject);
+      dlResp.body.on('error', reject);
+    });
+    res.json({
+      ok: true,
+      path: destPath,
+      filename: asset.name,
+      size: asset.size,
+      version: release.tag_name,
+    });
+  } catch (e) {
+    slog('extension download failed: ' + e.message);
+    res.status(500).json({
+      error: e.message,
+      fallback_url: 'https://github.com/' + repoOwner + '/' + repoName + '/releases/latest',
+    });
+  }
+});
+
+app.get('/sentry-status', (_, res) => {
+  // Re-resolve the DSN at request time so the user sees the same state
+  // the sentry-init module sees.
+  let dsnPresent = false;
+  let dsnSource = 'none';
+  if (process.env.FREQPHULL_SENTRY_DSN) {
+    dsnPresent = true;
+    dsnSource = 'env';
+  } else {
+    const candidates = [
+      path.join(__dirname, 'sentry.config.json'),
+      process.resourcesPath ? path.join(process.resourcesPath, 'sentry.config.json') : null,
+    ].filter(Boolean);
+    for (const p of candidates) {
+      try {
+        if (fs.existsSync(p)) {
+          const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+          if (cfg && cfg.dsn) { dsnPresent = true; dsnSource = 'config-file'; break; }
+        }
+      } catch {}
+    }
+  }
+  let packageInstalled = false;
+  try { require.resolve('@sentry/node'); packageInstalled = true; } catch {}
+  res.json({
+    dsn_present: dsnPresent,
+    dsn_source: dsnSource,
+    package_installed: packageInstalled,
+    active: !!_sentryClient,
+    version: _serverVersion,
+    last_test_event_id: _lastTestEventId,
+  });
+});
+
+app.post('/sentry-test', (_, res) => {
+  if (!_sentryClient) {
+    return res.json({
+      ok: false,
+      error: 'Sentry is not active (DSN missing or package not installed)',
+    });
+  }
+  try {
+    // captureMessage returns the event ID Sentry assigned. Stash it
+    // so the diagnostic readout can show what got sent.
+    const Sentry = require('@sentry/node');
+    const eventId = Sentry.captureMessage(
+      'Test event from Freq.Phull v' + _serverVersion + ' (manual diagnostic)',
+      'info'
+    );
+    _lastTestEventId = eventId || null;
+    // flush so the event is on its way before we respond
+    Sentry.flush(2000).then(() => {
+      res.json({ ok: true, event_id: eventId });
+    }).catch((e) => {
+      res.json({ ok: false, error: 'flush failed: ' + e.message });
+    });
+  } catch (e) {
+    res.json({ ok: false, error: e.message });
+  }
+});
+
 app.post('/prefs', (req, res) => {
   const body = req.body || {};
   for (const [k, v] of Object.entries(body)) {
@@ -2802,47 +2928,7 @@ app.post('/prefs', (req, res) => {
   res.json({ ok: true });
 });
 
-// Crash-report pref lives in privacy.json (read by main.js at startup,
-// before the DB is loaded). The UI hits THIS endpoint, not /prefs, so
-// the toggle state always matches what main.js actually applied.
-// Default ON (opt-out). Going through /prefs caused (a) type confusion
-// since sql.js returns prefs as strings and !!"0" is true, and (b)
-// drift between the DB pref and the file pref.
-function _readCrashPref() {
-  try {
-    const f = path.join(DATA, 'privacy.json');
-    if (!fs.existsSync(f)) return true;            // default ON
-    const j = JSON.parse(fs.readFileSync(f, 'utf8'));
-    return j.crash_report_enabled !== false;       // explicit false = off
-  } catch { return true; }
-}
-function _writeCrashPref(enabled) {
-  const f = path.join(DATA, 'privacy.json');
-  let cur = {};
-  try { if (fs.existsSync(f)) cur = JSON.parse(fs.readFileSync(f, 'utf8')); } catch {}
-  cur.crash_report_enabled = !!enabled;
-  cur.user_set = true;
-  try {
-    if (!fs.existsSync(DATA)) fs.mkdirSync(DATA, { recursive: true });
-    fs.writeFileSync(f, JSON.stringify(cur, null, 2));
-    return true;
-  } catch (e) { slog('privacy.json write failed: ' + e.message); return false; }
-}
 
-app.get('/crash-report-pref', (_, res) => {
-  const f = path.join(DATA, 'privacy.json');
-  let userSet = false;
-  try {
-    if (fs.existsSync(f)) userSet = !!JSON.parse(fs.readFileSync(f, 'utf8')).user_set;
-  } catch {}
-  res.json({ enabled: _readCrashPref(), user_set: userSet });
-});
-
-app.post('/crash-report-pref', (req, res) => {
-  const enabled = !!(req.body && req.body.enabled);
-  const ok = _writeCrashPref(enabled);
-  res.json({ ok, enabled });
-});
 
 // ── Auto-match core (shared by the HTTP endpoint, the watch-folder
 //    daemon, and any future caller). Tags a track into folders whose

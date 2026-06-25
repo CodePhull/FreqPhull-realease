@@ -276,6 +276,31 @@
   ::-webkit-scrollbar-thumb:hover {
     background:rgba(255,255,255,.18); background-clip:padding-box;
   }
+
+  .progress-detail{
+    font-size:11px; color:var(--muted); margin-top:6px;
+    font-variant-numeric:tabular-nums; letter-spacing:.02em;
+    text-align:center; min-height:14px;
+  }
+  .progress-fill{
+    transition:width .25s var(--ease-out-quart);
+  }
+  .ready-line{
+    margin:14px auto 0; max-width:340px; text-align:center;
+    font-size:12px; color:var(--accent); line-height:1.5;
+    padding:10px 14px; border:1px solid rgba(126,217,130,.25);
+    border-radius:6px; background:rgba(126,217,130,.05);
+  }
+  .error-block{
+    margin:14px auto 0; max-width:340px;
+    padding:12px 14px; border:1px solid #5a2a2a;
+    border-radius:6px; background:rgba(180,60,60,.08);
+  }
+  .error-msg{
+    font-size:12px; color:#ffb4b4; line-height:1.45;
+    font-family:Consolas,'JetBrains Mono',monospace;
+    word-break:break-word;
+  }
 </style>
 </head>
 <body>
@@ -325,6 +350,13 @@
     <div class="progress-wrap" id="progress-wrap">
       <div class="progress-text" id="progress-text">Downloading 0%</div>
       <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+      <div class="progress-detail" id="progress-detail"></div>
+    </div>
+
+    <div class="ready-line" id="ready-line" style="display:none"></div>
+
+    <div class="error-block" id="error-block" style="display:none">
+      <div class="error-msg" id="error-msg"></div>
     </div>
 
     <div class="whats-new" id="whats-new" style="display:none">
@@ -335,6 +367,7 @@
 
   <div class="footer">
     <button class="btn-secondary" id="btn-close-2">CLOSE</button>
+    <button class="btn-secondary" id="btn-retry" style="display:none">TRY AGAIN</button>
     <button class="btn-primary" id="btn-install" style="display:none">INSTALL NOW</button>
   </div>
 
@@ -348,11 +381,20 @@
       badgeOk: 'UP TO DATE', badgeUpd: 'UPDATE AVAILABLE',
       badgeDl: 'DOWNLOADING', badgeReady: 'READY TO INSTALL', badgeCheck: 'CHECKING',
       whatsNew: "WHAT'S NEW", close: 'CLOSE', install: 'INSTALL NOW',
-      progressPct: 'Downloading {p}% \u00b7 {sp} MB/s',
+      progressPct: 'Downloading {p}%',
+      progressDetail: '{tr} / {tot} MB \u00b7 {sp} MB/s \u00b7 {eta}',
+      etaUnknown: 'estimating...',
+      etaSeconds: '{s}s left',
+      etaMinutes: '{m}m {s}s left',
       heroTitleInstalling: 'INSTALLING UPDATE',
       heroSubInstalling: 'Updating Freq.Phull to version {v}. This will only take a moment...',
       installHint: 'PLEASE DO NOT CLOSE THIS WINDOW',
       checking: 'Checking for updates...',
+      badgeError: 'UPDATE FAILED',
+      heroTitleError: 'UPDATE FAILED',
+      heroSubError: 'Something went wrong. Try again or check Settings > Updates.',
+      retry: 'TRY AGAIN',
+      readyToInstall: 'Download complete. Click Install Now to apply the update.',
     },
     fr: {
       sub: 'Mise a jour', heroTitleUpd: 'MISE A JOUR', heroTitleOk: 'A JOUR',
@@ -362,11 +404,20 @@
       badgeOk: 'A JOUR', badgeUpd: 'MAJ DISPONIBLE',
       badgeDl: 'TELECHARGEMENT', badgeReady: 'PRET A INSTALLER', badgeCheck: 'VERIFICATION',
       whatsNew: 'NOUVEAUTES', close: 'FERMER', install: 'INSTALLER',
-      progressPct: 'Telechargement {p}% \u00b7 {sp} Mo/s',
+      progressPct: 'Telechargement {p}%',
+      progressDetail: '{tr} / {tot} Mo \u00b7 {sp} Mo/s \u00b7 {eta}',
+      etaUnknown: 'estimation...',
+      etaSeconds: '{s}s restantes',
+      etaMinutes: '{m}m {s}s restantes',
       heroTitleInstalling: 'INSTALLATION',
       heroSubInstalling: 'Mise a jour de Freq.Phull vers la version {v}. Cela ne prendra qu\'un instant...',
       installHint: 'NE FERMEZ PAS CETTE FENETRE',
       checking: 'Verification des mises a jour...',
+      badgeError: 'ECHEC',
+      heroTitleError: 'ECHEC DE LA MISE A JOUR',
+      heroSubError: 'Une erreur est survenue. Reessayez ou verifiez Parametres > Mises a jour.',
+      retry: 'REESSAYER',
+      readyToInstall: 'Telechargement termine. Cliquez sur Installer pour appliquer.',
     }
   };
   let lang = 'en';
@@ -382,7 +433,18 @@
     $('lbl-whats-new').textContent = T.whatsNew;
     $('btn-close-2').textContent = T.close;
     $('btn-install').textContent = T.install;
+    $('btn-retry').textContent = T.retry;
     render();
+  }
+
+  function fmtETA(percent, bps) {
+    const T = I[lang];
+    if (!bps || percent <= 0 || percent >= 100) return T.etaUnknown;
+    const remainingBytes = (state.total || 0) * (1 - percent / 100);
+    if (remainingBytes <= 0) return T.etaUnknown;
+    const seconds = Math.round(remainingBytes / bps);
+    if (seconds < 60) return T.etaSeconds.replace('{s}', seconds);
+    return T.etaMinutes.replace('{m}', Math.floor(seconds / 60)).replace('{s}', seconds % 60);
   }
 
   function render() {
@@ -419,6 +481,18 @@
       installBtn.style.display = 'none';
       whatsNew.style.display = 'none';
       progressWrap.classList.remove('on');
+    } else if (state.phase === 'error') {
+      $('hero-title').textContent = T.heroTitleError;
+      $('hero-sub').textContent = T.heroSubError;
+      badge.textContent = T.badgeError;
+      badge.className = 'status-badge update';
+      installBtn.style.display = 'none';
+      $('btn-retry').style.display = '';
+      progressWrap.classList.remove('on');
+      $('ready-line').style.display = 'none';
+      $('error-block').style.display = '';
+      $('error-msg').textContent = state.errorMessage || '';
+      whatsNew.style.display = 'none';
     } else {
       $('hero-title').textContent = T.heroTitleUpd;
       $('hero-sub').textContent = T.heroSubUpd.replace('{v}', state.update);
@@ -426,6 +500,8 @@
       badge.textContent = map[state.phase];
       badge.className = 'status-badge update';
       installBtn.style.display = state.phase === 'ready' ? '' : 'none';
+      $('btn-retry').style.display = 'none';
+      $('error-block').style.display = 'none';
       if (state.notes && state.notes.length) {
         whatsNew.style.display = '';
         $('whats-new-list').innerHTML = state.notes.map(n =>
@@ -435,12 +511,23 @@
       }
       if (state.phase === 'downloading') {
         progressWrap.classList.add('on');
-        $('progress-fill').style.width = Math.max(0, Math.min(100, state.progress)) + '%';
-        $('progress-text').textContent = T.progressPct
-          .replace('{p}', Math.round(state.progress))
-          .replace('{sp}', (state.speed / 1048576).toFixed(2));
+        const pct = Math.max(0, Math.min(100, state.progress));
+        $('progress-fill').style.width = pct + '%';
+        $('progress-text').textContent = T.progressPct.replace('{p}', Math.round(pct));
+        const tr  = ((state.transferred || 0) / 1048576).toFixed(1);
+        const tot = ((state.total || 0) / 1048576).toFixed(1);
+        const sp  = ((state.speed || 0) / 1048576).toFixed(2);
+        $('progress-detail').textContent = T.progressDetail
+          .replace('{tr}', tr).replace('{tot}', tot)
+          .replace('{sp}', sp).replace('{eta}', fmtETA(pct, state.speed));
+        $('ready-line').style.display = 'none';
+      } else if (state.phase === 'ready') {
+        progressWrap.classList.remove('on');
+        $('ready-line').style.display = '';
+        $('ready-line').textContent = T.readyToInstall;
       } else {
         progressWrap.classList.remove('on');
+        $('ready-line').style.display = 'none';
       }
     }
   }
@@ -451,6 +538,14 @@
   $('btn-close-2').onclick = () => window.updaterAPI && window.updaterAPI.close();
   $('btn-min').onclick = () => window.updaterAPI && window.updaterAPI.minimize();
   $('btn-install').onclick = () => window.updaterAPI && window.updaterAPI.install();
+  $('btn-retry').onclick = () => {
+    state.phase = 'checking';
+    delete state.errorMessage;
+    render();
+    if (window.updaterAPI && window.updaterAPI.checkForUpdates) {
+      window.updaterAPI.checkForUpdates();
+    }
+  };
 
   if (window.updaterAPI) {
     window.updaterAPI.onState((s) => { Object.assign(state, s); render(); });

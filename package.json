@@ -1,6 +1,6 @@
 {
   "name": "freqphull",
-  "version": "0.3.9",
+  "version": "0.4.0",
   "description": "Freq.Phull",
   "main": "main.js",
   "scripts": {
@@ -64,7 +64,8 @@
       "!node_modules/electron-builder/**",
       "!**/*.md",
       "!**/*.map",
-      "!dist/**"
+      "!dist/**",
+      "sentry.config.json"
     ],
     "asar": true,
     "asarUnpack": [

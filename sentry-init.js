@@ -12,7 +12,29 @@
 
 'use strict';
 
-const SENTRY_DSN_ENV = process.env.FREQPHULL_SENTRY_DSN || '';
+// DSN resolution:
+//   1. FREQPHULL_SENTRY_DSN env var (dev shells, CI builds)
+//   2. sentry.config.json next to this file (production builds bake it in)
+// Whichever is found first wins. Empty = Sentry disabled, init no-ops.
+function _resolveDsn() {
+  if (process.env.FREQPHULL_SENTRY_DSN) return process.env.FREQPHULL_SENTRY_DSN;
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const candidates = [
+      path.join(__dirname, 'sentry.config.json'),
+      process.resourcesPath ? path.join(process.resourcesPath, 'sentry.config.json') : null,
+    ].filter(Boolean);
+    for (const p of candidates) {
+      if (fs.existsSync(p)) {
+        const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+        if (cfg && cfg.dsn) return cfg.dsn;
+      }
+    }
+  } catch { /* swallow */ }
+  return '';
+}
+const SENTRY_DSN_ENV = _resolveDsn();
 
 // Username / home-dir scrubber. Matches:
 //   C:\Users\<name>\...     ->  C:\Users\<user>\...

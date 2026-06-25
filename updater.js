@@ -68,8 +68,14 @@ function bridgeToUpdaterWindow(channel, payload) {
   else if (channel === 'update-not-available') { phase = 'none'; extra.update = installed; }
   else if (channel === 'download-progress') {
     phase = 'downloading';
-    extra.progress = (payload && payload.percent) || 0;
-    extra.speed = (payload && payload.bytesPerSecond) || 0;
+    extra.progress    = (payload && payload.percent) || 0;
+    extra.speed       = (payload && payload.bytesPerSecond) || 0;
+    extra.transferred = (payload && payload.transferred) || 0;
+    extra.total       = (payload && payload.total) || 0;
+  }
+  else if (channel === 'update-error') {
+    phase = 'error';
+    extra.errorMessage = (payload && payload.message) || 'Update failed';
   }
   else if (channel === 'update-downloaded') {
     phase = 'ready';
@@ -155,6 +161,10 @@ function setupUpdater(opts) {
       send('update-error', { message: (err && err.message) || 'Unknown updater error' });
     }
     manualCheckInProgress = false;
+  });
+  autoUpdater.on('error', (err) => {
+    log('autoUpdater error: ' + (err && err.message));
+    send('update-error', { message: (err && err.message) || 'Unknown error' });
   });
   autoUpdater.on('download-progress', (p) => {
     // p has .percent (0-100), .transferred, .total, .bytesPerSecond

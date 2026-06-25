@@ -97,16 +97,17 @@ never leave the machine. Outbound traffic is limited to: fetching the
 YouTube media the user asks for, the one-time engine setup (pypi), and
 the update check against GitHub.
 
-### Crash reporting (opt-in)
+### Crash reporting
 
-Disabled by default. Toggle in Settings → Privacy. When enabled, the
-app sends anonymized crash reports to Sentry to help track down bugs.
-File paths and YouTube URLs are scrubbed before sending — no audio,
-no library content, no personal data. Requires a build with the
-`FREQPHULL_SENTRY_DSN` environment variable set.
+Production builds send anonymized crash reports to Sentry so we can
+track and fix bugs. The reports contain error stack traces and the
+app version. File paths, usernames, and YouTube URLs are scrubbed
+before transmission. Audio, library content, and personal data
+never leave the machine.
 
-To opt out without rebuilding: set `FREQPHULL_NO_CRASH_REPORT=1`
-in the environment, or toggle off in Settings.
+Requires a build with the `FREQPHULL_SENTRY_DSN` environment
+variable set. For dev/test builds, set `FREQPHULL_NO_CRASH_REPORT=1`
+in the environment to skip Sentry init.
 
 ## License
 

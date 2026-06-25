@@ -4,9 +4,64 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
+## 0.4.0 (2026-06-25)
+
+**Sentry, end-to-end verifiable**
+
+- DSN baking via `sentry.config.json`. Drop a file next to the app with
+  `{ "dsn": "..." }` and electron-builder bundles it into the build. The
+  module reads it at runtime from `__dirname` or `process.resourcesPath`.
+  `FREQPHULL_SENTRY_DSN` env var still works as a higher-priority
+  override for dev/CI. File is gitignored.
+- `sentry.config.example.json` template included as a starting point.
+- Settings > Privacy: two new buttons. **Run diagnostic** shows DSN
+  status (present? source? package installed? Sentry active?) and the
+  last test event ID. **Send test event** fires `captureMessage` and
+  awaits `flush()` so you can verify the round-trip without provoking a
+  real crash.
+- Server endpoints `/sentry-status` and `/sentry-test` back the buttons.
+  Test endpoint stashes the most recent event ID so the diagnostic
+  readout can show what was sent.
+
+**Update window UX**
+
+- Progress detail line: `12.3 / 87.5 MB · 3.2 MB/s · 28s left`. ETA
+  computed from remaining bytes / current bytes-per-second.
+- Smoother progress fill via CSS transition.
+- Error state with diagnostic message and **Try again** button. The
+  retry triggers a fresh `checkForUpdates()` round.
+- "Download complete" confirmation line when ready to install.
+- updater.js now relays `update-error` events from electron-updater
+  through the same state pipe.
+
+**Extension distribution**
+
+Users no longer need to clone or zip-download the whole repo to install
+the extension. New `POST /extension/download` endpoint:
+
+- Fetches the latest release via GitHub API
+- Finds the `freqpull-ext-*.zip` asset
+- Streams it to `~/Downloads` (or `%TEMP%` as fallback)
+- Returns the local path
+
+The how-to wizard's first step now shows **Download extension zip**
+as the primary action, with **Open releases page** as a small fallback.
+A click on the success toast opens the containing folder.
+
+**Engine setup**
+
+- Disk space preflight: bails before download with a clear error if the
+  user profile drive has less than 3.5 GB free. Saves the user from a
+  failed install 2 GB into the torch download.
+- More setup-engines.ps1 narrative comments collapsed to terse summaries
+  (VC++ install block, Step 1 Python detection block, Invoke-RobustDownload
+  preamble). Pure ASCII + CRLF preserved.
+
 ## 0.3.9 (2026-06-23)
 
-- Crash-reporting toggle was unreliable: hydrated from `/prefs` which returns sql.js TEXT values as strings, and `!!"0"` is `true` — so toggling off then reopening Settings would show ON. Plus the toggle defaulted to OFF because there was no DB pref to read while the actual state (privacy.json) said ON. Dedicated `/crash-report-pref` GET/POST endpoints now read and write `privacy.json` directly, with clean boolean responses. `user_set` flag distinguishes a default-ON state from an explicit user choice, so the first-run notice only shows when the user really hasn't decided. Toggle now snaps back to the actual persisted state if the save fails.
+- Crash reporting is now always on. The toggle was removed entirely and replaced with an informational disclosure in Settings > Privacy: what's sent (anonymized stack traces, app version), what's scrubbed (file paths, usernames, YouTube URLs), what's never sent (audio, library content, personal data). FREQPHULL_NO_CRASH_REPORT=1 still works as a dev-only escape hatch.
+- Why we dropped the toggle: the toggle UI hydrated from `/prefs` which returns sql.js TEXT values as strings, and `!!"0"` is `true` in JS — so toggling off then reopening Settings would show ON. Plus a fresh install with no DB pref entry would show OFF even though the actual default was ON. The dedicated `/crash-report-pref` endpoint we added intra-version still had a stale-state edge case after the app was closed. Removing the toggle removes the bug class entirely.
+- Startup migration: stale `privacy.json` from previous opt-in/opt-out builds is deleted at startup so it doesn't sit in userData forever as dead state. Plus the toggle defaulted to OFF because there was no DB pref to read while the actual state (privacy.json) said ON. Dedicated `/crash-report-pref` GET/POST endpoints now read and write `privacy.json` directly, with clean boolean responses. `user_set` flag distinguishes a default-ON state from an explicit user choice, so the first-run notice only shows when the user really hasn't decided. Toggle now snaps back to the actual persisted state if the save fails.
 - Transcribe no longer auto-starts. Dropping or picking a file now stages it (shows the filename in status) and enables a Start button. User picks model + language, then clicks Start.
 - Removed "powered by Whisper" from the transcribe subtitle. New copy: "Convert audio to text - runs locally, offline."
 - Crash reporting default flipped to ON (opt-out). First-run shows a one-time toast disclosing it; click it to jump to Settings > Privacy and opt out. `localStorage.fph_crash_notice_seen` flag means it only fires once per renderer install.
