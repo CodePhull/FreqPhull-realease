@@ -1,25 +1,3 @@
-# Build artifacts
-dist/
-node_modules/
-__pycache__/
-*.pyc
 
-# Bundled binaries (downloaded separately via Download-Binaries.bat)
-bin/yt-dlp.exe
-bin/ffmpeg.exe
-bin/ffprobe.exe
-
-# Local data + cache
-.cache/
-*.log
-
-# Editor / OS junk
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
-
-# Secrets
-.env
-*.pem
-*.key
+# Sentry — DSN goes in sentry.config.json (gitignored, build only)
+sentry.config.json
