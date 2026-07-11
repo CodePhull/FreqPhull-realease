@@ -4,6 +4,77 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
+## 0.4.3 (2026-07-11)
+
+**Bulk download corruption fixed (wrong audio under the right name)**
+
+Parallel/playlist grabs could pair track B's title with track A's audio.
+Root cause: yt-dlp wrote `%(title)s.%(ext)s` into the shared output
+folder, and when a second download's sanitized title collided with an
+existing file, yt-dlp skipped the download ("already downloaded") and
+reported the first file's path — so the second history row pointed at
+the first track's audio. Fix: every download now runs in its own
+`.fp-dl-*` staging subdirectory (collisions impossible), then the file
+is promoted into the output folder with a collision-safe rename
+(`name (2).mp3`, `name (3).mp3`, ...). Stale staging dirs from crashed
+runs are swept after 1 hour. Failure paths clean up their staging dir.
+
+**v0.4.1 CSS actually shipped this time**
+
+The 0.4.1/0.4.2 stylesheet block (context menu, toast count badge,
+clipboard paste hint) silently missed its injection anchor and never
+landed — which is why the FR download page showed the paste hint as raw
+unstyled text crashing into the Fetch button. All of it is now in the
+main stylesheet, and the paste hint is absolutely positioned below the
+URL row instead of inline (no more overlap in either language).
+
+**Boot splash**
+
+The window now paints instantly with a pulsing HK monogram on a dark
+background (pure inline SVG — zero asset dependencies) instead of a
+black screen while the backend boots. Dissolves when app-ready fires.
+BrowserWindow gets `backgroundColor:#0b0b0b` so there is no white flash
+before first paint. Splash animation honors `prefers-reduced-motion`.
+
+**Accessibility**
+
+- `:focus-visible` outlines for keyboard users (mouse clicks stay clean).
+- `prefers-reduced-motion: reduce` disables all decorative animation
+  app-wide, including the splash pulse.
+- 21 icon-only buttons had their `title` mirrored into `aria-label`;
+  6 more (window chrome, play, separator controls) got explicit labels.
+- History context menu is keyboard navigable: arrows move, Enter
+  activates, Esc closes.
+- Toasts announce via per-element aria-live (asserted errors, polite rest).
+
+**Performance**
+
+- History search debounced 120ms — typing a 9-char query is now 1-2
+  renders instead of 9.
+- `content-visibility:auto` on history rows: the browser skips layout
+  and paint for offscreen rows entirely. Biggest win on 1000+ track
+  libraries.
+- `will-change` on progress fills and toasts so they composite on the
+  GPU instead of relayouting.
+
+## 0.4.2 (2026-06-25)
+
+Sentry test reliability fix.
+
+- The test button was sending `captureMessage('info')`, which Sentry
+  silently hides from the default Issues view. Events arrived but
+  weren't visible unless you knew to look in Discover / All Events.
+  Now sends a real `captureException(new Error(...))` at error level,
+  tagged `test:true`. Lands in Issues immediately.
+- Diagnostic readout now shows DSN host + project ID extracted from
+  the configured DSN. Use these to verify you're checking the right
+  Sentry project (most "test sent but I see nothing" reports are wrong-
+  project mismatches).
+- `flush()` timeout is now 4s (was 2s) and the result is surfaced. If
+  the event was queued but delivery wasn't confirmed (firewall etc.),
+  the toast says "queued — check Sentry in 1-2 min" instead of claiming
+  it sent.
+
 ## 0.4.1 (2026-06-25)
 
 UX polish pass — no design changes, just things that should have been there.

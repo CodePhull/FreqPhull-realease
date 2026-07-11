@@ -320,6 +320,7 @@ function createWindow() {
       backgroundThrottling: false,
     },
     show: false,
+    backgroundColor: '#0b0b0b',   // matches the boot splash — no white flash
   });
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));

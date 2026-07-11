@@ -2810,9 +2810,121 @@ a .ic { margin-right: 6px; }
 button > .ic:only-child,
 .btn > .ic:only-child { margin-right: 0; }
 
+
+/* ── v0.4.1 controls (landed properly in 0.4.3) ─────────────────── */
+#hist-search::-webkit-search-cancel-button{-webkit-appearance:none;display:none}
+#hist-search-clear:hover{background:var(--bg3,#222);color:var(--off,#ddd)}
+
+.hist-ctx-menu{
+  position:fixed; z-index:9999; min-width:200px;
+  background:var(--bg2,#161616); border:1px solid var(--border2,#2c2c2c);
+  border-radius:8px; padding:6px; box-shadow:0 8px 28px rgba(0,0,0,.45);
+  font-family:'Inter',system-ui,sans-serif; font-size:12.5px;
+  animation:histCtxIn .12s ease-out;
+}
+@keyframes histCtxIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+.hist-ctx-item{
+  display:block; width:100%; padding:8px 12px;
+  background:transparent; border:0; color:var(--off,#ddd);
+  text-align:left; cursor:pointer; border-radius:5px;
+  font-size:12.5px; font-family:inherit;
+}
+.hist-ctx-item:hover{background:var(--bg3,#222); color:#fff}
+.hist-ctx-item.danger{color:#ff8a8a}
+.hist-ctx-item.danger:hover{background:rgba(255,80,80,.12); color:#ffb4b4}
+.hist-ctx-sep{height:1px; background:var(--border,#242424); margin:4px 0}
+
+.app-notif-count{
+  margin-left:8px; padding:1px 7px; border-radius:10px;
+  background:rgba(255,255,255,.08); font-size:11px;
+  color:var(--off,#ddd); font-variant-numeric:tabular-nums;
+  font-weight:600; letter-spacing:.02em;
+}
+@keyframes appNotifBump{0%{transform:scale(1)}40%{transform:scale(1.03)}100%{transform:scale(1)}}
+.app-notif.bump{animation:appNotifBump .25s ease-out}
+
+.url-paste-hint{
+  position:absolute; top:calc(100% + 6px); left:0; right:0; z-index:50;
+  display:flex; align-items:center; gap:8px;
+  padding:8px 12px;
+  background:var(--bg2,#161616); border:1px solid var(--border2,#2c2c2c);
+  border-left:2px solid var(--accent,#7ed982);
+  border-radius:6px; font-size:12px;
+  box-shadow:0 6px 18px rgba(0,0,0,.35);
+  animation:urlHintIn .18s ease-out;
+}
+@keyframes urlHintIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+.url-paste-hint-label{color:var(--muted,#888); font-size:11px; text-transform:uppercase; letter-spacing:.06em; flex-shrink:0}
+.url-paste-hint-url{
+  color:var(--off,#ddd); font-family:Consolas,monospace;
+  font-size:11.5px; overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap; flex:1; min-width:0;
+}
+.url-paste-hint-btn{
+  background:var(--accent,#7ed982); color:#000; border:0;
+  padding:5px 12px; border-radius:4px; font-size:11px;
+  font-weight:600; font-family:inherit; cursor:pointer;
+  letter-spacing:.04em; text-transform:uppercase; flex-shrink:0;
+}
+.url-paste-hint-btn:hover{filter:brightness(1.1)}
+.url-paste-hint-close{
+  background:transparent; border:0; color:var(--muted,#888);
+  padding:4px; cursor:pointer; border-radius:3px;
+  display:flex; align-items:center; justify-content:center; flex-shrink:0;
+}
+.url-paste-hint-close:hover{color:var(--off,#ddd); background:var(--bg3,#222)}
+
+/* ── v0.4.3 perf: skip layout/paint of offscreen history rows ───── */
+.hist-row{content-visibility:auto; contain-intrinsic-size:auto 64px}
+/* GPU-composite the things that animate every frame */
+.progress-fill{will-change:width}
+.app-notif{will-change:transform,opacity}
+
+/* ── v0.4.3 accessibility ───────────────────────────────────────── */
+/* Visible focus ring for keyboard users only (mouse clicks stay clean) */
+:focus-visible{outline:2px solid var(--accent,#7ed982); outline-offset:2px; border-radius:4px}
+button:focus:not(:focus-visible){outline:none}
+
+/* Honor OS-level reduced-motion: kill decorative animation app-wide */
+@media (prefers-reduced-motion: reduce){
+  *, *::before, *::after{
+    animation-duration:.01ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:.01ms !important;
+    scroll-behavior:auto !important;
+  }
+}
+
+/* ── v0.4.3 boot splash ─────────────────────────────────────────── */
+#boot-splash{
+  position:fixed; inset:0; z-index:100000;
+  display:flex; align-items:center; justify-content:center;
+  background:#0b0b0b;
+  transition:opacity .35s ease-out;
+}
+#boot-splash.done{opacity:0; pointer-events:none}
+#boot-splash .hk-mark{
+  width:88px; height:88px;
+  animation:hkPulse 1.4s ease-in-out infinite;
+  filter:drop-shadow(0 0 24px rgba(126,217,130,.25));
+}
+@keyframes hkPulse{
+  0%,100%{transform:scale(1); opacity:.85}
+  50%{transform:scale(1.08); opacity:1}
+}
+@media (prefers-reduced-motion: reduce){
+  #boot-splash .hk-mark{animation:none; opacity:1}
+}
 </style>
 </head>
 <body>
+<div id="boot-splash" aria-hidden="true">
+  <svg class="hk-mark" viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Freq.Phull loading">
+    <rect x="4" y="4" width="88" height="88" rx="14" fill="none" stroke="#7ed982" stroke-width="3"/>
+    <path d="M26 26v44M26 48h18M44 26v44" stroke="#f2f2f2" stroke-width="6" stroke-linecap="round" fill="none"/>
+    <path d="M58 26v44M58 48l16-22M62 44l14 26" stroke="#7ed982" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  </svg>
+</div>
   <!-- Accessibility: keyboard users can jump past the sidebar.
        Visible only when focused (.skip-link CSS in the polish block). -->
   <a href="#main" class="skip-link" onclick="document.getElementById('main')?.focus();return false;">Skip to main content</a>
@@ -2835,10 +2947,10 @@ button > .ic:only-child,
   <img class="tb-logo" src="../assets/hk-logo.png" alt="HK" onerror="this.style.display='none'"/>
   <div class="tb-div"></div>
   <div class="tb-nav">
-    <button class="tb-nav-btn" id="tb-back" onclick="tabHistoryBack()" title="Back (Ctrl+Alt+←)" disabled>
+    <button class="tb-nav-btn" id="tb-back" onclick="tabHistoryBack()" title="Back (Ctrl+Alt+←)" disabled aria-label="Back">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
     </button>
-    <button class="tb-nav-btn" id="tb-forward" onclick="tabHistoryForward()" title="Forward (Ctrl+Alt+→)" disabled>
+    <button class="tb-nav-btn" id="tb-forward" onclick="tabHistoryForward()" title="Forward (Ctrl+Alt+→)" disabled aria-label="Forward">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
     </button>
   </div>
@@ -2851,9 +2963,9 @@ button > .ic:only-child,
     <span class="tb-dot-txt" id="tb-txt">Starting…</span>
   </div>
   <div class="tb-ctrls">
-    <button class="tb-btn" onclick="api.minimize()"><svg width="11" height="2"><rect width="11" height="2" fill="currentColor"/></svg></button>
-    <button class="tb-btn" onclick="api.maximize()"><svg width="10" height="10"><rect x=".5" y=".5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
-    <button class="tb-btn x" onclick="api.close()"><svg width="10" height="10"><line x1="1" y1="1" x2="9" y2="9" stroke="currentColor" stroke-width="1.5"/><line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" stroke-width="1.5"/></svg></button>
+    <button class="tb-btn" onclick="api.minimize()" aria-label="Minimize window"><svg width="11" height="2"><rect width="11" height="2" fill="currentColor"/></svg></button>
+    <button class="tb-btn" onclick="api.maximize()" aria-label="Maximize window"><svg width="10" height="10"><rect x=".5" y=".5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
+    <button class="tb-btn x" onclick="api.close()" aria-label="Close window"><svg width="10" height="10"><line x1="1" y1="1" x2="9" y2="9" stroke="currentColor" stroke-width="1.5"/><line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" stroke-width="1.5"/></svg></button>
   </div>
 </div>
 
@@ -2905,7 +3017,7 @@ button > .ic:only-child,
       <div class="ph"><div class="ph-title">Download</div><div class="ph-sub">Paste a YouTube URL and save as MP3, WAV, FLAC and more</div></div>
       <div class="card">
         <div class="card-lbl">YouTube URL</div>
-        <div class="row mb">
+        <div class="row mb" id="url-row" style="position:relative">
           <input type="text" id="url-in" class="url-inp" placeholder="https://www.youtube.com/watch?v=…"/>
           <button class="btn pri" id="btn-fetch" onclick="fetchInfo()" style="height:50px;padding:0 26px;font-size:15px">Fetch</button>
         </div>
@@ -2941,7 +3053,7 @@ button > .ic:only-child,
             <!-- Auto-clear duration is configured in Settings → "Auto-clear
                  download queue" so this card stays uncluttered. The sweep
                  runs regardless of whether this card is visible. -->
-            <button class="dl-queue-clear" onclick="clearCompletedDownloads()" title="Clear completed">Clear completed</button>
+            <button class="dl-queue-clear" onclick="clearCompletedDownloads()" title="Clear completed" aria-label="Clear completed">Clear completed</button>
           </div>
         </div>
         <div class="dl-queue-items" id="dl-queue-items"></div>
@@ -2983,7 +3095,7 @@ button > .ic:only-child,
           <canvas id="waveform"></canvas><div class="playbar" id="playbar" style="left:0%"></div>
         </div>
         <div class="transport">
-          <button class="play-btn" onclick="togglePlay()"><svg id="play-ico" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg></button>
+          <button class="play-btn" onclick="togglePlay()" aria-label="Play / pause"><svg id="play-ico" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg></button>
           <span class="ttime" id="ttime">0:00 / 0:00</span>
           <div class="seek" id="seek-bar" onclick="seekBar(event)"><div class="seek-fill" id="seek-fill"></div></div>
           <!-- Volume fader -->
@@ -3125,7 +3237,7 @@ button > .ic:only-child,
 
       <!-- Loaded source + options -->
       <div class="card hidden" id="stems-options">
-        <div class="sh"><div class="sh-title" id="stems-source-name">—</div><button class="btn xs" onclick="clearSeparatorSource()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+        <div class="sh"><div class="sh-title" id="stems-source-name">—</div><button class="btn xs" onclick="clearSeparatorSource()" aria-label="Clear source file"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
 
         <div style="margin-bottom:18px">
           <div class="card-lbl" style="margin-bottom:10px"><span id="stems-mode-lbl">Stems</span></div>
@@ -3325,9 +3437,9 @@ button > .ic:only-child,
             </div>
           </div>
           <div style="display:flex;gap:6px">
-            <button class="btn xs pri" onclick="openMiniDAW()" id="btn-open-daw" title="Edit stems in timeline"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="margin-right:4px;vertical-align:-2px"><rect x="3" y="6" width="18" height="3" rx="1"/><rect x="3" y="11" width="18" height="3" rx="1"/><rect x="3" y="16" width="18" height="3" rx="1"/></svg>Open Mini-DAW</button>
+            <button class="btn xs pri" onclick="openMiniDAW()" id="btn-open-daw" title="Edit stems in timeline" aria-label="Edit stems in timeline"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="margin-right:4px;vertical-align:-2px"><rect x="3" y="6" width="18" height="3" rx="1"/><rect x="3" y="11" width="18" height="3" rx="1"/><rect x="3" y="16" width="18" height="3" rx="1"/></svg>Open Mini-DAW</button>
             <button class="btn xs" onclick="openStemFolder()" id="btn-open-stems"><span id="btn-open-stems-lbl">Open Folder</span></button>
-            <button class="btn xs" onclick="closeSeparatorResults()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            <button class="btn xs" onclick="closeSeparatorResults()" aria-label="Close results"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
           </div>
         </div>
         <div id="stem-list"></div>
@@ -3370,7 +3482,7 @@ button > .ic:only-child,
                 <path d="M9 11h6m-3-3v6m9-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/>
               </svg>
               <span id="master-ref-label">Drop a reference track or click to pick</span>
-              <button class="master-ref-clear hidden" id="master-ref-clear" onclick="event.stopPropagation();clearMasterReference()" title="Remove reference">×</button>
+              <button class="master-ref-clear hidden" id="master-ref-clear" onclick="event.stopPropagation();clearMasterReference()" title="Remove reference" aria-label="Remove reference">×</button>
             </div>
             <input type="file" id="master-ref-file" accept="audio/*" style="display:none" onchange="onMasterReferencePicked(event)">
             <div class="master-strength">
@@ -3486,14 +3598,14 @@ button > .ic:only-child,
           <span class="hb-count" id="hist-sel-count">0 selected</span>
         </div>
         <div class="hb-right hidden" id="batch-move-actions">
-          <button class="btn sm" onclick="bulkTagSelected()" title="Apply a Stockpile tag to all selected tracks"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.6 13.4 13 21l-9-9V4h8l8.6 8.6a1.4 1.4 0 0 1 0 2z"/><circle cx="8" cy="8" r="1.5"/></svg> Tag…</button>
-          <button class="btn sm" onclick="bulkFavoriteSelected(true)" title="Add to Favorites"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg> Favorite</button>
-          <button class="btn sm" onclick="bulkFavoriteSelected(false)" title="Remove from Favorites"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg> Unfavorite</button>
-          <button class="btn sm" onclick="bulkReanalyzeSelected()" title="Re-run BPM/key analysis on all selected"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg> Re-analyze</button>
-          <button class="btn sm" onclick="bulkSendToSeparator()" title="Queue selected tracks for stem separation"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg> Separate</button>
-          <button class="btn sm" id="btn-stockpile" onclick="bulkMoveSelected('stockpile')" title="Move selected to Stockpile folder"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v13H3zM3 7l3-4h12l3 4M12 3v17"/></svg> To Stockpile</button>
-          <button class="btn sm" id="btn-moveto" onclick="bulkMoveSelected('pick')" title="Choose folder"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> Move to…</button>
-          <button class="btn sm danger" onclick="bulkDeleteSelected()" title="Delete from history (files remain on disk)"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> Delete</button>
+          <button class="btn sm" onclick="bulkTagSelected()" title="Apply a Stockpile tag to all selected tracks" aria-label="Apply a Stockpile tag to all selected tracks"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.6 13.4 13 21l-9-9V4h8l8.6 8.6a1.4 1.4 0 0 1 0 2z"/><circle cx="8" cy="8" r="1.5"/></svg> Tag…</button>
+          <button class="btn sm" onclick="bulkFavoriteSelected(true)" title="Add to Favorites" aria-label="Add to Favorites"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg> Favorite</button>
+          <button class="btn sm" onclick="bulkFavoriteSelected(false)" title="Remove from Favorites" aria-label="Remove from Favorites"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg> Unfavorite</button>
+          <button class="btn sm" onclick="bulkReanalyzeSelected()" title="Re-run BPM/key analysis on all selected" aria-label="Re-run BPM/key analysis on all selected"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg> Re-analyze</button>
+          <button class="btn sm" onclick="bulkSendToSeparator()" title="Queue selected tracks for stem separation" aria-label="Queue selected tracks for stem separation"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg> Separate</button>
+          <button class="btn sm" id="btn-stockpile" onclick="bulkMoveSelected('stockpile')" title="Move selected to Stockpile folder" aria-label="Move selected to Stockpile folder"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v13H3zM3 7l3-4h12l3 4M12 3v17"/></svg> To Stockpile</button>
+          <button class="btn sm" id="btn-moveto" onclick="bulkMoveSelected('pick')" title="Choose folder" aria-label="Choose folder"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> Move to…</button>
+          <button class="btn sm danger" onclick="bulkDeleteSelected()" title="Delete from history (files remain on disk)" aria-label="Delete from history"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> Delete</button>
         </div>
       </div>
 
@@ -3575,7 +3687,7 @@ button > .ic:only-child,
         <div class="sh">
           <div class="sh-title" id="sp-untagged-title">Untagged</div>
           <span class="sh-meta" id="sp-untagged-count">0 tracks</span>
-          <button class="btn xs" style="margin-left:auto" onclick="openAutoOrganize()" title="Suggest a folder for each untagged track based on artist, mood, BPM, and key similarity"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.3L4.8 10l5.3 1.9L12 17l1.9-5.3L19.2 10l-5.3-1.9zM5 3v4M3 5h4M19 17v4M17 19h4"/></svg> Auto-organize</button>
+          <button class="btn xs" style="margin-left:auto" onclick="openAutoOrganize()" title="Suggest a folder for each untagged track based on artist, mood, BPM, and key similarity" aria-label="Suggest a folder for each untagged track based on artist, mood, BPM, and key similarity"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.3L4.8 10l5.3 1.9L12 17l1.9-5.3L19.2 10l-5.3-1.9zM5 3v4M3 5h4M19 17v4M17 19h4"/></svg> Auto-organize</button>
         </div>
         <div id="sp-untagged-list" class="sp-untagged-list">
           <div class="sp-empty" id="sp-untagged-empty" style="font-size:12px;color:var(--hint)">All tracks tagged.</div>
@@ -3597,8 +3709,8 @@ button > .ic:only-child,
             <div class="sp-fv-meta" id="sp-fv-meta">—</div>
           </div>
           <div class="sp-fv-header-actions">
-            <button class="btn sm" onclick="openMatchPreviewFromView()" id="sp-fv-automatch" title="Auto-match more tracks"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> <span id="sp-fv-automatch-lbl">Auto-match</span></button>
-            <button class="btn sm" onclick="editFolderFromView()" id="sp-fv-edit" title="Edit folder"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button>
+            <button class="btn sm" onclick="openMatchPreviewFromView()" id="sp-fv-automatch" title="Auto-match more tracks" aria-label="Auto-match more tracks"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> <span id="sp-fv-automatch-lbl">Auto-match</span></button>
+            <button class="btn sm" onclick="editFolderFromView()" id="sp-fv-edit" title="Edit folder" aria-label="Edit folder"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button>
           </div>
         </div>
 
@@ -3776,7 +3888,7 @@ button > .ic:only-child,
     <button id="sp-fv-mini-next" tabindex="-1" onmousedown="this.blur()" onclick="globalPlayerNext();this.blur()" title="Next track (→)" aria-label="Next track">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><polygon points="5,5 5,19 15,12"/><rect x="16" y="5" width="3" height="14"/></svg>
     </button>
-    <button id="sp-fv-mini-loop" class="sp-fv-mini-mode-btn" tabindex="-1" onmousedown="this.blur()" onclick="toggleLoopMode();this.blur()" title="Loop">
+    <button id="sp-fv-mini-loop" class="sp-fv-mini-mode-btn" tabindex="-1" onmousedown="this.blur()" onclick="toggleLoopMode();this.blur()" title="Loop" aria-label="Loop">
       <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" shape-rendering="geometricPrecision"><path d="M2 4h7V2l3 3-3 3V6H2z"/><path d="M12 10H5v2l-3-3 3-3v2h7z"/></svg>
     </button>
   </div>
@@ -3805,11 +3917,11 @@ button > .ic:only-child,
   <button class="sp-fv-mini-extra-btn" id="sp-fv-mini-fav" tabindex="-1" onmousedown="this.blur()" onclick="miniPlayerToggleFavorite();this.blur()" title="Favorite" aria-label="Toggle favorite">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
   </button>
-  <button class="sp-fv-mini-extra-btn" id="sp-fv-mini-notepad-btn" tabindex="-1" onmousedown="this.blur()" onclick="toggleMiniNotepad();this.blur()" title="Notepad">
+  <button class="sp-fv-mini-extra-btn" id="sp-fv-mini-notepad-btn" tabindex="-1" onmousedown="this.blur()" onclick="toggleMiniNotepad();this.blur()" title="Notepad" aria-label="Notepad">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
   </button>
   <div class="sp-fv-mini-volume-wrap">
-    <button class="sp-fv-mini-vol-btn" tabindex="-1" onmousedown="this.blur()" onclick="folderViewToggleMute();this.blur()" id="sp-fv-mini-vol-btn" title="Mute / Unmute">
+    <button class="sp-fv-mini-vol-btn" tabindex="-1" onmousedown="this.blur()" onclick="folderViewToggleMute();this.blur()" id="sp-fv-mini-vol-btn" title="Mute / Unmute" aria-label="Mute / Unmute">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" id="sp-fv-mini-vol-icon"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
     </button>
     <div class="sp-fv-mini-volume" id="sp-fv-mini-volume" onclick="folderViewVolumeClick(event)">
@@ -3819,7 +3931,7 @@ button > .ic:only-child,
       </div>
     </div>
   </div>
-  <button class="sp-fv-mini-close" tabindex="-1" onmousedown="this.blur()" onclick="stopGlobalPlay();this.blur()" title="Stop">
+  <button class="sp-fv-mini-close" tabindex="-1" onmousedown="this.blur()" onclick="stopGlobalPlay();this.blur()" title="Stop" aria-label="Stop">
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
   </button>
 
@@ -3828,7 +3940,7 @@ button > .ic:only-child,
   <div class="sp-fv-mini-notepad hidden" id="sp-fv-mini-notepad">
     <div class="sp-fv-mini-notepad-head">
       <span class="sp-fv-mini-notepad-title" id="sp-fv-mini-notepad-title">Notes</span>
-      <button class="sp-fv-mini-notepad-close" onclick="toggleMiniNotepad()" title="Close">
+      <button class="sp-fv-mini-notepad-close" onclick="toggleMiniNotepad()" title="Close" aria-label="Close">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
       </button>
     </div>

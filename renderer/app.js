@@ -180,6 +180,7 @@ window.addEventListener('DOMContentLoaded', () => {
   setTimeout(() => {
     if (!document.body.classList.contains('app-ready')) {
       document.body.classList.add('app-ready');
+      (function(){ const sp = document.getElementById('boot-splash'); if (sp && !sp.classList.contains('done')) { sp.classList.add('done'); setTimeout(() => sp.remove(), 450); } })();
     }
   }, 2500);
 
@@ -234,6 +235,7 @@ function onBackendReady() {
     // body opacity transitions to 1.
     requestAnimationFrame(() => requestAnimationFrame(() => {
       document.body.classList.add('app-ready');
+      (function(){ const sp = document.getElementById('boot-splash'); if (sp && !sp.classList.contains('done')) { sp.classList.add('done'); setTimeout(() => sp.remove(), 450); } })();
     }));
   });
   // Subscribe to live server events so history refreshes itself when a
@@ -5011,7 +5013,7 @@ async function _maybeSuggestClipboardPaste() {
       '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>' +
     '</button>';
   hint.querySelector('.url-paste-hint-url').textContent = preview;
-  urlIn.parentNode.insertBefore(hint, urlIn.nextSibling);
+  (document.getElementById('url-row') || urlIn.parentNode).appendChild(hint);
 
   const paste = () => {
     urlIn.value = text;
@@ -5026,11 +5028,13 @@ async function _maybeSuggestClipboardPaste() {
 }
 
 // v0.4.1: History search helpers — show/hide clear button + result counter.
+let _histSearchDebounce = null;
 function onHistSearchInput() {
   const el = document.getElementById('hist-search');
   const btn = document.getElementById('hist-search-clear');
   if (btn) btn.style.display = (el && el.value) ? 'flex' : 'none';
-  renderHistory();
+  clearTimeout(_histSearchDebounce);
+  _histSearchDebounce = setTimeout(renderHistory, 120);
 }
 function clearHistSearch() {
   const el = document.getElementById('hist-search');
@@ -5140,6 +5144,22 @@ function showHistoryContextMenu(ev, id) {
     const i = parseInt(btn.dataset.i, 10);
     _closeHistoryCtxMenu();
     try { items[i].act(); } catch (err) { showAppNotification('Action failed: ' + err.message, 'err'); }
+  });
+
+  // Keyboard navigation: arrows move focus, Enter activates, Esc closes.
+  const focusables = Array.from(m.querySelectorAll('button.hist-ctx-item'));
+  let focusIdx = -1;
+  m.tabIndex = -1;
+  m.focus();
+  m.addEventListener('keydown', (ke) => {
+    if (ke.key === 'Escape') { _closeHistoryCtxMenu(); ke.preventDefault(); return; }
+    if (ke.key === 'ArrowDown' || ke.key === 'ArrowUp') {
+      focusIdx = ke.key === 'ArrowDown'
+        ? (focusIdx + 1) % focusables.length
+        : (focusIdx - 1 + focusables.length) % focusables.length;
+      focusables[focusIdx].focus();
+      ke.preventDefault();
+    }
   });
 
   // Defer the outside-click listener by a tick so the very click that
@@ -9187,6 +9207,7 @@ const T = {
     crashReportTestBtn:'Send test event',
     crashReportTestSending:'Sending...',
     crashReportTestSent:'Test event sent',
+    crashReportTestQueued:'Test event queued — check Sentry in 1-2 min',
     crashReportTestFailed:'Test send failed',
     crashReportDiagLoading:'Checking...',
     ctxOpenAnalyze:'Open in Analyze',
@@ -9678,6 +9699,7 @@ const T = {
     crashReportTestBtn:'Envoyer un evenement test',
     crashReportTestSending:'Envoi...',
     crashReportTestSent:'Evenement test envoye',
+    crashReportTestQueued:'Evenement test en attente — verifiez Sentry dans 1-2 min',
     crashReportTestFailed:'Echec de l\'envoi',
     crashReportDiagLoading:'Verification...',
     ctxOpenAnalyze:'Ouvrir dans Analyse',
@@ -10337,6 +10359,8 @@ async function showCrashReportDiag() {
     const lines = [
       'DSN configured:    ' + (j.dsn_present ? 'yes' : 'NO'),
       'DSN source:        ' + (j.dsn_source || 'none'),
+      'DSN host:          ' + (j.dsn_host || '(none)'),
+      'DSN project ID:    ' + (j.dsn_project || '(none)'),
       'Package installed: ' + (j.package_installed ? 'yes' : 'NO'),
       'Sentry active:     ' + (j.active ? 'yes' : 'NO'),
       'Process version:   ' + (j.version || 'unknown'),
@@ -10349,6 +10373,11 @@ async function showCrashReportDiag() {
     } else if (!j.package_installed) {
       lines.push('');
       lines.push('Install @sentry/node and @sentry/electron in the build.');
+    } else if (j.dsn_host && j.dsn_project) {
+      lines.push('');
+      lines.push('Verify your Sentry project URL matches:');
+      lines.push('  https://' + j.dsn_host.replace(/^o\d+\.ingest\./, '').replace(/\.ingest\./, '.') + '/issues/');
+      lines.push('Project ID in URL should be: ' + j.dsn_project);
     }
     out.textContent = lines.join('\n');
   } catch (e) {
@@ -10364,17 +10393,19 @@ async function sendTestCrashReport() {
   try {
     const r = await fetch(API + '/sentry-test', { method: 'POST' });
     const j = await r.json();
-    if (j.ok) {
-      showAppNotification(
-        (t('crashReportTestSent') || 'Test event sent') +
-        (j.event_id ? ' (id: ' + j.event_id.slice(0, 8) + ')' : ''),
-        'done', null, 5000
-      );
+    if (j.ok || j.event_id) {
+      // event_id was assigned even on flush timeout — that means the
+      // SDK accepted the event; only delivery confirmation is missing.
+      const idTail = j.event_id ? ' (id: ' + j.event_id.slice(0, 8) + ')' : '';
+      const msg = j.warning
+        ? (t('crashReportTestQueued') || 'Test event queued — check Sentry in 1-2 min') + idTail
+        : (t('crashReportTestSent') || 'Test event sent') + idTail;
+      showAppNotification(msg, j.warning ? 'info' : 'done', null, j.warning ? 9000 : 5000);
       showCrashReportDiag();
     } else {
       showAppNotification(
         (t('crashReportTestFailed') || 'Could not send') + ': ' + (j.error || 'unknown'),
-        'err', null, 6000
+        'err', null, 7000
       );
     }
   } catch (e) {

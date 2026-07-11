@@ -1183,23 +1183,56 @@ app.get('/download', async (req, res) => {
   slog('yt-dlp path: ' + ytdlp);
   slog('ffmpeg dir: ' + ffDir);
 
+  // Per-download staging dir. Bulk grabs with colliding titles used to
+  // corrupt each other: yt-dlp writes %(title)s.%(ext)s into the shared
+  // folder, and when download B's sanitized title matched an existing
+  // file from download A, yt-dlp skipped the download ("already
+  // downloaded") and printed A's path — so B's history row pointed at
+  // A's audio. Isolating every download in its own subdir makes that
+  // impossible; the staged file is moved up with a collision-safe
+  // rename afterwards.
+  // Sweep stale staging dirs from crashed/killed runs (older than 1h).
+  try {
+    const now = Date.now();
+    for (const d of fs.readdirSync(outDir)) {
+      if (!d.startsWith('.fp-dl-')) continue;
+      const p = path.join(outDir, d);
+      try {
+        if (now - fs.statSync(p).mtimeMs > 3600_000) fs.rmSync(p, { recursive: true, force: true });
+      } catch {}
+    }
+  } catch {}
+
+  const stagingDir = path.join(outDir, '.fp-dl-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
+  try { fs.mkdirSync(stagingDir, { recursive: true }); }
+  catch (e) { return res.status(500).json({ error: 'Cannot create staging dir: ' + e.message }); }
+
   const args = ['--no-playlist', '--no-warnings', '-x', '--audio-format', fmt, '--audio-quality', '0', '--ffmpeg-location', ffDir, '--newline',
-                // CRITICAL (0.2.2 fix): print the final path AFTER all
-                // postprocessing/moves. This is how we identify which file
-                // belongs to THIS download — the old "newest mtime in dir"
-                // heuristic raced badly between parallel grabs.
+                // Print the final path after all postprocessing/moves.
                 '--print', 'after_move:filepath',
-                '-o', path.join(outDir, '%(title)s.%(ext)s'), url];
+                '-o', path.join(stagingDir, '%(title)s.%(ext)s'), url];
   if (fmt === 'wav') args.push('--postprocessor-args', 'ffmpeg:-acodec pcm_s16le -ar 44100');
 
-  // ── Pre-download snapshot (0.2.2 race-proof) ──────────────────
-  // Take an instant snapshot of every file in outDir BEFORE yt-dlp runs.
-  // After it exits, we diff this set against the new listing to find
-  // exactly what THIS download produced — independent of mtime, immune
-  // to parallel downloads writing into the same folder at the same time.
-  let preFiles;
-  try { preFiles = new Set(fs.readdirSync(outDir)); }
-  catch (e) { preFiles = new Set(); }
+  function cleanupStaging() {
+    try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch {}
+  }
+
+  // Move the staged file into outDir without ever clobbering an existing
+  // file: "name.mp3" -> "name (2).mp3" -> "name (3).mp3" ...
+  function promoteStagedFile(stagedPath) {
+    const base = path.basename(stagedPath);
+    const ext = path.extname(base);
+    const stem = base.slice(0, base.length - ext.length);
+    let target = path.join(outDir, base);
+    let n = 2;
+    while (fs.existsSync(target)) {
+      target = path.join(outDir, stem + ' (' + n + ')' + ext);
+      n++;
+      if (n > 200) throw new Error('Could not find a free filename for ' + base);
+    }
+    fs.renameSync(stagedPath, target);   // atomic same-volume
+    return target;
+  }
 
   sse('status', { message: 'Starting download…' });
 
@@ -1306,6 +1339,7 @@ app.get('/download', async (req, res) => {
         msg = stderr.trim() || 'yt-dlp failed with code ' + code;
         hint = null;
       }
+      cleanupStaging();
       sse('error', { message: msg, hint, code: 'download_failed', raw: stderr.trim().slice(-500) });
       // Only report categories that suggest action: signature breaks
       // are interesting (means yt-dlp needs an update), 403s after
@@ -1320,48 +1354,42 @@ app.get('/download', async (req, res) => {
       return res.end();
     }
 
-    // Resolve THIS download's actual file. Priority:
-    //   1. --print after_move:filepath  (most accurate, race-proof)
-    //   2. Last "Destination:" line     (post-extract-audio destination)
-    //   3. mtime-newest                 (legacy, raced with parallel)
-    let fullPath = null, filename = null, resolved = 'unknown';
+    // Resolve THIS download's file. The staging dir belongs to this
+    // download alone, so any audio file inside it is ours — no cross-
+    // download ambiguity possible. --print / Destination are used as
+    // hints; the directory scan is the authoritative fallback.
+    let stagedPath = null, resolved = 'unknown';
     if (printedPath && fs.existsSync(printedPath)) {
-      fullPath = printedPath;
-      filename = path.basename(printedPath);
-      resolved = 'after_move';
+      stagedPath = printedPath; resolved = 'after_move';
     } else if (destPath && fs.existsSync(destPath)) {
-      fullPath = destPath;
-      filename = path.basename(destPath);
-      resolved = 'destination';
+      stagedPath = destPath; resolved = 'destination';
     } else {
-      // Snapshot-diff: pick files in outDir that weren't there before
-      // yt-dlp ran AND match our target format. Race-proof regardless
-      // of how many other downloads share this folder.
-      let postFiles;
-      try { postFiles = fs.readdirSync(outDir); }
-      catch (e) { postFiles = []; }
-      const newFiles = postFiles
-        .filter(f => !preFiles.has(f) && f.toLowerCase().endsWith('.' + fmt))
-        .map(f => ({ name: f, mtime: fs.statSync(path.join(outDir, f)).mtimeMs }))
-        .sort((a, b) => b.mtime - a.mtime);
-      if (newFiles.length) {
-        filename = newFiles[0].name;
-        fullPath = path.join(outDir, filename);
-        resolved = 'snapshot-diff';
-      } else {
-        // Last resort: legacy mtime scan. Should never reach here on a
-        // modern yt-dlp + healthy outDir; log a warning so we notice.
-        const allFiles = postFiles
-          .map(f => ({ name: f, mtime: fs.statSync(path.join(outDir, f)).mtimeMs }))
-          .filter(f => f.name.toLowerCase().endsWith('.' + fmt))
-          .sort((a, b) => b.mtime - a.mtime);
-        if (!allFiles.length) { sse('error', { message: 'Output file not found in ' + outDir }); return res.end(); }
-        filename = allFiles[0].name;
-        fullPath = path.join(outDir, filename);
-        resolved = 'mtime-last-resort';
-        slog('WARN: parallel-safe path detection fully exhausted (no --print, no Destination, no snapshot-new); falling back to mtime');
+      let staged;
+      try { staged = fs.readdirSync(stagingDir); } catch { staged = []; }
+      const audio = staged.filter(f => f.toLowerCase().endsWith('.' + fmt));
+      if (audio.length) {
+        stagedPath = path.join(stagingDir, audio[0]);
+        resolved = 'staging-scan';
+        if (audio.length > 1) slog('WARN: multiple audio files in staging dir, took first: ' + audio.join(', '));
       }
     }
+    if (!stagedPath) {
+      cleanupStaging();
+      sse('error', { message: 'Output file not found after download' });
+      return res.end();
+    }
+
+    // Promote out of staging into the real output folder.
+    let fullPath, filename;
+    try {
+      fullPath = promoteStagedFile(stagedPath);
+      filename = path.basename(fullPath);
+    } catch (e) {
+      cleanupStaging();
+      sse('error', { message: 'Could not move file into output folder: ' + e.message });
+      return res.end();
+    }
+    cleanupStaging();
     slog('Downloaded to: ' + fullPath + ' (via ' + resolved + ')');
 
     let meta = {};
@@ -2859,12 +2887,11 @@ app.post('/extension/download', async (req, res) => {
 
 app.get('/sentry-status', (_, res) => {
   // Re-resolve the DSN at request time so the user sees the same state
-  // the sentry-init module sees.
-  let dsnPresent = false;
-  let dsnSource = 'none';
+  // the sentry-init module sees. Extract host + project ID so the user
+  // can sanity-check they're looking at the right Sentry project.
+  let dsnPresent = false, dsnSource = 'none', dsnValue = '';
   if (process.env.FREQPHULL_SENTRY_DSN) {
-    dsnPresent = true;
-    dsnSource = 'env';
+    dsnPresent = true; dsnSource = 'env'; dsnValue = process.env.FREQPHULL_SENTRY_DSN;
   } else {
     const candidates = [
       path.join(__dirname, 'sentry.config.json'),
@@ -2874,16 +2901,27 @@ app.get('/sentry-status', (_, res) => {
       try {
         if (fs.existsSync(p)) {
           const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
-          if (cfg && cfg.dsn) { dsnPresent = true; dsnSource = 'config-file'; break; }
+          if (cfg && cfg.dsn) { dsnPresent = true; dsnSource = 'config-file'; dsnValue = cfg.dsn; break; }
         }
       } catch {}
     }
+  }
+  // Parse DSN: https://KEY@HOST/PROJECT_ID — strip the key for privacy.
+  let dsnHost = '', dsnProject = '';
+  if (dsnValue) {
+    try {
+      const u = new URL(dsnValue);
+      dsnHost = u.host;
+      dsnProject = u.pathname.replace(/^\//, '');
+    } catch {}
   }
   let packageInstalled = false;
   try { require.resolve('@sentry/node'); packageInstalled = true; } catch {}
   res.json({
     dsn_present: dsnPresent,
     dsn_source: dsnSource,
+    dsn_host: dsnHost,
+    dsn_project: dsnProject,
     package_installed: packageInstalled,
     active: !!_sentryClient,
     version: _serverVersion,
@@ -2899,17 +2937,31 @@ app.post('/sentry-test', (_, res) => {
     });
   }
   try {
-    // captureMessage returns the event ID Sentry assigned. Stash it
-    // so the diagnostic readout can show what got sent.
     const Sentry = require('@sentry/node');
-    const eventId = Sentry.captureMessage(
-      'Test event from Freq.Phull v' + _serverVersion + ' (manual diagnostic)',
-      'info'
+    // captureException with a real Error so it shows up in the default
+    // Issues view. captureMessage('info') is hidden in most projects
+    // because Sentry filters anything below 'warning' out of Issues —
+    // they DO arrive, but in Discover/All Events, where most people
+    // don't look. An Error guarantees visibility.
+    const err = new Error(
+      'Test event from Freq.Phull v' + _serverVersion +
+      ' (manual diagnostic, ' + new Date().toISOString() + ')'
     );
+    err.name = 'FreqPhullTestEvent';
+    const eventId = Sentry.captureException(err, {
+      level: 'error',
+      tags: { test: 'true', source: 'manual-diagnostic' },
+    });
     _lastTestEventId = eventId || null;
-    // flush so the event is on its way before we respond
-    Sentry.flush(2000).then(() => {
-      res.json({ ok: true, event_id: eventId });
+    Sentry.flush(4000).then((flushed) => {
+      // flush returns true if all pending events were delivered, false
+      // on timeout. Both are useful to know.
+      res.json({
+        ok: !!flushed,
+        event_id: eventId,
+        flushed: !!flushed,
+        warning: flushed ? null : 'Flush timed out — event was queued but delivery is unconfirmed. Check network/firewall.',
+      });
     }).catch((e) => {
       res.json({ ok: false, error: 'flush failed: ' + e.message });
     });
