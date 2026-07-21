@@ -18,6 +18,140 @@ const _sentryClient = sentry.init('node', _serverVersion, {
 });
 const report = (category, err, ctx) => sentry.reportSoftError('node', category, err, ctx);
 
+// ── Engine verification + self-healing ──────────────────────────────
+// verify_engines.py import-checks every tier and reports exactly which
+// pip packages are broken. attemptEngineRepair() feeds that straight
+// back into setup-engines.ps1 -Repair, headless — at most once per
+// session so a genuinely unfixable machine can't repair-loop forever.
+let _lastVerifyResult = null;
+let _repairAttemptedThisSession = false;
+let _repairRunning = false;
+
+function verifyEngines() {
+  return new Promise((resolve) => {
+    const py = discoverPython();
+    if (!py) return resolve({ ok: false, reason: 'python-missing', tiers: {}, broken_packages: [] });
+    const scriptSrc = getResourcePath('verify_engines.py');
+    if (!scriptSrc) return resolve({ ok: false, reason: 'script-missing', tiers: {}, broken_packages: [] });
+    const scriptTmp = path.join(os.tmpdir(), 'freqphull_verify.py');
+    try { fs.copyFileSync(scriptSrc, scriptTmp); } catch {}
+    let stdout = '', stderr = '';
+    const p = spawn(py.cmd, [...(py.args || []), scriptTmp], { windowsHide: true });
+    const killer = setTimeout(() => { try { p.kill(); } catch {} }, 45000);
+    p.stdout.on('data', d => stdout += d);
+    p.stderr.on('data', d => stderr += d);
+    p.on('error', () => { clearTimeout(killer); resolve({ ok: false, reason: 'spawn-failed', tiers: {}, broken_packages: [] }); });
+    p.on('close', (code) => {
+      clearTimeout(killer);
+      if (code !== 0) {
+        return resolve({ ok: false, reason: 'python-broken', exit: code, stderr: (stderr || '').slice(-400), tiers: {}, broken_packages: [] });
+      }
+      try {
+        const j = JSON.parse(stdout.trim().split('\n').pop());
+        const allOk = Object.values(j.tiers || {}).every(t => t.ok);
+        _lastVerifyResult = { ok: allOk, ...j, checked_at: Date.now() };
+        resolve(_lastVerifyResult);
+      } catch (e) {
+        resolve({ ok: false, reason: 'bad-json', error: e.message, tiers: {}, broken_packages: [] });
+      }
+    });
+  });
+}
+
+// Headless targeted repair. Reuses setup-engines.ps1 (-Repair mode) so
+// every hardening lesson in that script — cache-poisoning retry, log
+// tail on failure, atomic marker — applies to repairs for free.
+function attemptEngineRepair(brokenPackages, origin) {
+  return new Promise((resolve) => {
+    if (_repairRunning) return resolve({ ok: false, reason: 'already-running' });
+    if (_repairAttemptedThisSession) return resolve({ ok: false, reason: 'already-attempted' });
+    if (!brokenPackages || !brokenPackages.length) return resolve({ ok: false, reason: 'nothing-to-repair' });
+    if (setupRunning) return resolve({ ok: false, reason: 'setup-in-progress' });
+    _repairAttemptedThisSession = true;
+    _repairRunning = true;
+    broadcastEvent('engines-repair', { state: 'start', packages: brokenPackages, origin });
+    slog('self-heal: repairing ' + brokenPackages.join(', ') + ' (origin: ' + origin + ')');
+    const scriptSrc = getResourcePath('installer/setup-engines.ps1') || getResourcePath('setup-engines.ps1');
+    if (!scriptSrc) { _repairRunning = false; return resolve({ ok: false, reason: 'script-missing' }); }
+    const scriptTmp = path.join(os.tmpdir(), 'freqphull_repair.ps1');
+    try { fs.copyFileSync(scriptSrc, scriptTmp); } catch (e) { _repairRunning = false; return resolve({ ok: false, reason: 'copy-failed: ' + e.message }); }
+    const p = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptTmp,
+      '-Repair', '-Packages', brokenPackages.join(',')], { windowsHide: true });
+    let sawError = null;
+    p.stdout.on('data', d => {
+      for (const line of String(d).split('\n')) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          const ev = JSON.parse(t);
+          if (ev.type === 'error') sawError = ev.message || 'repair error';
+        } catch {}
+      }
+    });
+    p.on('error', (e) => {
+      _repairRunning = false;
+      broadcastEvent('engines-repair', { state: 'failed', error: e.message });
+      resolve({ ok: false, reason: e.message });
+    });
+    p.on('close', async (code) => {
+      _repairRunning = false;
+      if (code === 0 && !sawError) {
+        // Re-verify — trust nothing.
+        const v = await verifyEngines();
+        if (v.ok) {
+          resetEnginesBrokenBreaker && resetEnginesBrokenBreaker();
+          broadcastEvent('engines-repair', { state: 'done', packages: brokenPackages });
+          slog('self-heal: repair verified clean');
+          try { nudgeAnalysisWorker(); } catch {}
+          return resolve({ ok: true });
+        }
+        broadcastEvent('engines-repair', { state: 'failed', error: 'still broken after repair' });
+        report('selfheal.repair-ineffective', new Error('repair ran but verification still fails'), {
+          packages: brokenPackages, verify: JSON.stringify(v.broken_packages || []).slice(0, 400), origin,
+        });
+        return resolve({ ok: false, reason: 'still-broken' });
+      }
+      broadcastEvent('engines-repair', { state: 'failed', error: sawError || ('exit ' + code) });
+      report('selfheal.repair-failed', new Error('repair exit ' + code), {
+        packages: brokenPackages, sawError: sawError || '(none)', origin,
+      });
+      resolve({ ok: false, reason: sawError || ('exit ' + code) });
+    });
+  });
+}
+
+// Startup self-check: if engines were ever set up, verify them ~15s
+// after boot (off the critical path) and silently repair anything
+// broken. The user who had a working install yesterday and a broken
+// one today (AV quarantine, cleaner app, partial disk cleanup) gets
+// fixed without ever knowing there was a problem.
+setTimeout(async () => {
+  try {
+    const markerPath = path.join(os.homedir(), 'AppData', 'Roaming', 'freqphull', 'engines-ready.json');
+    if (!fs.existsSync(markerPath)) return;   // never set up — nothing to heal
+    if (setupRunning) return;
+    const v = await verifyEngines();
+    if (v.ok) { slog('startup verify: engines healthy'); return; }
+    slog('startup verify: broken — ' + JSON.stringify(v.broken_packages || v.reason));
+    if (v.broken_packages && v.broken_packages.length) {
+      attemptEngineRepair(v.broken_packages, 'startup-verify');
+    }
+  } catch (e) { slog('startup verify threw: ' + e.message); }
+}, 15000);
+
+// yt-dlp version, cached at first use — attached to ytdlp.* Sentry
+// events so "signature broken" reports immediately show whether the
+// user is on a stale binary (the usual cause).
+let _ytdlpVersion = null;
+function getYtdlpVersion() {
+  if (_ytdlpVersion) return _ytdlpVersion;
+  try {
+    const out = require('child_process').execFileSync(bin('yt-dlp'), ['--version'], { timeout: 5000, windowsHide: true });
+    _ytdlpVersion = String(out).trim().slice(0, 40) || 'unknown';
+  } catch { _ytdlpVersion = 'unavailable'; }
+  return _ytdlpVersion;
+}
+
 // Track the most recent test event ID for the diagnostic UI.
 let _lastTestEventId = null;
 const DATA = process.env.USER_DATA || path.join(os.homedir(), '.freqphull');
@@ -255,6 +389,9 @@ async function initDB() {
       db.run(`ALTER TABLE history ADD COLUMN stockpile_committed INTEGER DEFAULT 0`);
       slog('DB migration: added history.stockpile_committed');
     } catch (e) {
+    try {
+      db.run(`ALTER TABLE stockpile_folders ADD COLUMN smart_rules TEXT`);
+    } catch (e) { /* column exists */ }
       // Column already exists — that's fine, sqlite errors loudly otherwise
     }
     try {
@@ -417,6 +554,50 @@ function writeTagsToFileEnabled() {
     return true;
   } catch {
     return true;  // any error → default on (matches feature being opt-out)
+  }
+}
+
+// Auto-rename: "<title> [140BPM Cm].mp3" after analysis. Opt-in via
+// settings.json auto_rename_enabled (default OFF — renaming user files
+// without asking is bad manners). Skips files that already carry a
+// [..BPM..] marker, skips locked files (EBUSY/EPERM), keeps renames
+// collision-safe, updates the DB path, and notifies every client.
+function autoRenameEnabled() {
+  try {
+    const p = path.join(os.homedir(), 'AppData', 'Roaming', 'freqphull', 'settings.json');
+    if (!fs.existsSync(p)) return false;
+    return JSON.parse(readUtf8(p)).auto_rename_enabled === true;
+  } catch { return false; }
+}
+
+function maybeAutoRename(historyId, { bpm, key_note, key_mode }) {
+  if (!autoRenameEnabled()) return;
+  try {
+    const row = dbAll('SELECT file_path FROM history WHERE id=?', [historyId])[0];
+    if (!row || !row.file_path || !fs.existsSync(row.file_path)) return;
+    const fp = row.file_path;
+    const ext = path.extname(fp);
+    const stem = path.basename(fp, ext);
+    if (/\[\d+\s*BPM/i.test(stem)) return;              // already stamped
+    const bits = [];
+    if (typeof bpm === 'number' && bpm > 0) bits.push(Math.round(bpm) + 'BPM');
+    if (key_note) bits.push(key_note + (key_mode === 'minor' ? 'm' : ''));
+    if (!bits.length) return;
+    const dir = path.dirname(fp);
+    let target = path.join(dir, stem + ' [' + bits.join(' ') + ']' + ext);
+    let n = 2;
+    while (fs.existsSync(target)) {
+      target = path.join(dir, stem + ' [' + bits.join(' ') + '] (' + n + ')' + ext);
+      if (++n > 50) return;
+    }
+    fs.renameSync(fp, target);
+    dbRun('UPDATE history SET file_path=? WHERE id=?', [target, historyId]);
+    slog('auto-rename: ' + path.basename(fp) + ' -> ' + path.basename(target));
+    broadcastEvent('history-changed', { reason: 'rename', historyId });
+  } catch (e) {
+    // EBUSY/EPERM = file open in a player/DAW. Skip quietly; the tags
+    // still get written, only the rename is deferred forever.
+    slog('auto-rename skipped (id=' + historyId + '): ' + e.message);
   }
 }
 
@@ -640,6 +821,14 @@ function discoverPython() {
   }
 
   const tryCmds = []; // ordered list of candidates
+
+  // 0. Our private embedded runtime — when present, it always wins.
+  // Nothing the user installs or uninstalls can touch it.
+  try {
+    const embedExe = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
+      'freqphull', 'engines', 'python', 'python.exe');
+    if (fs.existsSync(embedExe)) tryCmds.push({ cmd: embedExe, args: [], source: 'embedded' });
+  } catch {}
 
   // 1. Marker file from our setup script
   try {
@@ -1142,6 +1331,29 @@ app.get('/info', async (req, res) => {
   try {
     const ytdlp = bin('yt-dlp');
     slog('Using yt-dlp: ' + ytdlp);
+    // Pure playlist URL? Expand it (flat — one fast metadata pass, no
+    // per-video page fetches) so the renderer can queue each track as
+    // its own download. yt-dlp ignores --no-playlist on these, so
+    // sending them down the single-video path was never an option.
+    if (/[?&]list=/.test(url) && !/[?&]v=/.test(url) && !/youtu\.be\//.test(url)) {
+      const rawPl = await run(ytdlp, ['--flat-playlist', '--dump-single-json', '--no-warnings', url]);
+      const pl = JSON.parse(rawPl);
+      const entries = (pl.entries || [])
+        .filter(e => e && e.id)
+        .slice(0, 500)
+        .map(e => ({
+          id: e.id,
+          title: e.title || '(untitled)',
+          url: 'https://www.youtube.com/watch?v=' + e.id,
+          duration: e.duration || null,
+        }));
+      return res.json({
+        playlist: true,
+        title: pl.title || 'Playlist',
+        count: entries.length,
+        entries,
+      });
+    }
     const raw = await run(ytdlp, ['--dump-json', '--no-playlist', '--no-warnings', url]);
     const info = JSON.parse(raw);
     res.json({ title: info.title, channel: info.channel || info.uploader, duration: info.duration, thumbnail: info.thumbnail });
@@ -1170,6 +1382,14 @@ app.get('/download', async (req, res) => {
   slog('Download request: fmt=' + fmt + ' outDir=' + outDir);
   const ALLOWED = ['mp3', 'wav', 'flac', 'aac', 'm4a'];
   if (!url || !ALLOWED.includes(fmt)) return res.status(400).json({ error: 'Bad params' });
+  // Playlist-only URLs are a trap: yt-dlp IGNORES --no-playlist when the
+  // URL has no video component, and would dump the whole playlist into
+  // one staging dir (title collisions and all). The renderer expands
+  // playlists into per-video queue items via /info; a playlist URL
+  // reaching this endpoint is a bug or an old client.
+  if (/[?&]list=/.test(url) && !/[?&]v=/.test(url) && !/youtu\.be\//.test(url)) {
+    return res.status(400).json({ error: 'Playlist URLs must be expanded first — paste it in the Download tab to queue every track.', code: 'playlist_url' });
+  }
   if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -1210,7 +1430,12 @@ app.get('/download', async (req, res) => {
   const args = ['--no-playlist', '--no-warnings', '-x', '--audio-format', fmt, '--audio-quality', '0', '--ffmpeg-location', ffDir, '--newline',
                 // Print the final path after all postprocessing/moves.
                 '--print', 'after_move:filepath',
-                '-o', path.join(stagingDir, '%(title)s.%(ext)s'), url];
+                // %(id)s, not %(title)s: video IDs are unique by
+                // construction, so filename collisions inside staging are
+                // impossible even for same-title tracks or double-queued
+                // videos. The human-readable name is applied at promote
+                // time from fetched metadata.
+                '-o', path.join(stagingDir, '%(id)s.%(ext)s'), url];
   if (fmt === 'wav') args.push('--postprocessor-args', 'ffmpeg:-acodec pcm_s16le -ar 44100');
 
   function cleanupStaging() {
@@ -1219,16 +1444,25 @@ app.get('/download', async (req, res) => {
 
   // Move the staged file into outDir without ever clobbering an existing
   // file: "name.mp3" -> "name (2).mp3" -> "name (3).mp3" ...
-  function promoteStagedFile(stagedPath) {
-    const base = path.basename(stagedPath);
-    const ext = path.extname(base);
-    const stem = base.slice(0, base.length - ext.length);
-    let target = path.join(outDir, base);
+  // Windows-safe filename from a track title. Strips illegal chars,
+  // control chars, trailing dots/spaces; caps length so path limits
+  // aren't blown by 200-char YouTube titles.
+  function sanitizeStem(title) {
+    let t = String(title || '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '').replace(/\s+/g, ' ').trim();
+    t = t.replace(/[. ]+$/, '');
+    if (t.length > 150) t = t.slice(0, 150).trim();
+    return t;
+  }
+
+  function promoteStagedFile(stagedPath, desiredStem) {
+    const ext = path.extname(stagedPath);
+    const stem = sanitizeStem(desiredStem) || path.basename(stagedPath, ext);
+    let target = path.join(outDir, stem + ext);
     let n = 2;
     while (fs.existsSync(target)) {
       target = path.join(outDir, stem + ' (' + n + ')' + ext);
       n++;
-      if (n > 200) throw new Error('Could not find a free filename for ' + base);
+      if (n > 200) throw new Error('Could not find a free filename for ' + stem);
     }
     fs.renameSync(stagedPath, target);   // atomic same-volume
     return target;
@@ -1278,8 +1512,16 @@ app.get('/download', async (req, res) => {
     p.stdout.on('data', d => {
     const text = d.toString();
     text.split(/\r?\n/).forEach(line => {
+      // Honest phase scaling: yt-dlp's [download] % only covers the raw
+      // stream. The ffmpeg extract/convert step (big on WAV/FLAC) used
+      // to leave the bar parked at 100% while work continued. Downloads
+      // now occupy 0-92; postprocessing raises to 96; the final done
+      // event carries 100.
       const m = line.match(/\[download\]\s+([\d.]+)%/);
-      if (m) { sse('progress', { progress: parseFloat(m[1]) }); return; }
+      if (m) { sse('progress', { progress: parseFloat(m[1]) * 0.92, phase: 'download' }); return; }
+      if (/\[ExtractAudio\]/.test(line)) {
+        sse('progress', { progress: 96, phase: 'converting' });
+      }
       // Pure-path lines come from --print after_move:filepath
       if (looksLikePath(line)) { printedPath = line.trim(); return; }
       // Destination lines, e.g. "[ExtractAudio] Destination: /path/file.mp3"
@@ -1348,7 +1590,10 @@ app.get('/download', async (req, res) => {
         report('ytdlp.' + (isSigBroken ? 'signature-broken' : 'forbidden'),
           new Error(msg), {
             retryAttempted,
-            stderrTail: stderr.trim().slice(-500),
+            ytdlpVersion: getYtdlpVersion(),
+            format: fmt,
+            urlKind: /[?&]list=/.test(url) ? 'video-in-playlist' : 'video',
+            stderrTail: stderr.trim().slice(-500) || '(empty)',
           });
       }
       return res.end();
@@ -1378,11 +1623,28 @@ app.get('/download', async (req, res) => {
       sse('error', { message: 'Output file not found after download' });
       return res.end();
     }
+    // Leak guard: more than one audio file in staging means a playlist
+    // slipped past the URL guard (old client, exotic URL shape). Refuse
+    // to guess which file belongs to which track — that guessing is
+    // exactly how the pre-0.4.3 corruption happened.
+    try {
+      const audioCount = fs.readdirSync(stagingDir).filter(f => f.toLowerCase().endsWith('.' + fmt)).length;
+      if (audioCount > 1) {
+        report('download.playlist-leak', new Error(audioCount + ' files in one staging dir'), { url: url.slice(0, 120) });
+        cleanupStaging();
+        sse('error', { message: 'This URL produced multiple files (playlist?). Paste the playlist URL in the Download tab to queue tracks individually.', code: 'playlist_url' });
+        return res.end();
+      }
+    } catch {}
 
-    // Promote out of staging into the real output folder.
+    // Metadata BEFORE promote — the title names the file on disk.
+    let meta = {};
+    try { meta = JSON.parse(await run(ytdlp, ['--dump-json', '--no-playlist', '--no-warnings', url])); } catch(e) { slog('Meta fetch error: ' + e.message); }
+
+    // Promote out of staging under the real track title.
     let fullPath, filename;
     try {
-      fullPath = promoteStagedFile(stagedPath);
+      fullPath = promoteStagedFile(stagedPath, meta.title || '');
       filename = path.basename(fullPath);
     } catch (e) {
       cleanupStaging();
@@ -1391,9 +1653,6 @@ app.get('/download', async (req, res) => {
     }
     cleanupStaging();
     slog('Downloaded to: ' + fullPath + ' (via ' + resolved + ')');
-
-    let meta = {};
-    try { meta = JSON.parse(await run(ytdlp, ['--dump-json', '--no-playlist', '--no-warnings', url])); } catch(e) { slog('Meta fetch error: ' + e.message); }
 
     let historyId = null;
     if (db) {
@@ -1450,6 +1709,7 @@ app.post('/history/:id/analysis', (req, res) => {
   if (req.query.notags !== '1' && writeTagsToFileEnabled()) {
     setImmediate(() => writeTagsToFile(id, { bpm, key_note, key_mode }));
   }
+  setImmediate(() => maybeAutoRename(id, { bpm, key_note, key_mode }));
 });
 app.post('/history/:id/notes',    (req, res) => { dbRun('UPDATE history SET notes=? WHERE id=?', [req.body.notes, req.params.id]); res.json({ ok: true }); });
 app.post('/history/:id/transcript',(req, res)=> { dbRun('UPDATE history SET transcript=? WHERE id=?', [req.body.transcript, req.params.id]); res.json({ ok: true }); });
@@ -1498,6 +1758,61 @@ app.get('/history', (req, res) => {
 // Default threshold: 50 bits out of 512 (~10%). Tighter (25-30) catches
 // only near-identical encodings; looser (80+) catches edits/mixes too.
 // Returns groups of 2+ tracks. Singletons are excluded from results.
+// Library doctor: finds history rows that share (near-)identical audio
+// but carry DIFFERENT titles — the fingerprint of the pre-0.4.3 bulk-
+// download bug where track B's row ended up pointing at track A's
+// audio. The oldest row in a group is treated as the legitimate owner;
+// newer rows with different titles are suspects. Each suspect keeps its
+// youtube_url, so the UI can offer a one-click re-download.
+function _normTitle(t) {
+  return String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+app.get('/history/doctor', (req, res) => {
+  const threshold = Math.min(Math.max(parseInt(req.query.threshold || '25', 10), 1), 128);
+  try {
+    const tracks = dbAll(`
+      SELECT id, title, channel, youtube_url, file_path, format, duration, audio_hash, created_at, thumbnail
+      FROM history
+      WHERE audio_hash IS NOT NULL AND audio_hash != ''
+      ORDER BY created_at ASC
+    `);
+    const parent = new Map();
+    const find = (x) => { let r = x; while (parent.get(r) !== r) r = parent.get(r); let c = x;
+      while (parent.get(c) !== r) { const n = parent.get(c); parent.set(c, r); c = n; } return r; };
+    const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent.set(ra, rb); };
+    for (const t of tracks) parent.set(t.id, t.id);
+    for (let i = 0; i < tracks.length; i++) {
+      for (let j = i + 1; j < tracks.length; j++) {
+        const d = hammingDistanceHex(tracks[i].audio_hash, tracks[j].audio_hash);
+        if (d !== null && d <= threshold) union(tracks[i].id, tracks[j].id);
+      }
+    }
+    const groups = new Map();
+    for (const t of tracks) {
+      const root = find(t.id);
+      if (!groups.has(root)) groups.set(root, []);
+      groups.get(root).push(t);
+    }
+    const suspectGroups = [];
+    for (const [, group] of groups) {
+      if (group.length < 2) continue;
+      // group is created_at ASC — first row is the presumed original.
+      const original = group[0];
+      const origTitle = _normTitle(original.title);
+      const suspects = group.slice(1).filter(t => _normTitle(t.title) !== origTitle);
+      // Same-title duplicates are re-downloads, not corruption — the
+      // duplicate finder handles those. Only different-title rows here.
+      if (!suspects.length) continue;
+      suspectGroups.push({ original, suspects, count: suspects.length });
+    }
+    suspectGroups.sort((a, b) => b.count - a.count);
+    res.json({ groups: suspectGroups, scanned: tracks.length });
+  } catch (e) {
+    slog('history doctor failed: ' + e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/history/duplicates', (req, res) => {
   const threshold = Math.min(Math.max(parseInt(req.query.threshold || '50', 10), 1), 256);
   try {
@@ -2239,9 +2554,56 @@ app.get('/stockpile/disk-usage', (req, res) => {
 });
 
 // List tracks tagged into a folder.
+// Smart folders: rules-based, auto-populating. Rules live as JSON in
+// stockpile_folders.smart_rules: { bpm_min, bpm_max, key_mode, key_note }.
+// The tracks endpoint below evaluates them live against history, so a
+// smart folder is always current — new downloads that match just appear.
+app.post('/stockpile/folders/smart', (req, res) => {
+  const { name, color, bpm_min, bpm_max, key_mode, key_note } = req.body || {};
+  if (!name || !String(name).trim()) return res.status(400).json({ error: 'Name required' });
+  const rules = {};
+  if (bpm_min != null && bpm_min !== '') rules.bpm_min = parseFloat(bpm_min);
+  if (bpm_max != null && bpm_max !== '') rules.bpm_max = parseFloat(bpm_max);
+  if (key_mode === 'minor' || key_mode === 'major') rules.key_mode = key_mode;
+  if (key_note && String(key_note).trim()) rules.key_note = String(key_note).trim();
+  if (!Object.keys(rules).length) return res.status(400).json({ error: 'At least one rule required' });
+  try {
+    dbRun(
+      `INSERT INTO stockpile_folders (name, description, color, smart_rules) VALUES (?, ?, ?, ?)`,
+      [String(name).trim(), 'Smart folder', color || '#6ab0ff', JSON.stringify(rules)]
+    );
+    const created = dbAll('SELECT * FROM stockpile_folders WHERE name=?', [String(name).trim()])[0];
+    broadcastEvent('stockpile-changed', { reason: 'smart-folder-created' });
+    res.json({ ok: true, folder: created });
+  } catch (e) {
+    res.status(500).json({ error: /UNIQUE/.test(e.message) ? 'A folder with that name already exists' : e.message });
+  }
+});
+
 app.get('/stockpile/folders/:id/tracks', (req, res) => {
   const id = parseInt(req.params.id, 10);
   try {
+    // Smart folder? Evaluate the rules live instead of the tag join.
+    const folder = dbAll('SELECT smart_rules FROM stockpile_folders WHERE id=?', [id])[0];
+    if (folder && folder.smart_rules) {
+      let rules = {};
+      try { rules = JSON.parse(folder.smart_rules); } catch {}
+      const where = ['h.file_path IS NOT NULL'];
+      const params = [];
+      if (rules.bpm_min != null) { where.push('h.bpm >= ?'); params.push(rules.bpm_min); }
+      if (rules.bpm_max != null) { where.push('h.bpm <= ?'); params.push(rules.bpm_max); }
+      if (rules.key_mode)        { where.push('h.key_mode = ?'); params.push(rules.key_mode); }
+      if (rules.key_note)        { where.push('h.key_note = ?'); params.push(rules.key_note); }
+      const rows = dbAll(`
+        SELECT h.*, NULL AS confidence, 'smart' AS tag_source, 1 AS is_primary,
+               m.energy, m.tonality, m.density, m.tempo_pos, m.label AS mood_label
+        FROM history h
+        LEFT JOIN track_mood m ON m.history_id = h.id
+        WHERE ${where.join(' AND ')}
+        ORDER BY h.created_at DESC
+      `, params);
+      return res.json({ tracks: rows, smart: true, rules });
+    }
     const rows = dbAll(`
       SELECT h.*, t.confidence, t.source AS tag_source, t.is_primary,
              m.energy, m.tonality, m.density, m.tempo_pos, m.label AS mood_label
@@ -2883,6 +3245,40 @@ app.post('/extension/download', async (req, res) => {
       fallback_url: 'https://github.com/' + repoOwner + '/' + repoName + '/releases/latest',
     });
   }
+});
+
+// File-tag + auto-rename preferences (settings.json based, since the
+// tags path predates the DB prefs table and main.js-independent).
+app.get('/file-tags-pref', (_, res) => {
+  res.json({ write_tags: writeTagsToFileEnabled(), auto_rename: autoRenameEnabled() });
+});
+app.post('/file-tags-pref', (req, res) => {
+  try {
+    const dir = path.join(os.homedir(), 'AppData', 'Roaming', 'freqphull');
+    const p = path.join(dir, 'settings.json');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    let cur = {};
+    try { if (fs.existsSync(p)) cur = JSON.parse(readUtf8(p)); } catch {}
+    if ('write_tags' in (req.body || {})) cur.write_tags_enabled = !!req.body.write_tags;
+    if ('auto_rename' in (req.body || {})) cur.auto_rename_enabled = !!req.body.auto_rename;
+    fs.writeFileSync(p, JSON.stringify(cur, null, 2));
+    res.json({ ok: true, write_tags: writeTagsToFileEnabled(), auto_rename: autoRenameEnabled() });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/engines/verify', async (_, res) => {
+  const v = await verifyEngines();
+  res.json(v);
+});
+
+app.post('/engines/repair', async (req, res) => {
+  const v = _lastVerifyResult && (Date.now() - _lastVerifyResult.checked_at < 120000)
+    ? _lastVerifyResult : await verifyEngines();
+  if (v.ok) return res.json({ ok: true, already_healthy: true });
+  // Manual trigger resets the once-per-session latch — the human asked.
+  _repairAttemptedThisSession = false;
+  const r = await attemptEngineRepair(v.broken_packages, 'manual');
+  res.json(r);
 });
 
 app.get('/sentry-status', (_, res) => {
@@ -4072,9 +4468,16 @@ function analyzeOneInBackground(row) {
               tripEnginesBrokenBreaker(cls.reason, cls.detail);
             } else {
               // Genuine Python crash with engines installed — track it.
+              let fsize = null;
+              try { fsize = Math.round(fs.statSync(row.file_path).size / 1048576 * 10) / 10; } catch {}
               report('bg-analyze.python-crash', new Error('analyze.py exit ' + code), {
                 historyId: row.id,
-                stderr: (stderr || '').slice(0, 800),
+                exitCode: code,
+                fileExt: path.extname(row.file_path || '').toLowerCase(),
+                fileSizeMb: fsize,
+                durationS: row.duration || null,
+                classifierReason: cls.reason || '(none)',
+                stderrTail: (stderr || '').slice(-1200) || '(empty)',
               });
             }
             analyzeWorker.failed.set(row.id, (analyzeWorker.failed.get(row.id) || 0) + 1);
@@ -4110,6 +4513,7 @@ function analyzeOneInBackground(row) {
             if (writeTagsToFileEnabled()) {
               setImmediate(function(){
                 writeTagsToFile(row.id, { bpm: result.bpm, key_note: result.key, key_mode: result.mode });
+                maybeAutoRename(row.id, { bpm: result.bpm, key_note: result.key, key_mode: result.mode });
               });
             }
             slog('bg-analyze id=' + row.id + ' OK bpm=' + result.bpm + ' key=' + result.key + ' ' + result.mode);
@@ -4119,7 +4523,9 @@ function analyzeOneInBackground(row) {
             slog('bg-analyze id=' + row.id + ' parse error: ' + e.message);
             report('bg-analyze.parse-failure', e, {
               historyId: row.id,
-              stdout: (stdout || '').slice(0, 800),
+              stdoutTail: (stdout || '').slice(-1000) || '(empty)',
+              stderrTail: (stderr || '').slice(-600) || '(empty)',
+              fileExt: path.extname(row.file_path || '').toLowerCase(),
             });
             analyzeWorker.failed.set(row.id, (analyzeWorker.failed.get(row.id) || 0) + 1);
             resolve(false);
@@ -4129,7 +4535,16 @@ function analyzeOneInBackground(row) {
       .catch(function(e){
         if (safe.tempCopy) { try { fs.unlinkSync(safe.tempCopy); } catch (e2) {} }
         slog('bg-analyze id=' + row.id + ' ffmpeg failed: ' + e.message);
-        report('bg-analyze.ffmpeg-failure', e, { historyId: row.id });
+        {
+          let fsize = null;
+          try { fsize = Math.round(fs.statSync(row.file_path).size / 1048576 * 10) / 10; } catch {}
+          report('bg-analyze.ffmpeg-failure', e, {
+            historyId: row.id,
+            fileExt: path.extname(row.file_path || '').toLowerCase(),
+            fileSizeMb: fsize,
+            fileExists: (() => { try { return fs.existsSync(row.file_path); } catch { return false; } })(),
+          });
+        }
         try { fs.unlinkSync(wavTmp); } catch (e2) {}
         analyzeWorker.failed.set(row.id, (analyzeWorker.failed.get(row.id) || 0) + 1);
         resolve(false);
@@ -4973,6 +5388,9 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
     report('transcribe.failed', e, {
       model: req.body && req.body.model,
       language: req.body && req.body.language,
+      fileSizeMb: req.file ? Math.round(req.file.size / 1048576 * 10) / 10 : null,
+      // run() folds the child's stderr into e.message on failure, so the
+      // exception value itself carries the whisper error text.
     });
     cleanup();
     // dropped the stale "AI Transcribe Setup.exe" hint —
@@ -5600,15 +6018,17 @@ app.get('/setup-engines', (req, res) => {
     // exactly what went wrong. This is what we were missing in user
     // beta logs that showed "exit 1" with zero diagnostic info.
     if (code !== 0) {
+      // Read the setup script's local log ONCE — it's where the real
+      // diagnostics live (the .ps1 logs to file, not stderr, so
+      // stderrBuf alone is usually empty and useless).
+      let setupLogTail = null;
+      const setupLogPath = path.join(os.tmpdir(), 'freqphull-setup.log');
       try {
-        const setupLogPath = path.join(os.tmpdir(), 'freqphull-setup.log');
         if (fs.existsSync(setupLogPath)) {
           const lines = readUtf8(setupLogPath).split(/\r?\n/);
-          const tail = lines.slice(-50);  // last 50 lines
+          setupLogTail = lines.slice(-50).filter(l => l.trim()).join('\n');
           slog('=== setup-engines log tail (last 50 lines) ===');
-          for (const ln of tail) {
-            if (ln.trim()) slog('[setup-log] ' + ln);
-          }
+          for (const ln of setupLogTail.split('\n')) slog('[setup-log] ' + ln);
           slog('=== end setup-engines log tail ===');
         } else {
           slog('setup-engines: local log file not found at ' + setupLogPath);
@@ -5616,23 +6036,18 @@ app.get('/setup-engines', (req, res) => {
       } catch (e) {
         slog('setup-engines: failed to read local log: ' + e.message);
       }
-      // Soft-report any non-zero setup exit. This is the failure mode
-      // that matters most for new users — we want to know what's
-      // breaking on fresh installs.
+      // Soft-report with the log tail attached — this is what makes the
+      // Sentry event actionable. Without it, remote events said
+      // "exit 1" and nothing else. PII scrubbing happens in
+      // sentry-init's beforeSend on everything we attach here.
       report('setup.failed', new Error('setup-engines exit ' + code), {
-        stderrTail: stderrBuf.slice(-5).join(' | ').slice(-400),
+        exitCode: code,
+        stderrTail: stderrBuf.slice(-5).join(' | ').slice(-400) || '(empty)',
+        setupLogTail: (setupLogTail || '(log file not found)').slice(-1800),
       });
       if (!lastErrorEmitted) {
         const tail = stderrBuf.slice(-5).join(' | ').slice(-400);
-        // Synthesize log_tail so the diagnostic <details> populates.
-        let logTail = null;
-        const setupLogPath = path.join(os.tmpdir(), 'freqphull-setup.log');
-        try {
-          if (fs.existsSync(setupLogPath)) {
-            const lines = readUtf8(setupLogPath).split(/\r?\n/);
-            logTail = lines.slice(-50).join('\n');
-          }
-        } catch {}
+        const logTail = setupLogTail;
         emit('error', {
           message: 'Setup ended unexpectedly (code ' + code + ')',
           hint: tail || 'See ' + setupLogPath + ' for details',

@@ -1,3 +1,7 @@
+param(
+    [switch] $Repair,          # targeted repair: skip provisioning, reinstall -Packages
+    [string] $Packages = ""    # comma-separated pip package list for -Repair
+)
 # Freq.Phull engines setup.
 # Installs Python, audio packages, and Whisper/Demucs models.
 # Emits one JSON line per status update on stdout; full log goes
@@ -305,6 +309,79 @@ $pythonCmd = $null
 $pythonVersionStr = $null
 $incompatibleFound = @()  # list of (cmd, version) pairs we saw but rejected
 
+# ============================================================================
+# Step 1a: Private embedded Python runtime (the reliable path)
+# ============================================================================
+# Every real-world support case traces back to the machine's own Python:
+# MS Store aliases, PATH damage, incompatible versions, admin-locked
+# installs. The fix is to not depend on it: provision the official
+# python.org embeddable package (~11MB, fully self-contained) into the
+# app's own LOCALAPPDATA folder. No registry, no PATH, no admin, and no
+# way for anything the user installs later to break it. System Python
+# probing below remains as a fallback when this download is impossible.
+$embedRoot = Join-Path $env:LOCALAPPDATA "freqphull\engines\python"
+$embedExe  = Join-Path $embedRoot "python.exe"
+
+function Test-EmbeddedRuntime {
+    if (-not (Test-Path $embedExe)) { return $false }
+    try {
+        $v = & $embedExe --version 2>&1
+        if ("$v" -notmatch "Python 3\.11") { return $false }
+        $pipOk = & $embedExe -m pip --version 2>&1
+        if ($LASTEXITCODE -ne 0) { return $false }
+        return $true
+    } catch { return $false }
+}
+
+if (Test-EmbeddedRuntime) {
+    $pythonCmd = $embedExe
+    $script:pythonExtraArgs = @()
+    $pythonVersionStr = ("$(& $embedExe --version 2>&1)").Trim()
+    Log "Embedded runtime present and healthy: $embedExe ($pythonVersionStr)"
+    EmitStatus "python_found" 5 "Private Python runtime ready" $pythonVersionStr
+} else {
+    EmitStatus "provisioning_runtime" 4 "Setting up private Python runtime..." "~11MB - one time"
+    $embedZip = Join-Path $env:TEMP "freqphull-py-embed.zip"
+    $embedUrl = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip"
+    $zipOk = Invoke-RobustDownload -Urls @($embedUrl) -OutFile $embedZip -MinSize 9000000 -Retries 4 -TimeoutSec 300 -StepLabel "py_embed"
+    if ($zipOk) {
+        try {
+            if (Test-Path $embedRoot) { Remove-Item $embedRoot -Recurse -Force -ErrorAction SilentlyContinue }
+            New-Item -ItemType Directory -Path $embedRoot -Force | Out-Null
+            Expand-Archive -Path $embedZip -DestinationPath $embedRoot -Force
+            # The embeddable package ships with site-packages DISABLED via
+            # the ._pth file ("import site" commented out). pip cannot work
+            # until it is enabled. This is the classic embeddable gotcha.
+            $pth = Get-ChildItem -Path $embedRoot -Filter "python311._pth" | Select-Object -First 1
+            if ($pth) {
+                $content = Get-Content $pth.FullName
+                $content = $content -replace "^#\s*import site", "import site"
+                Set-Content -Path $pth.FullName -Value $content -Encoding ascii
+                Log "Enabled import site in $($pth.Name)"
+            }
+            # Bootstrap pip (embeddable has none).
+            $getPip = Join-Path $env:TEMP "freqphull-get-pip.py"
+            $gpOk = Invoke-RobustDownload -Urls @("https://bootstrap.pypa.io/get-pip.py") -OutFile $getPip -MinSize 500000 -Retries 4 -TimeoutSec 180 -StepLabel "get_pip"
+            if ($gpOk) {
+                & $embedExe $getPip --no-warn-script-location 2>&1 | ForEach-Object { Log "[get-pip] $_" }
+            }
+            if (Test-EmbeddedRuntime) {
+                $pythonCmd = $embedExe
+                $script:pythonExtraArgs = @()
+                $pythonVersionStr = ("$(& $embedExe --version 2>&1)").Trim()
+                Log "Embedded runtime provisioned: $embedExe ($pythonVersionStr)"
+                EmitStatus "python_found" 5 "Private Python runtime installed" $pythonVersionStr
+            } else {
+                Log "Embedded runtime failed verification after provisioning - falling back to system Python"
+            }
+        } catch {
+            Log "Embedded provisioning threw: $($_.Exception.Message) - falling back to system Python"
+        }
+    } else {
+        Log "Embedded runtime download failed - falling back to system Python discovery"
+    }
+}
+
 # Probe both bare commands AND `py -3.11` style version-specific launchers
 $probes = @(
     @{ cmd = "python";   args = @() },
@@ -317,6 +394,7 @@ $probes = @(
 )
 
 foreach ($p in $probes) {
+    if ($pythonCmd) { break }   # embedded runtime already resolved
     try {
         $checkArgs = $p.args + @("--version")
         $v = & $p.cmd $checkArgs 2>&1
@@ -516,6 +594,44 @@ function Invoke-PipInstall {
     }
     Log "[$Label] retry also failed (exit $LASTEXITCODE)"
     return $false
+}
+
+# ============================================================================
+# Repair mode: targeted package reinstall, then exit.
+# ============================================================================
+# Invoked by the server's self-healing loop when verification finds
+# specific broken packages. Python is already resolved above (embedded
+# runtime preferred); we force-reinstall exactly what was asked for,
+# bypassing the wheel cache, and emit the same JSON events as full setup
+# so the server's existing parser handles both modes.
+if ($Repair) {
+    $pkgList = @($Packages -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    if ($pkgList.Count -eq 0) {
+        EmitError "Repair mode called with no packages" "This is an app bug - report it."
+    }
+    EmitStatus "repairing" 20 "Repairing engine packages..." ($pkgList -join ", ")
+    Log "REPAIR MODE: force-reinstalling: $($pkgList -join ', ')"
+    $okRepair = Invoke-PipInstall -Packages $pkgList -Label "repair" -ExtraArgs @("--force-reinstall", "--no-cache-dir")
+    if (-not $okRepair) {
+        EmitError "Repair failed for: $($pkgList -join ', ')" "Run the full engine setup from Settings, or check the log for the pip error."
+    }
+    # Refresh the ready marker date if one exists. Repair does not
+    # CREATE the marker - only a completed full setup may claim that.
+    try {
+        $mDir  = Join-Path $env:APPDATA "freqphull"
+        $mFile = Join-Path $mDir "engines-ready.json"
+        if (Test-Path $mFile) {
+            $m = Get-Content $mFile -Raw | ConvertFrom-Json
+            $m | Add-Member -NotePropertyName last_repair -NotePropertyValue (Get-Date -Format "yyyy-MM-dd HH:mm:ss") -Force
+            $mTmp = "$mFile.tmp"
+            $enc = New-Object System.Text.UTF8Encoding $false
+            [System.IO.File]::WriteAllText($mTmp, ($m | ConvertTo-Json), $enc)
+            Move-Item -Path $mTmp -Destination $mFile -Force
+        }
+    } catch { Log "Marker refresh failed: $($_.Exception.Message)" }
+    EmitDone
+    Log "Repair complete."
+    exit 0
 }
 
 # ============================================================================

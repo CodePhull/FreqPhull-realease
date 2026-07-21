@@ -471,6 +471,17 @@ async function fetchInfo() {
     const r = await fetch(API + '/info?url=' + encodeURIComponent(url));
     const d = await r.json();
     if (!r.ok) throw new Error(d.error);
+
+    // Playlist URL: the server expanded it into per-video entries.
+    // Queue each as its own download — every track goes through the
+    // isolated staging pipeline individually, which is the only safe
+    // way to bulk-grab (a single yt-dlp playlist run has the title-
+    // collision problem baked in).
+    if (d.playlist) {
+      document.getElementById('btn-fetch').disabled = false;
+      queuePlaylistEntries(d);
+      return;
+    }
     document.getElementById('vid-thumb').src = d.thumbnail || '';
     document.getElementById('vid-title').textContent = d.title || '(no title)';
     document.getElementById('vid-sub').textContent = [d.channel, d.duration ? fmt2time(d.duration) : ''].filter(Boolean).join(' · ');
@@ -490,6 +501,40 @@ async function fetchInfo() {
     return;
   } catch(e) { dlSt('Error: ' + e.message, 'err'); }
   finally { document.getElementById('btn-fetch').disabled = false; }
+}
+
+// Queue every entry of an expanded playlist. Skips URLs already in the
+// queue (re-pasting the playlist resumes instead of duplicating), shows
+// one summary toast instead of N, and lets the existing queue runner
+// handle the rest — parallelism, retries, staging, history.
+function queuePlaylistEntries(pl) {
+  const already = new Set(dlQueue.map(q => {
+    const m = (q.url || '').match(/[?&]v=([\w-]{6,})/);
+    return m ? m[1] : q.url;
+  }));
+  let added = 0, skipped = 0;
+  for (const e of (pl.entries || [])) {
+    if (already.has(e.id)) { skipped++; continue; }
+    dlQueue.push({
+      id: dlNextId++,
+      url: e.url,
+      fmt, outDir,
+      title: e.title || '(untitled)',
+      thumb: 'https://i.ytimg.com/vi/' + e.id + '/mqdefault.jpg',
+      status: 'waiting',
+      progress: 0,
+      addedAt: Date.now(),
+    });
+    added++;
+  }
+  updateDlQueueUI();
+  dlSt((pl.title || 'Playlist') + ' — ' + added + ' ' + (t('plQueued') || 'tracks queued'), added ? 'ok' : 'err');
+  showAppNotification(
+    (t('plQueuedNotif') || 'Playlist queued') + ': ' + added +
+    (skipped ? ' (+' + skipped + ' ' + (t('plSkipped') || 'already in queue') + ')' : ''),
+    added ? 'done' : 'info', null, 5000
+  );
+  if (added && !dlProcessing) processDlQueue();
 }
 
 async function pickFolder() {
@@ -811,8 +856,16 @@ async function processDlQueue() {
   const es = new EventSource(API + '/download?' + params);
 
   es.addEventListener('progress', e => {
-    const p = JSON.parse(e.data).progress;
+    const ev = JSON.parse(e.data);
+    const p = ev.progress;
+    // Monotonic guard: SSE messages can arrive slightly out of order
+    // around the download→convert transition. A bar that flickers
+    // backwards reads as an error.
+    if (typeof item.progress === 'number' && p < item.progress) return;
     item.progress = p;
+    const phaseTxt = ev.phase === 'converting'
+      ? (t('dlPhaseConverting') || 'Converting…')
+      : 'Downloading… ' + Math.round(p) + '%';
     document.getElementById('dl-fill').style.width = Math.round(p) + '%';
     document.getElementById('dl-prog-lbl').textContent = Math.round(p) + '%';
     // Update only this row's progress bar without re-rendering the whole
@@ -823,7 +876,7 @@ async function processDlQueue() {
     if (meta) {
       const fmt = meta.querySelector('.dl-qi-fmt-pill');
       const txt = meta.querySelector('span:not(.dl-qi-fmt-pill)');
-      if (txt) txt.textContent = 'Downloading… ' + Math.round(p) + '%';
+      if (txt) txt.textContent = phaseTxt;
     }
   });
   es.addEventListener('status', e => dlSt(JSON.parse(e.data).message, 'spin'));
@@ -1734,6 +1787,46 @@ function seekAnalyzerTo(t_s) {
   if (!done) showAppNotification(t('bsLoadFirst'), 'info', null, 2500);
 }
 
+// Click-anywhere scrubbing on the section timeline. Proportional:
+// click at 40% of the bar width = seek to 40% of the track. The per-
+// section onclick handlers still run for precise section-start jumps;
+// this handler only fires when the click missed a segment (or via
+// bubbling we recompute proportionally, which is what the user meant).
+function scrubTimelineSeek(ev, durS) {
+  const bar = ev.currentTarget;
+  const r = bar.getBoundingClientRect();
+  const frac = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+  seekAnalyzerTo(frac * durS);
+  ev.stopPropagation();
+}
+
+// Live playhead. One rAF loop, self-terminating when the timeline
+// leaves the DOM (re-analysis, tab switch tears down the markup).
+let _playheadRAF = null;
+function _startPlayheadLoop(durS) {
+  if (_playheadRAF) cancelAnimationFrame(_playheadRAF);
+  const tick = () => {
+    const ph = document.getElementById('bs-playhead');
+    if (!ph) { _playheadRAF = null; return; }   // markup gone — stop
+    let cur = null;
+    try {
+      if (typeof loaded !== 'undefined' && Array.isArray(loaded) && loaded.length && loaded[0].audio) {
+        cur = loaded[0].audio.currentTime;
+      } else if (typeof globalPlayer !== 'undefined' && globalPlayer && globalPlayer.audio && !globalPlayer.audio.paused) {
+        cur = globalPlayer.audio.currentTime;
+      }
+    } catch {}
+    if (cur != null && durS > 0) {
+      ph.style.left = Math.min(100, (cur / durS) * 100) + '%';
+      ph.style.opacity = '1';
+    } else {
+      ph.style.opacity = '0';
+    }
+    _playheadRAF = requestAnimationFrame(tick);
+  };
+  _playheadRAF = requestAnimationFrame(tick);
+}
+
 // Forced beat-switch pass (?deep=1 → lower novelty threshold). Used when
 // the normal pass found nothing but the user insists there's a switch.
 function reanalyzeDeepSections() {
@@ -1901,7 +1994,7 @@ function applyAnalysisResult(result, histId) {
     const COLORS = ['#6ab0ff', '#ffb84d', '#7ed982', '#d98bff', '#ff8585'];
     const tl = bs.sections.map((sc, i) => {
       const w = Math.max(2, ((sc.end_s - sc.start_s) / dur) * 100);
-      return `<div class="bs-tl-seg" style="width:${w}%;background:${COLORS[i % COLORS.length]}22;border-top:2px solid ${COLORS[i % COLORS.length]}" onclick="seekAnalyzerTo(${sc.start_s})" title="${fmt2time(sc.start_s)} – ${fmt2time(sc.end_s)}"></div>`;
+      return `<div class="bs-tl-seg" style="width:${w}%;background:${COLORS[i % COLORS.length]}22;border-top:2px solid ${COLORS[i % COLORS.length]}" onclick="event.stopPropagation();seekAnalyzerTo(${sc.start_s})" title="${fmt2time(sc.start_s)} – ${fmt2time(sc.end_s)}"></div>`;
     }).join('');
     const rows = bs.sections.map((sc, i) => `
       <div class="bs-row" onclick="seekAnalyzerTo(${sc.start_s})">
@@ -1920,12 +2013,21 @@ function applyAnalysisResult(result, histId) {
       <div class="bs-card">
         <div class="bs-head"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> ${t('bsTitle')}</div>
         ${marks}
-        <div class="bs-timeline">${tl}</div>
+        <div class="bs-timeline" onclick="scrubTimelineSeek(event, ${dur})" title="${t('scrubHint')}">${tl}<div class="bs-playhead" id="bs-playhead"></div></div>
         ${rows}
       </div>`;
+    _startPlayheadLoop(dur);
   } else if (bs && !bs.detected && _lastAnalyzedPath) {
     // Nothing found at the normal threshold — offer the forced pass.
+    const plainDur = result.duration || 0;
+    const scrub = plainDur > 0 ? `
+      <div class="bs-timeline" style="margin-bottom:10px" onclick="scrubTimelineSeek(event, ${plainDur})" title="${t('scrubHint')}">
+        <div class="bs-tl-seg" style="width:100%;background:rgba(255,255,255,.04);border-top:2px solid var(--border2)"></div>
+        <div class="bs-playhead" id="bs-playhead"></div>
+      </div>` : '';
+    if (plainDur > 0) _startPlayheadLoop(plainDur);
     bsHTML = `
+      ${scrub}
       <div class="bs-card" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
         <span style="font-size:12px;color:var(--hint)">${t('bsNone')}</span>
         <button class="btn xs" onclick="reanalyzeDeepSections()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> ${t('bsForceBtn')}</button>
@@ -2245,14 +2347,15 @@ function startLiveSpectrum() {
   const canvas = document.getElementById('pro-spectrum-canvas');
   if (!canvas) return;
 
-  // Bump FFT size for finer low-end resolution. Default 2048 at 48kHz =
-  // ~23Hz bin width — too coarse for sub-bass. 8192 gives ~6Hz bins which
-  // resolves kicks/subs cleanly. Cheap on modern hardware.
-  if (analyserL.fftSize < 8192) {
-    try { analyserL.fftSize = 8192; } catch {}
-    if (analyserR && analyserR !== analyserL && analyserR.fftSize < 8192) {
-      try { analyserR.fftSize = 8192; } catch {}
-    }
+  // FFT 16384 → ~2.9Hz bins at 48kHz. At 8192 the entire 20-40Hz octave
+  // lived in ~3 bins, which is what painted the staircase at the low end.
+  // 16384 is the sweet spot: sub-bass resolves smoothly, and the extra
+  // FFT cost is negligible next to the canvas paint.
+  if (analyserL.fftSize < 16384) {
+    try { analyserL.fftSize = 16384; } catch {}
+  }
+  if (analyserR && analyserR !== analyserL && analyserR.fftSize < 16384) {
+    try { analyserR.fftSize = 16384; } catch {}
   }
 
   const NUM_BINS = _liveSpectrumNumBins;
@@ -2264,24 +2367,47 @@ function startLiveSpectrum() {
     _liveSpectrumTmpMax = new Float32Array(NUM_BINS);
   }
 
-  // Pre-compute the FFT-bin → visual-bin mapping. The FFT gives us linear-
-  // frequency bins; we map each linear bin to a log-frequency visual bin.
+  // Inverse mapping: for each VISUAL bin, precompute which FFT bins feed
+  // it. Two regimes:
+  //   wide bins (high freqs): the visual bin spans many FFT bins → take
+  //     the max over the span (what analyzers do; keeps narrow peaks).
+  //   narrow bins (low freqs): the visual bin is NARROWER than one FFT
+  //     bin → linearly interpolate between the two straddling bins at
+  //     the visual bin's center frequency. This is what kills the
+  //     staircase: the old forward mapping snapped several visual bins
+  //     onto one FFT bin and then copied neighbors to fill the holes.
   const sr = audioCtx.sampleRate;
   const N = analyserL.frequencyBinCount;  // = fftSize / 2
   const FMIN = 20, FMAX = Math.min(22000, sr / 2);
   const logMin = Math.log10(FMIN);
   const logMax = Math.log10(FMAX);
-  const fftToVisual = new Int16Array(N);  // index into visual bins, or -1
-  for (let i = 0; i < N; i++) {
-    const freq = (i / N) * (sr / 2);
-    if (freq < FMIN) { fftToVisual[i] = -1; continue; }
-    if (freq > FMAX) { fftToVisual[i] = -1; continue; }
-    const logF = Math.log10(freq);
-    const vb = Math.floor(((logF - logMin) / (logMax - logMin)) * NUM_BINS);
-    fftToVisual[i] = Math.max(0, Math.min(NUM_BINS - 1, vb));
+  const binHz = (sr / 2) / N;
+  // Per visual bin: [i0, i1] span (inclusive) or interp (k0, frac).
+  const spanLo = new Int32Array(NUM_BINS);
+  const spanHi = new Int32Array(NUM_BINS);
+  const interpK = new Int32Array(NUM_BINS);
+  const interpF = new Float32Array(NUM_BINS);
+  const useInterp = new Uint8Array(NUM_BINS);
+  for (let b = 0; b < NUM_BINS; b++) {
+    const fLo = Math.pow(10, logMin + (b / NUM_BINS) * (logMax - logMin));
+    const fHi = Math.pow(10, logMin + ((b + 1) / NUM_BINS) * (logMax - logMin));
+    const iLo = Math.ceil(fLo / binHz);
+    const iHi = Math.floor(fHi / binHz);
+    if (iHi >= iLo + 1) {
+      useInterp[b] = 0;
+      spanLo[b] = Math.max(1, iLo);
+      spanHi[b] = Math.min(N - 1, iHi);
+    } else {
+      // Narrower than ~2 FFT bins: sample by interpolation at center.
+      const fC = Math.sqrt(fLo * fHi);          // geometric center (log axis)
+      const k = fC / binHz;
+      useInterp[b] = 1;
+      interpK[b] = Math.max(1, Math.min(N - 2, Math.floor(k)));
+      interpF[b] = Math.min(1, Math.max(0, k - interpK[b]));
+    }
   }
-  _liveSpectrumFftMap = fftToVisual;
   _liveSpectrumFftData = new Float32Array(N);
+  let _fftDataR = (analyserR && analyserR !== analyserL) ? new Float32Array(N) : null;
 
   // Wire up the hover crosshair (one-time per session — guarded by data attr)
   _wireSpectrumHover();
@@ -2292,25 +2418,36 @@ function startLiveSpectrum() {
       return;
     }
     analyserL.getFloatFrequencyData(_liveSpectrumFftData);
+    if (_fftDataR) analyserR.getFloatFrequencyData(_fftDataR);
 
-    // Reuse the preallocated tmpMax buffer instead of `new Float32Array().fill()`
-    // every frame. At 60fps × 192 bins, that's 11k Float32Array allocations
-    // per minute purely for a scratchpad — pure GC pressure.
+    // Per-visual-bin extraction. Both channels are read and combined in
+    // the POWER domain — (pL + pR) / 2 — which is the mathematically
+    // correct "energy of the track" and fixes two old errors: only the
+    // left channel was analyzed (side-heavy content read up to 3dB low,
+    // right-only elements were invisible), and dB-domain averaging
+    // systematically underweights energy.
+    const dataL = _liveSpectrumFftData, dataR = _fftDataR;
     const tmpMax = _liveSpectrumTmpMax;
-    for (let b = 0; b < NUM_BINS; b++) tmpMax[b] = -Infinity;
-    for (let i = 0; i < N; i++) {
-      const vb = _liveSpectrumFftMap[i];
-      if (vb < 0) continue;
-      const v = _liveSpectrumFftData[i];
-      if (v > tmpMax[vb]) tmpMax[vb] = v;
-    }
-    // Interpolate empty bins from neighbors (rare at NUM_BINS=192 but happens
-    // at very low frequencies where FFT resolution is sparse)
     for (let b = 0; b < NUM_BINS; b++) {
-      if (!isFinite(tmpMax[b])) {
-        const prev = b > 0 ? tmpMax[b - 1] : -80;
-        tmpMax[b] = isFinite(prev) ? prev : -80;
+      let dbL, dbR;
+      if (useInterp[b]) {
+        const k = interpK[b], f = interpF[b];
+        dbL = dataL[k] * (1 - f) + dataL[k + 1] * f;
+        dbR = dataR ? (dataR[k] * (1 - f) + dataR[k + 1] * f) : dbL;
+      } else {
+        let mL = -Infinity, mR = -Infinity;
+        for (let i = spanLo[b]; i <= spanHi[b]; i++) {
+          if (dataL[i] > mL) mL = dataL[i];
+          if (dataR && dataR[i] > mR) mR = dataR[i];
+        }
+        dbL = isFinite(mL) ? mL : -90;
+        dbR = dataR ? (isFinite(mR) ? mR : -90) : dbL;
       }
+      // Power-domain L/R combine, clamped to the display floor.
+      const p = (Math.pow(10, dbL / 10) + Math.pow(10, dbR / 10)) * 0.5;
+      let db = 10 * Math.log10(p + 1e-12);
+      if (!isFinite(db) || db < -90) db = -90;
+      tmpMax[b] = db;
     }
 
     // Temporal smoothing — three layers (state updates 60fps so motion is
@@ -2325,8 +2462,13 @@ function startLiveSpectrum() {
       // Instant curve
       if (v > _liveSpectrumBins[b]) _liveSpectrumBins[b] = v;
       else _liveSpectrumBins[b] = _liveSpectrumBins[b] * 0.82 + v * 0.18;
-      // Long average — useful for spotting tonal imbalances over time
-      _liveSpectrumAvg[b] = _liveSpectrumAvg[b] * 0.985 + v * 0.015;
+      // Long average — EMA in the POWER domain, converted back to dB.
+      // dB-domain EMA (the old code) is a geometric mean of power, which
+      // reads several dB below the true energy average on dynamic
+      // material. Power-domain is what "tonal balance" actually means.
+      const pAvg = Math.pow(10, _liveSpectrumAvg[b] / 10) * 0.985 +
+                   Math.pow(10, v / 10) * 0.015;
+      _liveSpectrumAvg[b] = 10 * Math.log10(pAvg + 1e-12);
       // Peak hold
       if (_liveSpectrumBins[b] > _liveSpectrumPeaks[b]) {
         _liveSpectrumPeaks[b] = _liveSpectrumBins[b];
@@ -3885,6 +4027,24 @@ function subscribeToServerEvents() {
         }, 100);
       }, 0);
       refreshEnginesDiagRow();
+  _hydrateFileTagsPref();
+    });
+    es.addEventListener('engines-repair', (ev) => {
+      // Self-healing lifecycle. Quiet by design: a pill-style toast at
+      // start, a green one on success. Only failure is loud.
+      try {
+        const d = JSON.parse(ev.data || '{}');
+        if (d.state === 'start') {
+          showAppNotification(t('selfHealStart') + (d.packages ? ' (' + d.packages.slice(0, 3).join(', ') + (d.packages.length > 3 ? '…' : '') + ')' : ''), 'info', null, 6000);
+        } else if (d.state === 'done') {
+          showAppNotification(t('selfHealDone'), 'done', null, 6000);
+          if (typeof refreshEnginesDiagRow === 'function') refreshEnginesDiagRow();
+        } else if (d.state === 'failed') {
+          showAppNotification(t('selfHealFailed'), 'err', () => {
+            if (typeof switchTab === 'function') switchTab('settings');
+          }, 9000);
+        }
+      } catch {}
     });
     es.addEventListener('engines-available', () => {
       window._enginesUnavailableShown = false;
@@ -4804,6 +4964,215 @@ async function deleteDuplicateGroup(gi) {
   // Refresh and re-render duplicates
   await loadHistory();
   openDuplicateFinder();
+}
+
+// ── Library doctor ──────────────────────────────────────────────────
+// Finds rows that share near-identical audio under DIFFERENT titles —
+// the damage signature of the pre-0.4.3 bulk-download bug. For each
+// suspect, offers a one-click "Re-download" that grabs the correct
+// audio from the row's own youtube_url into the same folder, then
+// removes the corrupted row.
+// ── Smart folders ───────────────────────────────────────────────────
+// Rules-based folders that auto-populate: "138-150 BPM, minor keys"
+// stays current forever — new downloads that match just appear. Rules
+// are evaluated live server-side; nothing to maintain.
+function openCreateSmartFolderDialog() {
+  let modal = document.getElementById('smart-folder-modal');
+  if (modal) modal.remove();
+  modal = document.createElement('div');
+  modal.id = 'smart-folder-modal';
+  modal.className = 'setup-modal';
+  const KEYS = ['', 'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  modal.innerHTML = `
+    <div class="setup-modal-box" style="max-width:420px">
+      <div class="setup-modal-title"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> ${t('smartTitle')}</div>
+      <div style="font-size:12px;color:var(--hint);margin-bottom:14px">${t('smartSub')}</div>
+      <div class="card-lbl">${t('smartName')}</div>
+      <input type="text" id="smart-name" style="width:100%;height:38px;padding:0 12px;margin-bottom:12px" placeholder="${t('smartNamePh')}"/>
+      <div class="row" style="gap:10px;margin-bottom:12px">
+        <div style="flex:1"><div class="card-lbl">${t('smartBpmMin')}</div>
+          <input type="number" id="smart-bpm-min" min="40" max="300" style="width:100%;height:38px;padding:0 12px" placeholder="e.g. 130"/></div>
+        <div style="flex:1"><div class="card-lbl">${t('smartBpmMax')}</div>
+          <input type="number" id="smart-bpm-max" min="40" max="300" style="width:100%;height:38px;padding:0 12px" placeholder="e.g. 150"/></div>
+      </div>
+      <div class="row" style="gap:10px;margin-bottom:16px">
+        <div style="flex:1"><div class="card-lbl">${t('smartKey')}</div>
+          <select id="smart-key" style="width:100%;height:38px;padding:0 10px">${KEYS.map(k => `<option value="${k}">${k || t('smartAny')}</option>`).join('')}</select></div>
+        <div style="flex:1"><div class="card-lbl">${t('smartMode')}</div>
+          <select id="smart-mode" style="width:100%;height:38px;padding:0 10px">
+            <option value="">${t('smartAny')}</option>
+            <option value="minor">${t('smartMinor')}</option>
+            <option value="major">${t('smartMajor')}</option>
+          </select></div>
+      </div>
+      <div class="row" style="justify-content:flex-end;gap:10px">
+        <button class="btn sm" onclick="document.getElementById('smart-folder-modal').remove()">${t('cancelWord') || 'Cancel'}</button>
+        <button class="btn sm pri" onclick="createSmartFolder(this)">${t('smartCreate')}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  setTimeout(() => { const el = document.getElementById('smart-name'); if (el) el.focus(); }, 50);
+}
+
+async function createSmartFolder(btn) {
+  const name = (document.getElementById('smart-name') || {}).value || '';
+  const bpmMin = (document.getElementById('smart-bpm-min') || {}).value || '';
+  const bpmMax = (document.getElementById('smart-bpm-max') || {}).value || '';
+  const keyNote = (document.getElementById('smart-key') || {}).value || '';
+  const keyMode = (document.getElementById('smart-mode') || {}).value || '';
+  if (!name.trim()) { showAppNotification(t('smartNeedName'), 'warn'); return; }
+  if (!bpmMin && !bpmMax && !keyNote && !keyMode) { showAppNotification(t('smartNeedRule'), 'warn'); return; }
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(API + '/stockpile/folders/smart', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim(), bpm_min: bpmMin, bpm_max: bpmMax, key_note: keyNote, key_mode: keyMode }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Server error');
+    const m = document.getElementById('smart-folder-modal');
+    if (m) m.remove();
+    showAppNotification(t('smartCreated'), 'done', null, 3000);
+    if (typeof loadStockpile === 'function') loadStockpile();
+  } catch (e) {
+    showAppNotification(e.message, 'err');
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function openLibraryDoctor() {
+  if (!backendOnline) { showAppNotification('Backend offline', 'err'); return; }
+  let modal = document.getElementById('doctor-modal');
+  if (modal) modal.remove();
+  modal = document.createElement('div');
+  modal.id = 'doctor-modal';
+  modal.className = 'setup-modal';
+  modal.innerHTML = `
+    <div class="setup-modal-box" style="max-width:640px;max-height:80vh;display:flex;flex-direction:column">
+      <div class="setup-modal-title">${t('doctorTitle')}</div>
+      <div id="doctor-body" style="overflow-y:auto;flex:1;font-size:12.5px;color:var(--off)">${t('doctorScanning')}</div>
+      <div class="row" style="justify-content:flex-end;margin-top:14px">
+        <button class="btn sm" onclick="document.getElementById('doctor-modal').remove()">${t('closeWord') || 'Close'}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  const body = modal.querySelector('#doctor-body');
+  try {
+    const r = await fetch(API + '/history/doctor');
+    const j = await r.json();
+    if (!j.groups || !j.groups.length) {
+      body.innerHTML = `<div style="padding:20px;text-align:center;color:var(--hint)">${t('doctorClean').replace('{n}', j.scanned || 0)}</div>`;
+      return;
+    }
+    body.innerHTML = j.groups.map(g => `
+      <div class="doctor-group" style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px">
+        <div style="font-size:11px;color:var(--hint);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">${t('doctorOriginal')}</div>
+        <div style="font-weight:600;margin-bottom:10px">${escapeHtml(g.original.title || '(untitled)')}</div>
+        <div style="font-size:11px;color:var(--hint);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">${t('doctorSuspects')}</div>
+        ${g.suspects.map(sp => `
+          <div class="row" style="align-items:center;gap:10px;padding:6px 0;border-top:1px solid var(--border)">
+            <div style="flex:1;min-width:0">
+              <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(sp.title || '(untitled)')}</div>
+              <div style="font-size:11px;color:var(--muted)">${t('doctorSameAudio')}</div>
+            </div>
+            ${sp.youtube_url
+              ? `<button class="btn xs pri" onclick="doctorRedownload(${sp.id}, this)">${t('doctorRedl')}</button>`
+              : `<span style="font-size:11px;color:var(--muted)">${t('doctorNoUrl')}</span>`}
+          </div>`).join('')}
+      </div>`).join('');
+  } catch (e) {
+    body.innerHTML = `<div style="padding:20px;color:#ff8a8a">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// Re-download a suspect row's real audio using its own youtube_url,
+// into the same folder its (corrupt) file lives in. On success, the
+// corrupt row is removed — the fresh download created its own row.
+async function doctorRedownload(suspectId, btn) {
+  const row = (histData || []).find(h => h.id === suspectId);
+  let info = row;
+  if (!info) {
+    try { const r = await fetch(API + '/history'); const all = await r.json();
+      info = (all.items || all || []).find(h => h.id === suspectId); } catch {}
+  }
+  if (!info || !info.youtube_url) { showAppNotification(t('doctorNoUrl'), 'warn'); return; }
+  if (btn) { btn.disabled = true; btn.textContent = '0%'; }
+  const outDir = (info.file_path || '').replace(/[\\/][^\\/]+$/, '');
+  const params = new URLSearchParams({ url: info.youtube_url, format: info.format || 'mp3' });
+  if (outDir) params.set('outDir', outDir);
+  const es = new EventSource(API + '/download?' + params);
+  es.addEventListener('progress', e => {
+    try { const p = JSON.parse(e.data).progress; if (btn) btn.textContent = Math.round(p) + '%'; } catch {}
+  });
+  es.addEventListener('done', async () => {
+    es.close();
+    try { await fetch(API + '/history/' + suspectId, { method: 'DELETE' }); } catch {}
+    if (btn) { btn.textContent = t('doctorFixed'); btn.classList.remove('pri'); }
+    showAppNotification(t('doctorFixedNotif'), 'done', null, 4000);
+    loadHistory();
+  });
+  es.addEventListener('error', () => {
+    es.close();
+    if (btn) { btn.disabled = false; btn.textContent = t('doctorRedl'); }
+    showAppNotification(t('doctorRedlFailed'), 'err');
+  });
+}
+
+// ── File tag + auto-rename preference toggles ───────────────────────
+// Manual engine verification from Settings. Runs the granular import
+// check and reports per-tier health; offers a one-click repair when
+// something is broken.
+async function runEngineVerify(btn) {
+  const orig = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = t('verifyRunning'); }
+  try {
+    const r = await fetch(API + '/engines/verify');
+    const v = await r.json();
+    if (v.ok) {
+      const vers = v.tiers && v.tiers.core && v.tiers.core.modules && v.tiers.core.modules.numpy;
+      showAppNotification(t('verifyAllOk') + (v.python ? ' — Python ' + v.python : ''), 'done', null, 5000);
+    } else if (v.broken_packages && v.broken_packages.length) {
+      showAppNotification(
+        t('verifyBroken') + ': ' + v.broken_packages.join(', ') + ' — ' + t('verifyClickRepair'),
+        'warn',
+        async () => {
+          showAppNotification(t('selfHealStart'), 'info', null, 4000);
+          try { await fetch(API + '/engines/repair', { method: 'POST' }); } catch {}
+        },
+        12000
+      );
+    } else {
+      showAppNotification(t('verifyBrokenGeneric') + ': ' + (v.reason || 'unknown'), 'err', null, 8000);
+    }
+  } catch (e) {
+    showAppNotification('Verify failed: ' + e.message, 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = orig; }
+  }
+}
+
+async function setFileTagsPref() {
+  const tags = document.getElementById('file-tags-toggle');
+  const ren  = document.getElementById('auto-rename-toggle');
+  try {
+    const r = await fetch(API + '/file-tags-pref', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ write_tags: !!(tags && tags.checked), auto_rename: !!(ren && ren.checked) }),
+    });
+    const j = await r.json();
+    if (tags) tags.checked = !!j.write_tags;
+    if (ren)  ren.checked  = !!j.auto_rename;
+  } catch (e) { showAppNotification('Could not save: ' + e.message, 'err'); }
+}
+async function _hydrateFileTagsPref() {
+  try {
+    const r = await fetch(API + '/file-tags-pref');
+    const j = await r.json();
+    const tags = document.getElementById('file-tags-toggle');
+    const ren  = document.getElementById('auto-rename-toggle');
+    if (tags) tags.checked = !!j.write_tags;
+    if (ren)  ren.checked  = !!j.auto_rename;
+  } catch {}
 }
 
 // ── Find similar (0.1.1) ────────────────────────────────────────────
@@ -8995,12 +9364,13 @@ function startEnginesSetup() {
     try {
       const m = JSON.parse(e.data);
       const pct = typeof m.progress === 'number' ? m.progress : null;
-      setSetupProgress(pct, m.message || stepToHuman(m.step), m.detail || '');
+      setSetupProgress(pct, m.message || stepToHuman(m.step), m.detail || '', m.step);
     } catch {}
   });
 
   setupEvtSource.addEventListener('done', () => {
     setupFinished = true;
+    _stopSetupTrickle();
     setSetupProgress(100, t('setupAllSet'), '');
     document.getElementById('setup-progress').classList.add('hidden');
     document.getElementById('setup-done').classList.remove('hidden');
@@ -9095,6 +9465,7 @@ function startSetupPolling() {
 }
 
 function showSetupError(msg, hint, logTail, logPath) {
+  if (typeof _stopSetupTrickle === 'function') _stopSetupTrickle();
   try {
     window.reportSoftError('renderer.setup-error-shown', new Error(msg), {
       hint, hasLogTail: !!logTail,
@@ -9143,13 +9514,56 @@ function retryEnginesSetup() {
   startEnginesSetup();
 }
 
-function setSetupProgress(pct, msg, detail) {
+// Expected wall-clock seconds per setup step (measured on a mid-range
+// machine with ~50Mbps). Only used to pace the trickle — real events
+// always win.
+const SETUP_STEP_ETA = {
+  provisioning_runtime: 30, checking_python: 5, downloading_python: 60,
+  installing_python: 60, upgrading_pip: 20, installing_numerical: 90,
+  installing_torch: 320, installing_separator: 120, installing_whisper: 90,
+  downloading_models: 180, verifying: 25, repairing: 120,
+};
+let _setupTrickle = { timer: null, cur: 0, target: 0, rate: 0 };
+
+function _stopSetupTrickle() {
+  if (_setupTrickle.timer) { clearInterval(_setupTrickle.timer); _setupTrickle.timer = null; }
+}
+
+function _startSetupTrickle(fromPct, step) {
+  _stopSetupTrickle();
+  const eta = SETUP_STEP_ETA[step] || 60;
+  // Ease toward +8% of the bar (a typical inter-step gap) over the
+  // step's ETA, asymptotically — cap the ceiling so a stalled step
+  // visibly stalls instead of lying its way to 99%.
+  _setupTrickle.cur = fromPct;
+  _setupTrickle.target = Math.min(97, fromPct + 8);
+  _setupTrickle.rate = 8 / (eta * 2);           // %, per tick (500ms)
+  _setupTrickle.timer = setInterval(() => {
+    const remaining = _setupTrickle.target - _setupTrickle.cur;
+    if (remaining <= 0.05) return;              // hold at ceiling
+    _setupTrickle.cur += Math.min(_setupTrickle.rate, remaining * 0.03);
+    const fill = document.getElementById('setup-prog-fill');
+    const pctEl = document.getElementById('setup-prog-pct');
+    if (fill) fill.style.width = _setupTrickle.cur + '%';
+    if (pctEl) pctEl.textContent = Math.round(_setupTrickle.cur) + '%';
+    if (!fill) _stopSetupTrickle();             // modal gone
+  }, 500);
+}
+
+function setSetupProgress(pct, msg, detail, step) {
   const fill = document.getElementById('setup-prog-fill');
   const pctEl = document.getElementById('setup-prog-pct');
   const stepEl = document.getElementById('setup-step-msg');
   const detailEl = document.getElementById('setup-prog-detail');
-  if (fill && typeof pct === 'number') fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
-  if (pctEl && typeof pct === 'number') pctEl.textContent = Math.round(pct) + '%';
+  if (typeof pct === 'number') {
+    // Real event: never move backwards past what the trickle showed —
+    // a bar that retreats reads as failure.
+    const shown = Math.max(pct, _setupTrickle.cur || 0);
+    if (fill) fill.style.width = Math.max(0, Math.min(100, shown)) + '%';
+    if (pctEl) pctEl.textContent = Math.round(shown) + '%';
+    if (pct >= 100) _stopSetupTrickle();
+    else _startSetupTrickle(shown, step);
+  }
   if (stepEl && msg !== undefined) stepEl.textContent = msg;
   if (detailEl && detail !== undefined) detailEl.textContent = detail;
 }
@@ -9210,6 +9624,56 @@ const T = {
     crashReportTestQueued:'Test event queued — check Sentry in 1-2 min',
     crashReportTestFailed:'Test send failed',
     crashReportDiagLoading:'Checking...',
+    dlPhaseConverting:'Converting…',
+    selfHealStart:'Engine self-repair started',
+    selfHealDone:'Engines repaired automatically — everything works again',
+    selfHealFailed:'Automatic engine repair failed — open Settings > AI engines to run full setup',
+    verifyName:'Verify engines',
+    verifyDesc:'Deep-checks every AI component (analysis, stems, transcription) and pinpoints exactly what is broken. Repairs are one click.',
+    verifyBtn:'Verify now',
+    verifyRunning:'Checking...',
+    verifyAllOk:'All engines healthy',
+    verifyBroken:'Broken packages found',
+    verifyClickRepair:'click to repair automatically',
+    verifyBrokenGeneric:'Engines are not working',
+    plQueued:'tracks queued',
+    plQueuedNotif:'Playlist queued',
+    plSkipped:'already in queue',
+    doctorName:'Library doctor',
+    doctorDesc:'Scan for corrupted downloads — tracks whose file contains a DIFFERENT track\'s audio (a bug fixed in 0.4.3 could cause this in bulk grabs). Offers one-click re-download of the real audio.',
+    doctorBtn:'Scan library',
+    doctorTitle:'Library doctor',
+    doctorScanning:'Scanning your library for mismatched audio...',
+    doctorClean:'All clear — {n} fingerprinted tracks scanned, no title/audio mismatches found.',
+    doctorOriginal:'Audio belongs to',
+    doctorSuspects:'These rows share that same audio under a different name',
+    doctorSameAudio:'Same audio, different title — likely corrupted',
+    doctorRedl:'Re-download',
+    doctorNoUrl:'No source URL stored',
+    doctorFixed:'Fixed',
+    doctorFixedNotif:'Correct audio downloaded — corrupted entry removed',
+    doctorRedlFailed:'Re-download failed — try again or grab it manually',
+    fileTagsName:'Write BPM/key into file tags',
+    fileTagsDesc:'After analysis, stamp BPM and key into the audio file\'s metadata so FL Studio, Rekordbox, Mixed In Key and others see them. On by default.',
+    autoRenameName:'Auto-rename with BPM/key',
+    autoRenameDesc:'After analysis, rename files to "Title [140BPM Cm].mp3". Off by default — skips files already stamped and files currently in use.',
+    scrubHint:'Click to seek',
+    smartTitle:'New smart folder',
+    smartSub:'Rules-based folder that auto-populates. New downloads matching the rules appear automatically.',
+    smartName:'Folder name',
+    smartNamePh:'e.g. Dark trap 130-150',
+    smartBpmMin:'BPM min',
+    smartBpmMax:'BPM max',
+    smartKey:'Key',
+    smartMode:'Mode',
+    smartAny:'Any',
+    smartMinor:'Minor',
+    smartMajor:'Major',
+    smartCreate:'Create smart folder',
+    smartCreated:'Smart folder created — it will stay current automatically',
+    smartNeedName:'Give the folder a name',
+    smartNeedRule:'Set at least one rule (BPM range, key, or mode)',
+    closeWord:'Close',
     ctxOpenAnalyze:'Open in Analyze',
     ctxSendStems:'Send to Stem Separator',
     ctxSendTranscribe:'Send to Transcribe',
@@ -9702,6 +10166,56 @@ const T = {
     crashReportTestQueued:'Evenement test en attente — verifiez Sentry dans 1-2 min',
     crashReportTestFailed:'Echec de l\'envoi',
     crashReportDiagLoading:'Verification...',
+    dlPhaseConverting:'Conversion…',
+    selfHealStart:'Auto-reparation des moteurs demarree',
+    selfHealDone:'Moteurs repares automatiquement — tout fonctionne a nouveau',
+    selfHealFailed:'Echec de la reparation automatique — ouvrez Parametres > Moteurs IA pour relancer la configuration complete',
+    verifyName:'Verifier les moteurs',
+    verifyDesc:'Verifie en profondeur chaque composant IA (analyse, pistes, transcription) et identifie precisement ce qui est casse. Reparation en un clic.',
+    verifyBtn:'Verifier maintenant',
+    verifyRunning:'Verification...',
+    verifyAllOk:'Tous les moteurs sont operationnels',
+    verifyBroken:'Paquets casses detectes',
+    verifyClickRepair:'cliquez pour reparer automatiquement',
+    verifyBrokenGeneric:'Les moteurs ne fonctionnent pas',
+    plQueued:'pistes en file',
+    plQueuedNotif:'Playlist ajoutee a la file',
+    plSkipped:'deja en file',
+    doctorName:'Docteur de bibliotheque',
+    doctorDesc:'Detecte les telechargements corrompus — pistes dont le fichier contient l\'audio d\'une AUTRE piste (bug corrige en 0.4.3 lors des telechargements en masse). Propose un re-telechargement en un clic.',
+    doctorBtn:'Analyser la bibliotheque',
+    doctorTitle:'Docteur de bibliotheque',
+    doctorScanning:'Analyse de votre bibliotheque en cours...',
+    doctorClean:'Tout est bon — {n} pistes analysees, aucune discordance titre/audio trouvee.',
+    doctorOriginal:'L\'audio appartient a',
+    doctorSuspects:'Ces entrees partagent le meme audio sous un autre nom',
+    doctorSameAudio:'Meme audio, titre different — probablement corrompu',
+    doctorRedl:'Re-telecharger',
+    doctorNoUrl:'Aucune URL source enregistree',
+    doctorFixed:'Repare',
+    doctorFixedNotif:'Audio correct telecharge — entree corrompue supprimee',
+    doctorRedlFailed:'Echec du re-telechargement — reessayez ou recuperez-le manuellement',
+    fileTagsName:'Ecrire BPM/tonalite dans les tags',
+    fileTagsDesc:'Apres analyse, inscrit le BPM et la tonalite dans les metadonnees du fichier pour FL Studio, Rekordbox, Mixed In Key et autres. Active par defaut.',
+    autoRenameName:'Renommage auto avec BPM/tonalite',
+    autoRenameDesc:'Apres analyse, renomme les fichiers en "Titre [140BPM Cm].mp3". Desactive par defaut — ignore les fichiers deja marques et ceux en cours d\'utilisation.',
+    scrubHint:'Cliquez pour naviguer',
+    smartTitle:'Nouveau dossier intelligent',
+    smartSub:'Dossier base sur des regles, auto-alimente. Les nouveaux telechargements correspondants apparaissent automatiquement.',
+    smartName:'Nom du dossier',
+    smartNamePh:'ex. Trap sombre 130-150',
+    smartBpmMin:'BPM min',
+    smartBpmMax:'BPM max',
+    smartKey:'Tonalite',
+    smartMode:'Mode',
+    smartAny:'Tous',
+    smartMinor:'Mineur',
+    smartMajor:'Majeur',
+    smartCreate:'Creer le dossier intelligent',
+    smartCreated:'Dossier intelligent cree — il restera a jour automatiquement',
+    smartNeedName:'Donnez un nom au dossier',
+    smartNeedRule:'Definissez au moins une regle (plage BPM, tonalite ou mode)',
+    closeWord:'Fermer',
     ctxOpenAnalyze:'Ouvrir dans Analyse',
     ctxSendStems:'Envoyer au separateur de pistes',
     ctxSendTranscribe:'Envoyer a la transcription',
@@ -10560,6 +11074,34 @@ function renderSettings() {
                 <div class="setting-desc">${t('dupDesc')}</div>
               </div>
               <button class="btn sm" onclick="openDuplicateFinder()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6M3.5 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.65 4.36A9 9 0 0 0 20.5 15"/></svg> ${t('btnFindDupes')}</button>
+            </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('verifyName')}</div>
+                <div class="setting-desc">${t('verifyDesc')}</div>
+              </div>
+              <button class="btn sm" onclick="runEngineVerify(this)"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg> ${t('verifyBtn')}</button>
+            </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('doctorName')}</div>
+                <div class="setting-desc">${t('doctorDesc')}</div>
+              </div>
+              <button class="btn sm" onclick="openLibraryDoctor()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg> ${t('doctorBtn')}</button>
+            </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('fileTagsName')}</div>
+                <div class="setting-desc">${t('fileTagsDesc')}</div>
+              </div>
+              <label class="switch"><input type="checkbox" id="file-tags-toggle" onchange="setFileTagsPref()"/><span class="slider"></span></label>
+            </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('autoRenameName')}</div>
+                <div class="setting-desc">${t('autoRenameDesc')}</div>
+              </div>
+              <label class="switch"><input type="checkbox" id="auto-rename-toggle" onchange="setFileTagsPref()"/><span class="slider"></span></label>
             </div>
         <div class="setting-row">
               <div class="setting-info">

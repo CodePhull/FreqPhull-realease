@@ -1,14 +1,14 @@
 {
   "name": "freqphull",
-  "version": "0.4.3",
+  "version": "0.6.0",
   "description": "Freq.Phull",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "prebuild": "node prebuild.js",
-    "build": "electron-builder --win --x64",
+    "build": "electron-builder --publish never --win --x64",
     "prebuild-portable": "node prebuild.js",
-    "build-portable": "electron-builder --win portable --x64",
+    "build-portable": "electron-builder --publish never --win portable --x64",
     "check": "node prebuild.js"
   },
   "dependencies": {

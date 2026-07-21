@@ -394,6 +394,8 @@ function startBackend() {
         log('FATAL server error: ' + reason);
         report('backend.fatal-startup', new Error(reason || 'unknown fatal'), {
           marker: '__FREQPHULL_FATAL__',
+          packaged: app.isPackaged,
+          userDataDrive: (() => { try { return app.getPath('userData').slice(0, 3); } catch { return '?'; } })(),
         });
         try {
           let title = 'Freq.Phull cannot start';
@@ -436,6 +438,8 @@ function startBackend() {
           report('backend.crash-loop', new Error('Backend crashed 5+ times'), {
             lastExitCode: code,
             restartCount: backendRestartCount,
+            uptimeS: Math.round(process.uptime()),
+            packaged: app.isPackaged,
           });
           try {
             dialog.showErrorBox(

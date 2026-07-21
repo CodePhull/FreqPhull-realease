@@ -4,6 +4,9 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
+minor-key download appears in "Dark trap 130-150" the moment analysis
+lands. Created via the ⚡ Smart button next to New folder.
+
 ## 0.4.3 (2026-07-11)
 
 **Bulk download corruption fixed (wrong audio under the right name)**

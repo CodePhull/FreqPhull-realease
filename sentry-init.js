@@ -197,6 +197,23 @@ function reportSoftError(processKind, category, error, context) {
     Sentry.withScope((scope) => {
       scope.setLevel('warning');
       scope.setTag('category', category);
+      // Group by category, not by message — "exit 1" vs "exit 9009"
+      // shouldn't fragment the dashboard into single-event issues.
+      scope.setFingerprint([category]);
+      // Machine context on every event. Cheap to gather, and it's the
+      // first thing you want when triaging a remote failure.
+      try {
+        const os = require('os');
+        scope.setContext('machine', {
+          os_release: os.release(),
+          arch: os.arch(),
+          cpu: (os.cpus()[0] || {}).model || 'unknown',
+          cores: os.cpus().length,
+          ram_gb: Math.round(os.totalmem() / 1073741824),
+          free_ram_gb: Math.round(os.freemem() / 1073741824 * 10) / 10,
+          uptime_s: Math.round(process.uptime()),
+        });
+      } catch {}
       if (context && typeof context === 'object') {
         for (const [k, v] of Object.entries(context)) {
           try { scope.setExtra(k, scrubObject(v)); } catch {}

@@ -2876,6 +2876,15 @@ button > .ic:only-child,
 
 /* ── v0.4.3 perf: skip layout/paint of offscreen history rows ───── */
 .hist-row{content-visibility:auto; contain-intrinsic-size:auto 64px}
+
+/* ── v0.5.0 timeline scrubber ───────────────────────────────────── */
+.bs-timeline{position:relative; cursor:pointer}
+.bs-playhead{
+  position:absolute; top:-2px; bottom:0; width:2px; left:0;
+  background:#fff; opacity:0; pointer-events:none;
+  box-shadow:0 0 6px rgba(255,255,255,.6);
+  transition:opacity .2s ease;
+}
 /* GPU-composite the things that animate every frame */
 .progress-fill{will-change:width}
 .app-notif{will-change:transform,opacity}
@@ -3673,6 +3682,7 @@ button:focus:not(:focus-visible){outline:none}
         <div class="sh">
           <div class="sh-title" id="sp-folders-title">Style Folders</div>
           <button class="btn sm" onclick="openCreateFolderDialog()" id="btn-sp-new"><span id="sp-new-lbl">+ New folder</span></button>
+          <button class="btn sm" onclick="openCreateSmartFolderDialog()" id="btn-sp-smart" title="Rules-based folder that auto-populates"><svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> <span id="sp-smart-lbl">Smart</span></button>
         </div>
         <div id="sp-folder-grid" class="sp-folder-grid">
           <div class="sp-empty" id="sp-folder-empty">
