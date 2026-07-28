@@ -82,4 +82,25 @@ if fails:
     print('✗ PASS 8 FAILED'); [print('   -', x) for x in fails]; sys.exit(1)
 print('✓ PASS 8  python scripts asar-safe')
 PY
-echo "════════ ALL 8 GREEN ════════"
+python3 - <<'PY'
+import re, sys
+# Every third-party module the helper scripts import must actually be
+# installed by setup and covered by verification, or the feature silently
+# does nothing on user machines.
+fails = []
+ps1 = open('installer/setup-engines.ps1','rb').read().decode('ascii', 'replace')
+ver = open('verify_engines.py').read()
+DEPS = {'write_tags.py': ['mutagen'], 'fingerprint.py': ['numpy', 'soundfile']}
+for script, mods in DEPS.items():
+    src = open(script).read()
+    for m in mods:
+        if m not in src: fails.append(f'{script} no longer imports {m}')
+        if m not in ps1: fails.append(f'{m} (for {script}) not installed by setup')
+        if m not in ver: fails.append(f'{m} not covered by verify_engines.py')
+if re.search(r'^\s*import librosa', open('fingerprint.py').read(), re.M):
+    fails.append('fingerprint.py imports librosa again')
+if fails:
+    print('✗ PASS 9 FAILED'); [print('   -', f) for f in fails]; sys.exit(1)
+print('✓ PASS 9  helper-script dependencies installed + verified')
+PY
+echo "════════ ALL 9 GREEN ════════"

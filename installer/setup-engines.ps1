@@ -654,7 +654,7 @@ EmitStatus "installing_numerical" 20 "Installing numpy + scipy (audio analysis c
 try {
     # Routes through Invoke-PipInstall so cache-poisoning retries.
     $okNumerical = Invoke-PipInstall `
-        -Packages @("numpy>=1.24,<2.1", "scipy>=1.10", "scikit-learn>=1.3", "soundfile>=0.12") `
+        -Packages @("numpy>=1.24,<2.1", "scipy>=1.10", "scikit-learn>=1.3", "soundfile>=0.12", "mutagen>=1.47") `
         -Label "numerical" `
         -ExtraArgs @("--retries", "3", "--timeout", "90")
     if (-not $okNumerical) {
@@ -662,7 +662,7 @@ try {
     }
     # Verify they actually import - some Windows machines need VC++
     # runtime for numpy native extensions (DLL load failure)
-    $numCheck = Invoke-Py -c "import numpy, scipy, sklearn, soundfile; print('OK')" 2>&1
+    $numCheck = Invoke-Py -c "import numpy, scipy, sklearn, soundfile, mutagen; print('OK')" 2>&1
     if ("$numCheck" -notmatch "^OK") {
         EmitError "numpy/scipy installed but cannot be imported: $numCheck" "Install Microsoft Visual C++ 2015-2022 Redistributable from microsoft.com and re-run setup."
     }

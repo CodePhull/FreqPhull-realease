@@ -4,6 +4,40 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
+## 0.6.7 (2026-07-28)
+
+Follow-up to 0.6.6: the scripts are found now, but two of them were
+missing dependencies nobody had ever installed.
+
+**File tagging never had mutagen.**
+`write_tags.py` needs mutagen and assumed it arrived as a transitive
+dependency of audio-separator. It does not. The script reported this
+correctly, but as JSON on stdout while the server only logged stderr,
+so every failure looked like a blank "exited 1". Both handlers now log
+stdout as well. mutagen is installed with the core numerical tier and
+is part of engine verification, so machines that already ran setup pick
+it up automatically through the existing self-repair at next launch.
+
+**Fingerprinting needed librosa.**
+Same story, and librosa drags in numba and llvmlite for what amounts to
+one perceptual hash. Since no fingerprint has ever succeeded there are
+no stored hashes to stay compatible with, so the fingerprinter is
+rewritten on numpy and soundfile, which the app already installs. It
+decodes through the bundled ffmpeg for formats soundfile cannot open.
+Verified deterministic, and identical across an 8dB volume change.
+
+**Sentry: a DSN in the example file is now used.**
+Editing `sentry.config.example.json` instead of copying it to
+`sentry.config.json` is the obvious thing to do, and it silently
+produced a build with crash reporting switched off. Both the resolver
+and the diagnostic now accept a real DSN from the example file, while
+still rejecting the placeholder. The diagnostic reports which file the
+DSN came from.
+
+**Analysis cache visibility.**
+The server log now states plainly whether opening a track was served
+from cache or triggered a full analysis, and why.
+
 ## 0.6.6 (2026-07-28)
 
 Three bugs found in a packaged-build log.

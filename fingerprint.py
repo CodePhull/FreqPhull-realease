@@ -40,7 +40,8 @@ does the comparison server-side.
 Why not chromaprint?
 chromaprint would be more accurate, but it requires a binary install
 (fpcalc) which means we'd need to bundle a platform-specific .exe and
-deal with packaging. librosa is already a transitive dep of audio-separator
+deal with packaging. The hash uses only numpy/scipy/soundfile, which the
+engine setup installs as its core tier
 so this approach is install-free.
 """
 
@@ -49,58 +50,129 @@ import json
 import os
 import warnings
 
-# librosa is loud about deprecations and numerical edge cases; suppress.
+# numpy can be loud about numerical edge cases on near-silent audio.
 warnings.filterwarnings("ignore")
+
+
+def _load_chunk(path, start_s, dur_s, target_sr=22050):
+    """Read a mono chunk. soundfile handles wav/flac/ogg natively; anything
+    else (mp3, m4a, aac) is decoded through ffmpeg, which the app ships."""
+    import numpy as np
+    try:
+        import soundfile as sf
+        info = sf.info(path)
+        sr = info.samplerate
+        start_frame = int(start_s * sr)
+        frames = int(dur_s * sr)
+        data, sr = sf.read(path, start=start_frame, frames=frames,
+                           dtype="float32", always_2d=True)
+        y = data.mean(axis=1)
+    except Exception:
+        y, sr = _ffmpeg_chunk(path, start_s, dur_s, target_sr)
+    # Cheap decimation to roughly target_sr; exact rate does not matter as
+    # long as it is consistent, since the hash only compares bands to each
+    # other within the same track.
+    if sr > target_sr:
+        step = max(1, int(round(sr / target_sr)))
+        y = y[::step]
+        sr = sr // step
+    return np.asarray(y, dtype="float32"), sr
+
+
+def _ffmpeg_chunk(path, start_s, dur_s, target_sr):
+    """Decode a chunk to raw mono float32 through ffmpeg."""
+    import subprocess
+    import numpy as np
+    exe = os.environ.get("FREQPHULL_FFMPEG") or "ffmpeg"
+    cmd = [exe, "-v", "quiet", "-ss", str(start_s), "-t", str(dur_s),
+           "-i", path, "-f", "f32le", "-ac", "1", "-ar", str(target_sr), "-"]
+    out = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                         check=True).stdout
+    return np.frombuffer(out, dtype="<f4").copy(), target_sr
+
+
+def _total_duration(path):
+    try:
+        import soundfile as sf
+        info = sf.info(path)
+        return info.frames / float(info.samplerate)
+    except Exception:
+        pass
+    import subprocess
+    exe = os.environ.get("FREQPHULL_FFPROBE") or "ffprobe"
+    out = subprocess.run(
+        [exe, "-v", "quiet", "-show_entries", "format=duration",
+         "-of", "default=nw=1:nk=1", path],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True).stdout
+    return float(out.decode().strip())
+
+
+def _log_band_energies(y, sr, n_bands=32, n_fft=1024, hop=512):
+    """Mean per-band energy in dB over the chunk, on log-spaced bands.
+
+    This replaces librosa's mel spectrogram with numpy's rfft so the
+    fingerprinter runs on the numerical stack the app already installs
+    (numpy/scipy/soundfile) instead of pulling in librosa, numba and
+    llvmlite for one hash.
+    """
+    import numpy as np
+    if len(y) < n_fft:
+        y = np.pad(y, (0, n_fft - len(y)))
+    window = np.hanning(n_fft).astype("float32")
+    n_frames = 1 + (len(y) - n_fft) // hop
+    spec = np.empty((n_frames, n_fft // 2 + 1), dtype="float32")
+    for i in range(n_frames):
+        seg = y[i * hop:i * hop + n_fft] * window
+        spec[i] = np.abs(np.fft.rfft(seg)).astype("float32")
+    power = spec ** 2
+    # Log-spaced band edges from 40Hz to just under Nyquist.
+    f_min, f_max = 40.0, min(sr / 2.0 - 1.0, 10000.0)
+    edges = np.geomspace(f_min, f_max, n_bands + 1)
+    bin_hz = (sr / 2.0) / (n_fft // 2)
+    bands = np.zeros(n_bands, dtype="float64")
+    for b in range(n_bands):
+        lo = int(edges[b] / bin_hz)
+        hi = max(lo + 1, int(edges[b + 1] / bin_hz))
+        hi = min(hi, power.shape[1])
+        if lo >= hi:
+            bands[b] = 0.0
+        else:
+            bands[b] = power[:, lo:hi].mean()
+    return 10.0 * np.log10(bands + 1e-12)
 
 
 def fingerprint(path):
     """Compute a 512-bit perceptual hash. Returns (hex_hash, duration_sec)."""
-    try:
-        import librosa
-        import numpy as np
-    except ImportError as e:
-        raise RuntimeError("librosa not available: " + str(e))
+    import numpy as np
 
-    # Load at 22050 Hz mono - plenty of resolution for spectral fingerprinting
-    # and ~4x faster than 44100. Use offset/duration probe first for total
-    # length, then sample chunks across the track.
-    duration = librosa.get_duration(path=path)
+    duration = _total_duration(path)
     if duration < 1.0:
         raise RuntimeError("Audio too short to fingerprint")
 
-    # 16 chunks of 1.5s each. For tracks shorter than 24s we'd run out of
-    # non-overlapping chunks, so clamp the spacing.
     n_chunks = 16
     chunk_dur = 1.5
-    # Equally spaced start points across [0, duration - chunk_dur]
     if duration <= chunk_dur:
-        starts = [0.0] * n_chunks  # all chunks point to the same content
+        starts = [0.0] * n_chunks
     else:
         max_start = max(0.0, duration - chunk_dur)
         starts = [i * max_start / (n_chunks - 1) for i in range(n_chunks)]
 
     bits = []
-    for s in starts:
-        y, sr = librosa.load(path, sr=22050, mono=True, offset=s, duration=chunk_dur)
+    for st in starts:
+        y, sr = _load_chunk(path, st, chunk_dur)
         if len(y) < 256:
-            # Pad short reads (last chunk near EOF) so the mel spec doesn't fail
             y = np.pad(y, (0, 256 - len(y)))
-        # 32-band mel spectrogram. Power → dB so quiet stuff stays meaningful.
-        S = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=32, n_fft=1024, hop_length=512)
-        S_db = librosa.power_to_db(S, ref=np.max)
-        # Time-average each band → 32 numbers per chunk
-        band_means = S_db.mean(axis=1)
-        # Compare adjacent bands → 31 bits per chunk (32 - 1)
-        chunk_bits = [1 if band_means[i] > band_means[i - 1] else 0 for i in range(1, len(band_means))]
-        bits.extend(chunk_bits)
+        band_db = _log_band_energies(y, sr)
+        # Compare adjacent bands -> 31 bits per chunk. Comparing neighbours
+        # keeps the hash stable across volume changes and re-encodes.
+        bits.extend(1 if band_db[i] > band_db[i - 1] else 0
+                    for i in range(1, len(band_db)))
 
-    # We get 16 * 31 = 496 bits. Pad to 512 for clean hex.
     while len(bits) % 8 != 0:
         bits.append(0)
     while len(bits) < 512:
         bits.append(0)
 
-    # Pack bits into bytes
     byts = bytearray()
     for i in range(0, len(bits), 8):
         b = 0

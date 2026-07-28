@@ -22,6 +22,7 @@ TIERS = {
         "scipy": "scipy>=1.10",
         "sklearn": "scikit-learn>=1.3",
         "soundfile": "soundfile>=0.12",
+        "mutagen": "mutagen>=1.47",
     },
     "stems": {
         "torch": "torch",

@@ -674,7 +674,9 @@ function writeTagsToFile(historyId, { bpm, key_note, key_mode }) {
     proc.stderr.on('data', d => { stderr += d; });
     proc.on('close', code => {
       if (code !== 0) {
-        slog('writeTagsToFile: python exited ' + code + ' stderr=' + (stderr || '').slice(0, 300));
+        slog('writeTagsToFile: python exited ' + code +
+           ' stdout=' + (stdout || '').trim().slice(0, 300) +
+           ' stderr=' + (stderr || '').trim().slice(0, 300));
         return;
       }
       try {
@@ -716,13 +718,20 @@ function computeFingerprint(historyId, filePath) {
       return;
     }
     const pythonCmd = getPythonCmd();
-    const proc = spawn(pythonCmd, [...getPythonArgs(), scriptPath, filePath], { windowsHide: true });
+    const proc = spawn(pythonCmd, [...getPythonArgs(), scriptPath, filePath], {
+      windowsHide: true,
+      // fingerprint.py decodes mp3/m4a through ffmpeg when soundfile
+      // cannot open the container; point it at the bundled binaries.
+      env: { ...process.env, FREQPHULL_FFMPEG: bin('ffmpeg'), FREQPHULL_FFPROBE: bin('ffprobe') },
+    });
     let stdout = '', stderr = '';
     proc.stdout.on('data', d => { stdout += d; });
     proc.stderr.on('data', d => { stderr += d; });
     proc.on('close', code => {
       if (code !== 0) {
-        slog('computeFingerprint: python exited ' + code + ' stderr=' + (stderr || '').slice(0, 300));
+        slog('computeFingerprint: python exited ' + code +
+             ' stdout=' + (stdout || '').trim().slice(0, 300) +
+             ' stderr=' + (stderr || '').trim().slice(0, 300));
         return;
       }
       try {
@@ -1757,12 +1766,17 @@ function pruneAnalysisCache() {
 app.get('/history/:id/analysis-cache', (req, res) => {
   try {
     const row = dbAll('SELECT file_path, analysis_json, analysis_mtime FROM history WHERE id=?', [req.params.id])[0];
-    if (!row || !row.analysis_json) return res.json({ cached: false, reason: 'no-cache' });
+    if (!row || !row.analysis_json) {
+      slog('analysis-cache MISS id=' + req.params.id + ' (no cached result yet)');
+      return res.json({ cached: false, reason: 'no-cache' });
+    }
     if (!row.file_path || !fs.existsSync(row.file_path)) return res.json({ cached: false, reason: 'file-missing' });
     const mtime = fs.statSync(row.file_path).mtimeMs;
     if (row.analysis_mtime != null && Math.abs(mtime - row.analysis_mtime) > 2000) {
+      slog('analysis-cache MISS id=' + req.params.id + ' (file changed on disk)');
       return res.json({ cached: false, reason: 'file-changed' });
     }
+    slog('analysis-cache HIT id=' + req.params.id);
     dbRun('UPDATE history SET analysis_used_at=? WHERE id=?', [Date.now(), req.params.id]);
     return res.json({ cached: true, result: JSON.parse(row.analysis_json) });
   } catch (e) {
@@ -3534,14 +3548,19 @@ app.get('/sentry-status', (_, res) => {
     dsnPresent = true; dsnSource = 'env'; dsnValue = process.env.FREQPHULL_SENTRY_DSN;
   } else {
     const candidates = [
-      path.join(__dirname, 'sentry.config.json'),
-      process.resourcesPath ? path.join(process.resourcesPath, 'sentry.config.json') : null,
-    ].filter(Boolean);
-    for (const p of candidates) {
+      [path.join(__dirname, 'sentry.config.json'), 'config-file'],
+      [process.resourcesPath ? path.join(process.resourcesPath, 'sentry.config.json') : null, 'config-file'],
+      [path.join(__dirname, 'sentry.config.example.json'), 'example-file'],
+      [process.resourcesPath ? path.join(process.resourcesPath, 'sentry.config.example.json') : null, 'example-file'],
+    ].filter(c => c[0]);
+    for (const [p, src] of candidates) {
       try {
-        if (fs.existsSync(p)) {
-          const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
-          if (cfg && cfg.dsn) { dsnPresent = true; dsnSource = 'config-file'; dsnValue = cfg.dsn; break; }
+        if (!fs.existsSync(p)) continue;
+        const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+        const d = cfg && typeof cfg.dsn === 'string' ? cfg.dsn.trim() : '';
+        // Same test as sentry-init: a real DSN, not the example placeholder.
+        if (/^https:\/\/[A-Za-z0-9]+@[\w.-]+\/\d+$/.test(d)) {
+          dsnPresent = true; dsnSource = src; dsnValue = d; break;
         }
       } catch {}
     }

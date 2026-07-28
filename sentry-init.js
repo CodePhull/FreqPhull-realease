@@ -21,15 +21,24 @@ function _resolveDsn() {
   try {
     const fs = require('fs');
     const path = require('path');
+    // The example file is checked last on purpose: people reasonably edit
+    // the file they can see rather than creating a copy of it, and a DSN
+    // sitting there unused is a silently broken build. A real DSN there
+    // is honoured; the placeholder is ignored.
     const candidates = [
       path.join(__dirname, 'sentry.config.json'),
       process.resourcesPath ? path.join(process.resourcesPath, 'sentry.config.json') : null,
+      path.join(__dirname, 'sentry.config.example.json'),
+      process.resourcesPath ? path.join(process.resourcesPath, 'sentry.config.example.json') : null,
     ].filter(Boolean);
     for (const p of candidates) {
-      if (fs.existsSync(p)) {
-        const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
-        if (cfg && cfg.dsn) return cfg.dsn;
-      }
+      if (!fs.existsSync(p)) continue;
+      let cfg;
+      try { cfg = JSON.parse(fs.readFileSync(p, 'utf8')); } catch { continue; }
+      const dsn = cfg && typeof cfg.dsn === 'string' ? cfg.dsn.trim() : '';
+      // A usable DSN is https://KEY@HOST/PROJECT_ID. Placeholders in the
+      // example file ("https://YOUR_KEY@...") are rejected by that test.
+      if (/^https:\/\/[A-Za-z0-9]+@[\w.-]+\/\d+$/.test(dsn)) return dsn;
     }
   } catch { /* swallow */ }
   return '';
