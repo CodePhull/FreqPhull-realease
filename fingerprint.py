@@ -61,7 +61,7 @@ def fingerprint(path):
     except ImportError as e:
         raise RuntimeError("librosa not available: " + str(e))
 
-    # Load at 22050 Hz mono — plenty of resolution for spectral fingerprinting
+    # Load at 22050 Hz mono - plenty of resolution for spectral fingerprinting
     # and ~4x faster than 44100. Use offset/duration probe first for total
     # length, then sample chunks across the track.
     duration = librosa.get_duration(path=path)

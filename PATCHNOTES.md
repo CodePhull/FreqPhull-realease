@@ -4,12 +4,72 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
-## 0.6.0 (2026-07-21)
+## 0.6.1 (2026-07-25)
+
+**Real waveform in the analyzer timeline**
+
+The section timeline now renders the track's actual waveform - min/max
+peaks computed in one pass over the already-decoded audio buffer
+(~1000 columns, mono mix, stride-sampled so a 10-minute WAV costs
+~15ms). Painted as a pointer-events-free canvas layered over the
+section colors, so scrub clicks and section tints work exactly as
+before; the timeline grew from 18px to 30px so the shape reads.
+Repaints on window resize (debounced) and on every new decode.
+
+**Tag-and-forget releases (GitHub Actions)**
+
+`.github/workflows/release.yml`: push a tag like `v0.6.2` and GitHub's
+own Windows runner builds the app, fetches bundled binaries, writes the
+Sentry config from a repo secret (`SENTRY_DSN` - set once in repo
+Settings > Secrets > Actions), and publishes a draft release with the
+installer + latest.yml + blockmap attached. No local tokens ever again.
+
+**Extension 4.4.0**
+
+Compatibility audit against the 0.6.x server contract passed clean (the
+extension's playlist grabber already enqueues per-video URLs, so the
+server's playlist-URL guard never affects it). Picked up the new
+download phase field: "Converting…" label during the ffmpeg step and a
+monotonic progress guard, matching the desktop queue.
+
+**Validation**
+
+Release checks now cover syntax on all entry points, Python AST, EN/FR
+string parity, installer script byte integrity, route registration
+order, and packaged file content. This round the content check caught
+and removed a duplicated translation key.
+
+**Opening a track from History is now instant**
+
+Every open was re-running the full analysis pipeline - Python spawn
+(~1s of imports alone), decode, BPM/key/loudness/beat-switch - because
+the DB only stored the headline numbers. The complete analysis result
+is now cached in the DB (`history.analysis_json`, keyed to the file's
+mtime) and served on reopen in ~50ms: same metrics, same sections, same
+timeline, zero spawn.
+
+- Both producers write the cache: the interactive analyzer and the
+  background worker.
+- The cache invalidates itself when the file changes on disk (mtime
+  drift > 2s) or goes missing - those cases re-analyze exactly as
+  before.
+- The forced beat-switch re-detect always bypasses the cache: an
+  explicit re-run request means fresh computation.
+- Diagnostic log says which path served the result
+  ("loaded from cache (instant)" vs "running full analysis").
+- Bounded by design: results are ~2-4KB each (scalars + per-30s section
+  summaries, no waveforms), 400KB hard cap per row, and an LRU ceiling
+  of 1500 cached rows (~5MB total). Least-recently-opened entries beyond
+  the cap lose only their cache blob - the row, BPM and key stay - and
+  re-cache on next open. Matters because sql.js rewrites the whole DB
+  file on save; the cache can never balloon that write.
+
+## 0.5.0 (2026-07-21)
 
 **Live spectrum analyzer: measurement-grade pass**
 
 - FFT 16384 (was 8192): ~2.9Hz bins. The entire 20-40Hz octave used to
-  live in ~3 bins — that was the staircase at the low end.
+  live in ~3 bins - that was the staircase at the low end.
 - Both channels analyzed, combined in the power domain ((pL+pR)/2).
   Previously only LEFT was read: side-heavy content measured up to 3dB
   low and right-only elements were invisible.
@@ -21,11 +81,11 @@ Changes since the BPM detector became the foundation. Latest first.
   averaging is a geometric mean of power and read several dB low on
   dynamic material.
 
-**Loading bars tell the truth**
+**More accurate loading bars**
 
 - Engine setup: trickle interpolation between step events, paced by
   per-step measured ETAs. The torch step no longer freezes the bar at
-  one number for five minutes — and the trickle is capped (+8, ceiling
+  one number for five minutes - and the trickle is capped (+8, ceiling
   97) so a genuinely stalled step visibly stalls instead of lying.
   Real events always win; the bar never moves backwards.
 - Downloads: yt-dlp's percentage only ever covered the raw stream.
@@ -33,9 +93,9 @@ Changes since the BPM detector became the foundation. Latest first.
   "Converting…" phase label, done carries 100. Monotonic guard drops
   out-of-order SSE updates around the phase transition.
 
-**The engine problem, solved at the root: a private embedded Python**
+**Private embedded Python runtime**
 
-Every real-world support case — multiple users, every Sentry event —
+Every real-world support case - multiple users, every Sentry event -
 traced back to the machine's own Python: MS Store aliases, PATH damage,
 incompatible versions, admin-locked installs. 0.6.0 stops depending on
 it. Setup now provisions the official python.org embeddable package
@@ -51,7 +111,7 @@ it. Setup now provisions the official python.org embeddable package
   present. System Python probing survives only as a fallback for
   offline-first-run machines.
 
-**Self-healing: verify -> targeted repair, hands-free**
+**Engine verification and automatic repair**
 
 - New `verify_engines.py` import-checks every tier (core analysis /
   stems / whisper) with native-lib smoke tests (torch tensor op catches
@@ -60,62 +120,56 @@ it. Setup now provisions the official python.org embeddable package
 - `setup-engines.ps1 -Repair -Packages a,b` force-reinstalls precisely
   those packages (`--force-reinstall --no-cache-dir`), reusing every
   hardening lesson in the script. Repair refreshes the ready marker's
-  `last_repair` date but never creates the marker — only full setup may
+  `last_repair` date but never creates the marker - only full setup may
   claim readiness.
 - 15 seconds after boot, if engines were ever set up, the server
   verifies them and silently repairs anything broken. The user whose
   install worked yesterday and got AV-quarantined overnight is fixed
   before they notice. At most one automatic attempt per session; a
-  quiet toast on start, a green one on success — only failure is loud.
+  quiet toast on start, a green one on success - only failure is loud.
 - Settings gains **Verify engines**: on-demand deep check with a
   one-click repair offer when something is broken.
 - New Sentry categories `selfheal.repair-failed` and
   `selfheal.repair-ineffective` so unfixable machines surface remotely
   with the package list attached.
 
-Fixed during review: the new /engines routes were initially registered
-before `const app = express()` — a temporal-dead-zone crash on boot
-that `node --check` cannot catch. Declaration-order verified now.
 
-## 0.5.2 (2026-07-15)
-
-**Sentry events carry real diagnostic payloads now**
+**Richer crash-report payloads**
 
 Every soft-error event gains a `machine` context (OS release, arch, CPU
-model + cores, total/free RAM, process uptime) and clean grouping —
+model + cores, total/free RAM, process uptime) and clean grouping -
 events fingerprint by category, so five different exit codes make one
 `setup.failed` issue with five events, not five issues.
 
 Per-category payloads:
 
-- `ytdlp.*` — yt-dlp version (cached `--version`), format, URL kind
+- `ytdlp.*` - yt-dlp version (cached `--version`), format, URL kind
   (bare video vs video-in-playlist). Answers "stale binary?" instantly.
-- `bg-analyze.python-crash` — exit code, file extension + size,
+- `bg-analyze.python-crash` - exit code, file extension + size,
   duration, classifier verdict, last 1200 chars of stderr.
-- `bg-analyze.parse-failure` — stdout AND stderr tails, file extension.
-- `bg-analyze.ffmpeg-failure` — file extension, size, exists-on-disk.
-- `transcribe.failed` — model, language, upload size (whisper's stderr
+- `bg-analyze.parse-failure` - stdout AND stderr tails, file extension.
+- `bg-analyze.ffmpeg-failure` - file extension, size, exists-on-disk.
+- `transcribe.failed` - model, language, upload size (whisper's stderr
   already rides in the exception message via run()).
-- `backend.crash-loop` / `fatal-startup` — packaged flag, uptime,
+- `backend.crash-loop` / `fatal-startup` - packaged flag, uptime,
   userData drive letter.
 
-**setup.failed Sentry events are now actionable**
+**setup.failed events now include the setup log**
 
 First real-world Sentry event exposed a blind spot: the `setup.failed`
 soft report only attached `stderrTail`, but setup-engines.ps1 writes
-its diagnostics to `%TEMP%\freqphull-setup.log`, not stderr — so remote
+its diagnostics to `%TEMP%\freqphull-setup.log`, not stderr - so remote
 events arrived saying "exit 1" and nothing else. The handler now reads
 the log tail once and attaches it to the event (`setupLogTail`, last
 ~1800 chars, PII-scrubbed like everything else), along with the exit
 code. The same read feeds the in-app diagnostic modal, replacing a
 duplicate file read.
 
-## 0.5.1 (2026-07-12)
 
-**Bulk downloads: collisions are now impossible by construction**
+**Bulk download filename collisions eliminated**
 
 0.4.3's staging directories fixed cross-download races, but filenames
-inside staging were still title-derived (`%(title)s.%(ext)s`) — yt-dlp's
+inside staging were still title-derived (`%(title)s.%(ext)s`) - yt-dlp's
 title sanitization was the collision source. Downloads are now staged as
 `%(id)s.%(ext)s`: video IDs are unique by definition, so two tracks can
 never fight over a filename no matter what they're called. The human-
@@ -125,31 +179,30 @@ a Windows-safe sanitizer (illegal chars, trailing dots, 150-char cap).
 **Playlist URLs handled properly**
 
 yt-dlp silently ignores `--no-playlist` on playlist-only URLs (no `v=`
-component) — one of those would have dumped the entire playlist into a
+component) - one of those would have dumped the entire playlist into a
 single staging dir, recreating the collision bug. Three layers now:
 
 - `/info` detects playlist-only URLs and expands them via
   `--flat-playlist --dump-single-json` (one fast metadata pass, capped
   at 500 entries).
-- The renderer queues every entry as its own download — paste a
+- The renderer queues every entry as its own download - paste a
   playlist URL into the Download tab and the whole thing queues, each
   track through its own isolated staging pipeline. Re-pasting skips
   tracks already queued.
 - `/download` rejects playlist-only URLs outright (`playlist_url` code),
   and a leak guard refuses to promote when staging somehow contains
-  more than one audio file — with a Sentry soft-report
+  more than one audio file - with a Sentry soft-report
   (`download.playlist-leak`) so we hear about it.
 
 Note for existing libraries: these fixes prevent NEW corruption. Files
-damaged before 0.4.3 are still on disk — run Settings > Library doctor
+damaged before 0.4.3 are still on disk - run Settings > Library doctor
 to find and re-download them.
 
-## 0.5.0 (2026-07-12)
 
 **Library doctor**
 
 Settings > tools row: scans the library for rows sharing near-identical
-audio (hamming <= 25 bits) under DIFFERENT titles — the damage signature
+audio (hamming <= 25 bits) under DIFFERENT titles - the damage signature
 of the pre-0.4.3 bulk-download bug. The oldest row in a group is the
 presumed owner of the audio; newer rows with other titles are suspects.
 Each suspect gets a one-click **Re-download**: fetches the correct audio
@@ -161,7 +214,7 @@ else), then removes the corrupted row. `GET /history/doctor` backs it.
 
 The section timeline in Analyze is now a real transport control: click
 anywhere to seek proportionally (per-section clicks still snap to
-section starts), with a live playhead line tracking playback via rAF —
+section starts), with a live playhead line tracking playback via rAF -
 self-terminating when the markup leaves the DOM. Tracks with no beat
 switch detected get a plain scrub bar with the same mechanics, so every
 analyzed track is seekable from the timeline.
@@ -170,9 +223,9 @@ analyzed track is seekable from the timeline.
 
 New opt-in setting: after analysis, files are renamed to
 `Title [140BPM Cm].ext`. Skips files already stamped (`[..BPM..]` in the
-name), skips locked files (EBUSY/EPERM — open in a DAW), collision-safe,
+name), skips locked files (EBUSY/EPERM - open in a DAW), collision-safe,
 updates the DB path, broadcasts history-changed so every window updates.
-Off by default; renaming user files without asking is bad manners.
+Off by default.
 The existing write-tags feature also gained a proper Settings toggle
 (both backed by `GET/POST /file-tags-pref` writing settings.json).
 
@@ -181,7 +234,7 @@ The existing write-tags feature also gained a proper Settings toggle
 Stockpile gained rules-based folders: name + BPM range + key + mode,
 stored as JSON in a new `stockpile_folders.smart_rules` column
 (guarded migration). The folder tracks endpoint evaluates rules live
-against history, so a smart folder never goes stale — a new 142 BPM
+against history, so a smart folder never goes stale - a new 142 BPM
 minor-key download appears in "Dark trap 130-150" the moment analysis
 lands. Created via the ⚡ Smart button next to New folder.
 

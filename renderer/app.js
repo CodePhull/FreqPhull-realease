@@ -46,7 +46,7 @@ let sepAudioMap = {};     // path → { audio: HTMLAudioElement, raf: number }
 // Each item: { id, url, fmt, outDir, title, thumb, status, progress, error, finishedAt, filename, fullPath, historyId }
 // status: 'waiting' | 'downloading' | 'done' | 'error'
 // Items stay in the array AFTER they finish (status='done'/'error') so the
-// visual queue can show them as completed entries — solves the "double-
+// visual queue can show them as completed entries - solves the "double-
 // download because I missed the toast" problem. Done items can be cleared
 // via the "Clear completed" button. The active processing always targets
 // the FIRST item with status='waiting' (or 'downloading' if it's a
@@ -87,7 +87,7 @@ function diagLog(msg, cls) {
   el.className = cls || 'info';
   el.textContent = new Date().toLocaleTimeString() + ' ' + msg;
   d.appendChild(el);
-  // Cap at 200 entries — long sessions used to accumulate thousands of <div>s
+  // Cap at 200 entries - long sessions used to accumulate thousands of <div>s
   // in the diagnostic pane, which both eats memory and slows scrollTop. Drop
   // the oldest entries past the cap.
   while (d.childElementCount > 200) {
@@ -124,7 +124,7 @@ function updateStatus(msg) {
 window.addEventListener('DOMContentLoaded', () => {
   diagLog('Renderer loaded', 'ok');
 
-  // Listen for log messages from main process — map to friendly status
+  // Listen for log messages from main process - map to friendly status
   api.onLog(msg => {
     diagLog('[main] ' + msg, 'info');
     updateStatus(msg);
@@ -156,7 +156,7 @@ window.addEventListener('DOMContentLoaded', () => {
   setupWaveformDrag();
   renderRef();
   applyLang(); // Apply saved language on startup
-  // Wire the spectrum hover crosshair from app load — the spectrum canvas
+  // Wire the spectrum hover crosshair from app load - the spectrum canvas
   // lives in the always-visible meter panel now (it replaced the old
   // Spectral Balance bars). Wiring here means hover works even before
   // any audio has played. The function is idempotent (guarded by a flag)
@@ -171,8 +171,8 @@ window.addEventListener('DOMContentLoaded', () => {
     urlIn.addEventListener('keydown', e => { if (e.key === 'Enter') fetchInfo(); });
     urlIn.addEventListener('focus', _maybeSuggestClipboardPaste);
   }
-  // app-ready is marked later in onBackendReady() — after the first history
-  // render completes — so the user never sees the empty-then-populated
+  // app-ready is marked later in onBackendReady() - after the first history
+  // render completes - so the user never sees the empty-then-populated
   // history list flash. Anti-FOUC is layered: body opacity stays 0 until
   // we have content to show. Hard fallback: if onBackendReady hasn't
   // marked us ready within 2.5s (e.g. slow server boot), show the UI
@@ -230,7 +230,7 @@ function onBackendReady() {
   // when the user might switch to it. Other init runs deferred so the first
   // paint isn't blocked by checks the user doesn't see yet.
   loadHistory().then(() => {
-    // First history render is done — safe to fade the UI in. Two RAFs so
+    // First history render is done - safe to fade the UI in. Two RAFs so
     // styles, fonts, and the freshly-rendered list all paint before the
     // body opacity transitions to 1.
     requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -256,7 +256,7 @@ async function checkIntegrity() {
     const r = await fetch(API + '/integrity', { signal: AbortSignal.timeout(2000) });
     const d = await r.json();
     // Only show banner on true hash mismatch ('tampered'). 'missing-files'
-    // typically means the asar.unpacked path didn't resolve — that's a
+    // typically means the asar.unpacked path didn't resolve - that's a
     // packaging quirk, not malice, and engines still run.
     if (d.status === 'tampered') {
       showTamperBanner(d, 'tampered');
@@ -293,7 +293,7 @@ function showTamperBanner(info, mode) {
 // ── Tab scroll memory ─────────────────────────────────────────────────────
 // #main is the single scroll container. Switching tabs toggles display:none
 // on panes, which loses scroll position. We remember scrollTop per tab and
-// restore it on re-entry — both for normal switches AND after async loads
+// restore it on re-entry - both for normal switches AND after async loads
 // (history, separator history) repaint the list.
 const tabScrollMemory = {};
 let lastTab = null;
@@ -302,7 +302,7 @@ let lastTab = null;
 // Maintains a linear stack of visited tabs so the user can step backward
 // and forward through their navigation. When the user navigates forward via
 // showTab() (not via the back/forward buttons), any "future" history is
-// discarded — standard browser-history semantics. Suppress flag stops the
+// discarded - standard browser-history semantics. Suppress flag stops the
 // internal forward/back from polluting the history with their own entries.
 let tabHistory = [];
 let tabHistoryIdx = -1;
@@ -312,7 +312,7 @@ function pushTabHistory(tab) {
   if (tabHistorySuppress) return;
   // Don't push the same tab twice in a row
   if (tabHistory[tabHistoryIdx] === tab) return;
-  // Discard anything after the current index — we're branching from here
+  // Discard anything after the current index - we're branching from here
   tabHistory = tabHistory.slice(0, tabHistoryIdx + 1);
   tabHistory.push(tab);
   tabHistoryIdx = tabHistory.length - 1;
@@ -357,7 +357,7 @@ function showTab(btn) {
   const main = document.getElementById('main');
   if (lastTab && main) tabScrollMemory[lastTab] = main.scrollTop;
 
-  // Note: the global mini player keeps playing across tab switches now —
+  // Note: the global mini player keeps playing across tab switches now -
   // it's not folder-scoped anymore.
 
   // Accessibility (0.2.2): aria-current marks the active nav item so
@@ -378,13 +378,13 @@ function showTab(btn) {
 
   // Mini player compact mode on Analyze tab. When the user is on Analyze,
   // the Analyzer view already exposes the time labels, seek bar, volume,
-  // and stop button — the mini player would be redundant. Collapse it to
+  // and stop button - the mini player would be redundant. Collapse it to
   // just thumb, title, transport (shuffle/prev/play/next), favorite, and
   // notepad. The CSS transition takes care of the slide-and-shrink.
   // On any other tab, mini player goes back to full width.
   const mini = document.getElementById('sp-fv-mini-player');
   if (mini) {
-    // We only run the compact treatment in mirror mode — i.e. when the
+    // We only run the compact treatment in mirror mode - i.e. when the
     // Analyzer actually owns the audio. In legacy mode (mini player owns
     // the audio) we want the full controls everywhere.
     if (newTab === 'analyze' && analyzeMirrorActive) {
@@ -413,7 +413,7 @@ function showTab(btn) {
     // a track and is now coming back), preserve it and just refresh the
     // track list. Otherwise show the dashboard.
     if (spFvFolder) {
-      // Refresh the track list silently — tags or commits may have changed
+      // Refresh the track list silently - tags or commits may have changed
       fetch(API + '/stockpile/folders/' + spFvFolder.id + '/tracks')
         .then(r => r.json())
         .then(j => {
@@ -429,7 +429,7 @@ function showTab(btn) {
     renderSettings();
     setTimeout(restoreScroll, 0);
   } else {
-    // Synchronous tabs: download, analyze, transcribe, tools — restore immediately
+    // Synchronous tabs: download, analyze, transcribe, tools - restore immediately
     setTimeout(restoreScroll, 0);
   }
 }
@@ -473,7 +473,7 @@ async function fetchInfo() {
     if (!r.ok) throw new Error(d.error);
 
     // Playlist URL: the server expanded it into per-video entries.
-    // Queue each as its own download — every track goes through the
+    // Queue each as its own download - every track goes through the
     // isolated staging pipeline individually, which is the only safe
     // way to bulk-grab (a single yt-dlp playlist run has the title-
     // collision problem baked in).
@@ -496,7 +496,7 @@ async function fetchInfo() {
     // the input doesn't appear frozen if startDownload pops a confirm
     // (e.g. duplicate-this-session dialog).
     document.getElementById('btn-fetch').disabled = false;
-    // Fire-and-forget — startDownload handles its own UI feedback.
+    // Fire-and-forget - startDownload handles its own UI feedback.
     startDownload().catch(()=>{});
     return;
   } catch(e) { dlSt('Error: ' + e.message, 'err'); }
@@ -506,7 +506,7 @@ async function fetchInfo() {
 // Queue every entry of an expanded playlist. Skips URLs already in the
 // queue (re-pasting the playlist resumes instead of duplicating), shows
 // one summary toast instead of N, and lets the existing queue runner
-// handle the rest — parallelism, retries, staging, history.
+// handle the rest - parallelism, retries, staging, history.
 function queuePlaylistEntries(pl) {
   const already = new Set(dlQueue.map(q => {
     const m = (q.url || '').match(/[?&]v=([\w-]{6,})/);
@@ -546,7 +546,7 @@ async function startDownload() {
   const url = document.getElementById('url-in').value.trim();
   if (!url) return;
 
-  // Normalize URLs for duplicate detection — strip trailing slashes,
+  // Normalize URLs for duplicate detection - strip trailing slashes,
   // params order doesn't matter for the same video ID. We're not trying
   // to be perfect, just catch the obvious "same URL pasted twice" case.
   const norm = (u) => {
@@ -572,13 +572,13 @@ async function startDownload() {
     if (existing.status === 'done') {
       // Already downloaded this session. Pulse the existing row and
       // confirm before adding a second copy. Use the friendliest
-      // possible language — "already downloaded" not "duplicate."
+      // possible language - "already downloaded" not "duplicate."
       _dlPulseItem(existing.id);
       const when = existing.finishedAt
         ? Math.max(1, Math.round((Date.now() - existing.finishedAt) / 60000))
         : null;
       const whenStr = when ? (when < 60 ? when + ' min ago' : Math.round(when/60) + 'h ago') : 'this session';
-      // Styled modal instead of native confirm() — native dialogs in
+      // Styled modal instead of native confirm() - native dialogs in
       // Electron show "freqphull" in the title bar and look very out
       // of place against the app's dark theme.
       const ok = await confirmModal({
@@ -589,13 +589,13 @@ async function startDownload() {
         cancelLabel: 'Cancel',
       });
       if (!ok) {
-        // User cancelled — focus the existing row so they can find the file
+        // User cancelled - focus the existing row so they can find the file
         showAppNotification('Already downloaded — see queue list', 'info');
         return;
       }
       // Fall through to re-download as a new item
     }
-    // status='error' just falls through and gets re-added — error retries
+    // status='error' just falls through and gets re-added - error retries
     // are expected behavior.
   }
 
@@ -617,7 +617,7 @@ async function startDownload() {
 }
 
 // Briefly pulse a queue row to draw the user's attention to it. Used when
-// they paste a URL that's already downloaded — the visual cue is much
+// they paste a URL that's already downloaded - the visual cue is much
 // stronger than a toast alone.
 function _dlPulseItem(id) {
   // Wait for next paint so the row exists if we just added it
@@ -644,7 +644,7 @@ function updateDlQueueUI() {
   // and the "Already downloaded" detection in startDownload().
   const pending = dlQueue.filter(q => q.status === 'waiting' || q.status === 'downloading').length;
 
-  // Download button label tracks pending count, never disables — clicking
+  // Download button label tracks pending count, never disables - clicking
   // it always tries to add the current URL (subject to duplicate check).
   if (btn) {
     btn.disabled = false;
@@ -656,7 +656,7 @@ function updateDlQueueUI() {
 
   if (!card || !itemsEl) return;
   if (dlQueue.length === 0) {
-    // No queue items at all — hide the panel
+    // No queue items at all - hide the panel
     card.classList.add('hidden');
     itemsEl.innerHTML = '';
     if (countEl) countEl.textContent = '0';
@@ -674,7 +674,7 @@ function updateDlQueueUI() {
 
   // Wire up the per-row action buttons. Delegated handlers via onclick on
   // each row would also work, but keeping the handlers explicit makes the
-  // wiring obvious. Cost of re-binding is negligible — at most a handful
+  // wiring obvious. Cost of re-binding is negligible - at most a handful
   // of rows in practice.
   for (const q of ordered) {
     const cancelBtn = document.getElementById('dl-qi-cancel-' + q.id);
@@ -707,7 +707,7 @@ function updateDlQueueUI() {
   }
 }
 
-// Render a single queue row. Pure HTML string, no event wiring — that
+// Render a single queue row. Pure HTML string, no event wiring - that
 // happens in updateDlQueueUI after innerHTML is set.
 function _dlRenderQueueRow(q) {
   // Status-specific SVG icon for the left dot
@@ -721,7 +721,7 @@ function _dlRenderQueueRow(q) {
     waiting:    'Waiting',
     downloading: 'Downloading… ' + Math.round(q.progress || 0) + '%',
     done:       'Downloaded',
-    error:      'Failed' + (q.error ? ' — ' + q.error.slice(0, 40) : ''),
+    error:      'Failed' + (q.error ? ' - ' + q.error.slice(0, 40) : ''),
   }[q.status];
 
   // Right-side action buttons. Different per status:
@@ -794,7 +794,7 @@ function clearCompletedDownloads() {
 // AND on every queue UI update so newly-stale items disappear promptly.
 //
 // We only auto-clear items with status='done' or 'error'. Active items
-// (waiting/downloading) are NEVER auto-cleared — they need to either
+// (waiting/downloading) are NEVER auto-cleared - they need to either
 // complete or be manually cancelled.
 let dlAutoclearHours = (() => {
   const raw = localStorage.getItem('freqphull.dlAutoclearHours');
@@ -806,7 +806,7 @@ function setDlAutoclear(hours) {
   const n = parseFloat(hours);
   dlAutoclearHours = isFinite(n) && n >= 0 ? n : 0;
   try { localStorage.setItem('freqphull.dlAutoclearHours', String(dlAutoclearHours)); } catch {}
-  // Sweep immediately when the user changes the setting — gives instant
+  // Sweep immediately when the user changes the setting - gives instant
   // feedback if there are items the new setting would clear.
   _sweepStaleDownloads();
 }
@@ -833,7 +833,7 @@ function _sweepStaleDownloads() {
 let _dlSweepInterval = null;
 
 async function processDlQueue() {
-  // Find the next item to process — first one with status 'waiting'. Done
+  // Find the next item to process - first one with status 'waiting'. Done
   // and errored items stay in the array so the UI keeps showing them.
   const idx = dlQueue.findIndex(q => q.status === 'waiting');
   if (idx < 0) {
@@ -859,8 +859,8 @@ async function processDlQueue() {
     const ev = JSON.parse(e.data);
     const p = ev.progress;
     // Monotonic guard: SSE messages can arrive slightly out of order
-    // around the download→convert transition. A bar that flickers
-    // backwards reads as an error.
+    // around the download-to-convert transition, and the bar should
+    // never move backwards.
     if (typeof item.progress === 'number' && p < item.progress) return;
     item.progress = p;
     const phaseTxt = ev.phase === 'converting'
@@ -889,7 +889,7 @@ async function processDlQueue() {
     dlSt('Saved — ' + filename, 'ok');
     currentHistId = historyId;
 
-    // Update item state in place — keep it in the queue so the user can
+    // Update item state in place - keep it in the queue so the user can
     // see it's done, open the folder, etc.
     item.status = 'done';
     item.progress = 100;
@@ -909,7 +909,7 @@ async function processDlQueue() {
       }
       await loadAudioBuffer(result.data, filename, historyId);
 
-      // Notification with BPM/key — click to jump to analyze
+      // Notification with BPM/key - click to jump to analyze
       showAppNotification('' + filename.slice(0, 30) + ' — ' + (currentBpm || '?') + ' BPM · ' + (currentKey || '?') + ' ' + (currentMode || ''), 'done', () => {
         showTab(document.querySelector('[data-tab="analyze"]'));
       });
@@ -929,14 +929,14 @@ async function processDlQueue() {
 
     // Auto-match seed artists. If any folder's seed artist appears in the
     // track title with high confidence, auto-tag the track into that folder.
-    // Best-effort — failures are silent (we don't want to noise the user
+    // Best-effort - failures are silent (we don't want to noise the user
     // about a feature they may not have set up yet).
     if (historyId && autoTagEnabled()) {
       try {
         // "Auto-send to detected folder": when the setting is on, ask the
         // server to also promote the best match to primary and move the
-        // file into place — one motion from download to organized.
-        // Gated on autoTagEnabled() above — if the user opted out of
+        // file into place - one motion from download to organized.
+        // Gated on autoTagEnabled() above - if the user opted out of
         // automatic tagging, skip the whole thing.
         const autoSend = localStorage.getItem('freqphull.autoSend') === '1';
         const am = await fetch(API + '/stockpile/tracks/' + historyId + '/auto-match', {
@@ -1026,13 +1026,13 @@ async function processDlQueue() {
 // ── App notifications (modern stack) ────────────────────────────────────
 //
 // API: showAppNotification(message, type, onClick, durationMs)
-//   message       string  — shown inside the toast (HTML safe; we set as text)
-//   type          string  — 'ok' | 'err' | 'info' | 'warn'. Legacy aliases
+//   message       string  - shown inside the toast (HTML safe; we set as text)
+//   type          string  - 'ok' | 'err' | 'info' | 'warn'. Legacy aliases
 //                           'done' → 'ok', 'pending' → 'info', 'unknown' →
 //                           'info' supported so we don't break older callers.
-//   onClick       fn      — optional. Fired if user clicks the body (not X).
+//   onClick       fn      - optional. Fired if user clicks the body (not X).
 //                           Notification dismisses either way.
-//   durationMs    number  — defaults 5500. Pass 0 to make sticky (no auto-
+//   durationMs    number  - defaults 5500. Pass 0 to make sticky (no auto-
 //                           dismiss; user must click X). Pass smaller for
 //                           low-importance ack toasts.
 //
@@ -1071,7 +1071,7 @@ const _notifTimers = new WeakMap(); // toast el → { timeout, startedAt, remain
 // Keep the toast stack out of the update banner's face. Both live in the
 // top-right corner; the stack has the higher z-index, so without this it
 // covered the banner's Install/Later buttons whenever a toast fired (the
-// manual update check fires one immediately — guaranteed collision).
+// manual update check fires one immediately - guaranteed collision).
 // Debounced window-resize broadcaster. Several pieces of UI use measured
 // dimensions (notification stack, mini player thumb position, banner
 // underlay). Listening once and firing a single rAF on changes keeps
@@ -1120,7 +1120,7 @@ function _getNotifStack() {
   _notifStack.className = 'app-notif-stack';
   document.body.appendChild(_notifStack);
   // Hover anywhere on the stack pauses every visible toast's auto-dismiss.
-  // This is the iOS/macOS gesture — gives users time to read longer notifs.
+  // This is the iOS/macOS gesture - gives users time to read longer notifs.
   _notifStack.addEventListener('mouseenter', () => {
     _notifPaused = true;
     for (const el of _notifStack.querySelectorAll('.app-notif')) {
@@ -1139,7 +1139,7 @@ function _getNotifStack() {
 
 // ── Styled confirm modal ───────────────────────────────────────────────────
 // Native browser confirm() looks like a Windows 95 dialog when triggered
-// inside an Electron renderer — it visibly says "freqphull" in the title
+// inside an Electron renderer - it visibly says "freqphull" in the title
 // bar and has chrome-looking buttons. We replace it with a styled modal
 // that matches the rest of the app. Returns a Promise<boolean> so callers
 // can `const ok = await confirmModal(...)` with the same ergonomics as
@@ -1148,7 +1148,7 @@ function _getNotifStack() {
 // Options:
 //   title       - bold header line
 //   message     - main body text (single line OR multiline w/ \n)
-//   detail      - optional secondary line (smaller, muted) — useful for
+//   detail      - optional secondary line (smaller, muted) - useful for
 //                 surfacing filenames, formats, or anything that helps
 //                 the user identify which thing they're confirming
 //   okLabel     - text on the confirm button (default "OK")
@@ -1182,13 +1182,13 @@ function confirmModal({ title, message, detail, okLabel, cancelLabel, danger } =
       document.removeEventListener('keydown', onKey);
       resolve(result);
     };
-    // Esc cancels, Enter confirms — standard dialog ergonomics
+    // Esc cancels, Enter confirms - standard dialog ergonomics
     const onKey = (e) => {
       if (e.key === 'Escape') { e.preventDefault(); close(false); }
       else if (e.key === 'Enter') { e.preventDefault(); close(true); }
     };
     document.addEventListener('keydown', onKey);
-    // Click outside the card cancels — matches the tag picker pattern
+    // Click outside the card cancels - matches the tag picker pattern
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) close(false);
     });
@@ -1509,7 +1509,7 @@ function loadAnalyzeFile(e) { if (e.target.files[0]) readForAnalysis(e.target.fi
 function readForAnalysis(file) {
   currentHistId = null;
   // In Electron, dropped/selected files have a .path property with the real disk path
-  // This is needed for Python analysis — without it we fall back to JS only
+  // This is needed for Python analysis - without it we fall back to JS only
   if (file.path) {
     setLastFilePath(file.path, file.name);
     diagLog('File path captured: ' + file.path, 'info');
@@ -1525,7 +1525,7 @@ function readForAnalysis(file) {
 async function loadAudioBuffer(arrayBuf, name, histId) {
   diagLog('loadAudioBuffer: ' + name + ' size=' + (arrayBuf?.byteLength || arrayBuf?.length || '?'), 'info');
 
-  // STOP the global mini player if running — they share output and would
+  // STOP the global mini player if running - they share output and would
   // play in parallel otherwise (the duplicate-playback bug). If the mini
   // player is currently on the same track, this is a sync transition: the
   // user is opening it in the Analyzer to look at it more deeply.
@@ -1533,7 +1533,7 @@ async function loadAudioBuffer(arrayBuf, name, histId) {
     try {
       // Capture currentTime + playback state so we can seek the analyzer to
       // the same spot AND auto-resume there. Without _handoffWasPlaying the
-      // transition feels like the audio cut out mid-listen — we want it to
+      // transition feels like the audio cut out mid-listen - we want it to
       // continue seamlessly.
       globalPlayer._handoffTime = globalPlayer.audio.currentTime || 0;
       globalPlayer._handoffWasPlaying = true;
@@ -1563,7 +1563,7 @@ async function loadAudioBuffer(arrayBuf, name, histId) {
     return;
   }
 
-  // Create/resume AudioContext — must happen after user gesture
+  // Create/resume AudioContext - must happen after user gesture
   try {
     if (!audioCtx) {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1601,7 +1601,7 @@ async function loadAudioBuffer(arrayBuf, name, histId) {
   document.getElementById('key-mode').textContent = '—';
   document.getElementById('chord-list').innerHTML = '<div style="font-size:12px;color:var(--hint)">Analyzing…</div>';
   document.getElementById('cam-grid').innerHTML = '<div style="font-size:12px;color:var(--hint)">—</div>';
-  // Zero all live meters on file load — nothing is playing yet
+  // Zero all live meters on file load - nothing is playing yet
   ['live-sub','live-bass','live-low-mid','live-mid','live-high-mid','live-high'].forEach(function(id){
     var el=document.getElementById(id); if(el){el.style.width='0%';el.style.background='#4caf50';}
   });
@@ -1641,10 +1641,12 @@ async function loadAudioBuffer(arrayBuf, name, histId) {
 
     diagLog('Got WAV, byteLength=' + wavBuf.byteLength + ', parsing PCM...', 'info');
 
-    // Parse WAV manually — avoids decodeAudioData which hangs in packaged Electron
+    // Parse WAV manually - avoids decodeAudioData which hangs in packaged Electron
     audioBuf = parseWAV(wavBuf, audioCtx);
     diagLog('PCM parse success! duration=' + audioBuf.duration.toFixed(2) + 's channels=' + audioBuf.numberOfChannels, 'ok');
-    // Decode succeeded — hide the status pill entirely. Calling dlSt('', '')
+    computeWavePeaks();
+    paintTimelineWave();   // timeline may already be on screen (cache path)
+    // Decode succeeded - hide the status pill entirely. Calling dlSt('', '')
     // would leave a visible-but-empty bar (grey dot, no text) because dlSt
     // only auto-hides on 'ok' or 'err' types. Just hide directly.
     const dlStatus = document.getElementById('dl-status');
@@ -1675,23 +1677,23 @@ async function loadAudioBuffer(arrayBuf, name, histId) {
   drawWaveform(audioBuf);
   prepareDragWav(); // Pre-encode WAV for drag-out export
   // If the mini player was playing this same track, seek the analyzer to
-  // where the mini player was — continuity instead of jumping back to 0.
+  // where the mini player was - continuity instead of jumping back to 0.
   // The handoff field is set in the entry of this function (above) when
   // we paused the global player.
   // The handoff bridge tells us TWO things:
-  //   1. Whether to seek to a specific time (_handoffTime — may be 0 for
+  //   1. Whether to seek to a specific time (_handoffTime - may be 0 for
   //      fresh "play from start" requests from history rows)
-  //   2. Whether to auto-resume playback (_handoffWasPlaying — independent
+  //   2. Whether to auto-resume playback (_handoffWasPlaying - independent
   //      of the time; you can absolutely want to autoplay starting at 0)
   // Critically: these two flags are INDEPENDENT. Reading _handoffWasPlaying
   // only when _handoffTime > 0 was the bug that made history-row play fail
-  // to autoplay — history sends time=0 and wasPlaying=true, but the old
+  // to autoplay - history sends time=0 and wasPlaying=true, but the old
   // code only saw the time=0 and skipped both.
   let _handoffWasPlaying = false;
   if (typeof globalPlayer !== 'undefined') {
     _handoffWasPlaying = globalPlayer._handoffWasPlaying === true;
     // Apply the seek time only when it's >0 and inside the buffer.
-    // Zero means "start from the beginning" — pauseOff is already 0 from
+    // Zero means "start from the beginning" - pauseOff is already 0 from
     // its default, so no action needed.
     if (globalPlayer._handoffTime != null &&
         isFinite(globalPlayer._handoffTime) &&
@@ -1708,7 +1710,7 @@ async function loadAudioBuffer(arrayBuf, name, histId) {
   document.getElementById('ttime').textContent = fmt2time(pauseOff || 0) + ' / ' + fmt2time(audioBuf.duration);
 
   // If the mini player was playing when the user opened in Analyzer, keep
-  // it playing — start Analyzer from the same timestamp. Without this, the
+  // it playing - start Analyzer from the same timestamp. Without this, the
   // handoff lands paused and feels like the audio "cut out" mid-listen.
   // We defer one frame so the waveform/UI render first, then resume.
   if (_handoffWasPlaying) {
@@ -1720,7 +1722,7 @@ async function loadAudioBuffer(arrayBuf, name, histId) {
       if (typeof globalPlayer !== 'undefined') globalPlayer._transitionLock = false;
     });
   } else {
-    // No handoff — Analyzer loaded paused. Release lock now.
+    // No handoff - Analyzer loaded paused. Release lock now.
     if (typeof globalPlayer !== 'undefined') globalPlayer._transitionLock = false;
   }
   setM('dur', Math.round(audioBuf.duration), '100%');
@@ -1747,7 +1749,7 @@ async function loadAudioBuffer(arrayBuf, name, histId) {
       <span style="font-size:14px;color:var(--muted)">Running professional analysis… (5–10 seconds)</span>
     </div>`;
 
-  // Get file path — needed for Python analysis
+  // Get file path - needed for Python analysis
   let analysisPath = lastFilePath;
   if (!analysisPath && histId) {
     const row = histData.find(h => h.id == histId);
@@ -1758,7 +1760,7 @@ async function loadAudioBuffer(arrayBuf, name, histId) {
     diagLog('Starting Python analysis engine…', 'info');
     runPythonAnalysis(analysisPath, histId);
   } else {
-    // No file path available — use JS fallback
+    // No file path available - use JS fallback
     diagLog('No path for Python analysis, using JS fallback', 'info');
     const [bpmR, keyR] = await Promise.all([detectBPM(audioBuf), Promise.resolve(detectKey(audioBuf))]);
     applyAnalysisResult({ bpm: Math.round(bpmR.bpm), key: keyR.key, mode: keyR.mode, confidence: keyR.confidence }, histId);
@@ -1772,7 +1774,7 @@ function setM(id, val, conf) { const el = document.getElementById(id); el.textCo
 function setKeyM(note, mode, conf) { document.getElementById('key').textContent = note; document.getElementById('key').className = 'm-val'; document.getElementById('key-mode').textContent = mode; document.getElementById('key-conf').style.width = conf||'80%'; }
 
 // Seek the Analyzer playback to a section start. Two transports exist:
-// the Analyzer's own loaded element(s) and the mirroring global player —
+// the Analyzer's own loaded element(s) and the mirroring global player -
 // nudge whichever is live.
 function seekAnalyzerTo(t_s) {
   let done = false;
@@ -1786,6 +1788,77 @@ function seekAnalyzerTo(t_s) {
   }
   if (!done) showAppNotification(t('bsLoadFirst'), 'info', null, 2500);
 }
+
+// ── Timeline waveform ───────────────────────────────────────────────
+// The decoded AudioBuffer is already in memory after every load, so a
+// real waveform costs one pass over the samples. Peaks are min/max per
+// column (mono mix), cached until the next decode; the painter renders
+// them into a pointer-events:none canvas layered over the section
+// colors, so clicks and section tints keep working untouched.
+let _wavePeaks = null;         // Float32Array [min0,max0,min1,max1,...]
+const WAVE_COLUMNS = 1000;
+
+function computeWavePeaks() {
+  _wavePeaks = null;
+  if (!audioBuf || !audioBuf.length) return;
+  try {
+    const ch0 = audioBuf.getChannelData(0);
+    const ch1 = audioBuf.numberOfChannels > 1 ? audioBuf.getChannelData(1) : null;
+    const n = ch0.length;
+    const per = Math.max(1, Math.floor(n / WAVE_COLUMNS));
+    const peaks = new Float32Array(WAVE_COLUMNS * 2);
+    for (let c = 0; c < WAVE_COLUMNS; c++) {
+      let mn = 1, mx = -1;
+      const start = c * per, end = Math.min(n, start + per);
+      // Stride through big blocks - every 4th sample is plenty for peaks
+      // and keeps a 10-min WAV under ~15ms.
+      const step = per > 4000 ? 4 : 1;
+      for (let i = start; i < end; i += step) {
+        const v = ch1 ? (ch0[i] + ch1[i]) * 0.5 : ch0[i];
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+      }
+      peaks[c * 2] = mn === 1 ? 0 : mn;
+      peaks[c * 2 + 1] = mx === -1 ? 0 : mx;
+    }
+    _wavePeaks = peaks;
+  } catch (e) { diagLog('wave peaks failed: ' + e.message, 'err'); }
+}
+
+function paintTimelineWave() {
+  const tl = document.querySelector('.bs-timeline');
+  if (!tl || !_wavePeaks) return;
+  let cv = tl.querySelector('canvas.bs-wave');
+  if (!cv) {
+    cv = document.createElement('canvas');
+    cv.className = 'bs-wave';
+    tl.appendChild(cv);
+  }
+  const dpr = window.devicePixelRatio || 1;
+  const w = tl.clientWidth, h = tl.clientHeight;
+  if (!w || !h) return;
+  cv.width = Math.round(w * dpr);
+  cv.height = Math.round(h * dpr);
+  const ctx = cv.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+  const mid = h / 2;
+  ctx.fillStyle = 'rgba(255,255,255,.28)';
+  const colW = w / WAVE_COLUMNS;
+  for (let c = 0; c < WAVE_COLUMNS; c++) {
+    const mn = _wavePeaks[c * 2], mx = _wavePeaks[c * 2 + 1];
+    const y0 = mid - mx * mid * 0.92;
+    const y1 = mid - mn * mid * 0.92;
+    ctx.fillRect(c * colW, y0, Math.max(colW, 0.8), Math.max(y1 - y0, 0.8));
+  }
+}
+
+// Repaint on resize (debounced) - the canvas is sized in device pixels.
+let _waveResizeT = null;
+window.addEventListener('resize', () => {
+  clearTimeout(_waveResizeT);
+  _waveResizeT = setTimeout(paintTimelineWave, 150);
+});
 
 // Click-anywhere scrubbing on the section timeline. Proportional:
 // click at 40% of the bar width = seek to 40% of the track. The per-
@@ -1836,11 +1909,31 @@ function reanalyzeDeepSections() {
 }
 
 // ── Python analysis engine ────────────────────────────────────────────────────
-function runPythonAnalysis(filePath, histId, deep) {
-  const params = new URLSearchParams({ path: filePath });
-  if (deep) params.set('deep', '1'); // beat-switch deep mode
+async function runPythonAnalysis(filePath, histId, deep) {
   _lastAnalyzedPath = filePath;      // for the manual re-detect button
   _lastAnalyzedHistId = histId || null;
+
+  // Cache first. A track that was analyzed before (interactively or by
+  // the background worker) renders in ~50ms from the DB instead of
+  // paying the full Python spawn + decode. The deep pass (forced
+  // beat-switch re-detect) always bypasses - the user explicitly asked
+  // for fresh computation.
+  if (histId && !deep) {
+    try {
+      const r = await fetch(API + '/history/' + histId + '/analysis-cache');
+      const j = await r.json();
+      if (j.cached && j.result) {
+        diagLog('Analysis loaded from cache (instant) — ' + j.result.bpm + ' BPM, ' + j.result.key + ' ' + j.result.mode, 'ok');
+        j.result._fromCache = true;   // don't re-store what we just read
+        applyAnalysisResult(j.result, histId);
+        return;
+      }
+      diagLog('No analysis cache (' + (j.reason || '?') + ') — running full analysis', 'info');
+    } catch { /* backend hiccup — fall through to full analysis */ }
+  }
+
+  const params = new URLSearchParams({ path: filePath });
+  if (deep) params.set('deep', '1'); // beat-switch deep mode
   const es = new EventSource(API + '/analyze?' + params);
 
   es.addEventListener('status', e => {
@@ -1926,7 +2019,7 @@ function applyAnalysisResult(result, histId) {
     histLbl.textContent = segs.join(' \u00b7 ');
   }
 
-  // Show top 3 key candidates if confidence is low — critical for autotune
+  // Show top 3 key candidates if confidence is low - critical for autotune
   const candidates = result.key_candidates || [];
   const keyConf = result.key_confidence || 0;
   const candEl = document.getElementById('key-candidates');
@@ -1944,7 +2037,7 @@ function applyAnalysisResult(result, histId) {
   // Beat markers on waveform
   if (result.beat_times && audioBuf) drawBeatMarkers(result.beat_times);
 
-  // ── Professional metrics panel — injected above Track Notes ──────────────
+  // ── Professional metrics panel - injected above Track Notes ──────────────
   let panel = document.getElementById('pro-metrics');
   if (!panel) {
     panel = document.createElement('div');
@@ -2017,15 +2110,16 @@ function applyAnalysisResult(result, histId) {
         ${rows}
       </div>`;
     _startPlayheadLoop(dur);
+    setTimeout(paintTimelineWave, 0);   // after bsHTML is in the DOM
   } else if (bs && !bs.detected && _lastAnalyzedPath) {
-    // Nothing found at the normal threshold — offer the forced pass.
+    // Nothing found at the normal threshold - offer the forced pass.
     const plainDur = result.duration || 0;
     const scrub = plainDur > 0 ? `
       <div class="bs-timeline" style="margin-bottom:10px" onclick="scrubTimelineSeek(event, ${plainDur})" title="${t('scrubHint')}">
         <div class="bs-tl-seg" style="width:100%;background:rgba(255,255,255,.04);border-top:2px solid var(--border2)"></div>
         <div class="bs-playhead" id="bs-playhead"></div>
       </div>` : '';
-    if (plainDur > 0) _startPlayheadLoop(plainDur);
+    if (plainDur > 0) { _startPlayheadLoop(plainDur); setTimeout(paintTimelineWave, 0); }
     bsHTML = `
       ${scrub}
       <div class="bs-card" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
@@ -2123,12 +2217,16 @@ function applyAnalysisResult(result, histId) {
   // Paint the spectrum analyzer canvas now that the DOM is in place
   paintSpectrumAnalyzer(sb);
 
-  // Save to history
+  // Save to history - including the FULL result when this came from the
+  // Python engine (result.engine set). The server caches it so the next
+  // open of this track renders instantly instead of re-analyzing.
   if (histId) {
     const notagsParam = (localStorage.getItem('freqphull.writeTags') === '0') ? '?notags=1' : '';
+    const body = { bpm: currentBpm, key_note: currentKey, key_mode: currentMode };
+    if (result && result.engine && !result._fromCache) body.full = result;
     fetch(API + '/history/' + histId + '/analysis' + notagsParam, {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ bpm: currentBpm, key_note: currentKey, key_mode: currentMode })
+      body: JSON.stringify(body)
     }).catch(() => {});
     loadHistory();
   }
@@ -2141,7 +2239,7 @@ function applyAnalysisResult(result, histId) {
 function paintSpectrumAnalyzer(sb) {
   if (!sb) return;
   // If audio is currently playing, the live version is already running on
-  // the canvas — don't overwrite it.
+  // the canvas - don't overwrite it.
   if (typeof playing !== 'undefined' && playing && _liveSpectrumRaf) return;
   const canvas = document.getElementById('pro-spectrum-canvas');
   if (!canvas) return;
@@ -2166,7 +2264,7 @@ function paintSpectrumAnalyzer(sb) {
   ctx.scale(dpr, dpr);
   drawSpectrumBackground(ctx, W, H);
 
-  // Wire hover even when no audio is playing — readout still works
+  // Wire hover even when no audio is playing - readout still works
   // (just shows freq/dB/note at cursor without an audio reading).
   _wireSpectrumHover();
 
@@ -2214,7 +2312,7 @@ function drawSpectrumBackground(ctx, W, H) {
     return ((logF - logMin) / (logMax - logMin)) * W;
   };
 
-  // Subtle octave-band shading — alternating very-dark bars between octaves.
+  // Subtle octave-band shading - alternating very-dark bars between octaves.
   // Helps the eye parse where each octave starts.
   ctx.fillStyle = 'rgba(255,255,255,0.012)';
   for (let oct = 0; oct < 11; oct++) {
@@ -2240,7 +2338,7 @@ function drawSpectrumBackground(ctx, W, H) {
     ctx.fillText(f >= 1000 ? (f/1000) + 'k' : String(f), x + 3, H - 4);
   }
 
-  // Reference note markers — A2 (110), A3 (220), A4 (440), A5 (880), A6 (1760)
+  // Reference note markers - A2 (110), A3 (220), A4 (440), A5 (880), A6 (1760)
   // Dimmer than freq labels but useful for producers. Drawn at top.
   ctx.font = '9px Inter,sans-serif';
   ctx.fillStyle = 'rgba(180, 200, 255, 0.35)';
@@ -2318,7 +2416,7 @@ function drawSpectrumCurve(ctx, screenPts, W, H) {
 
 // ── Live spectrum analyzer ──────────────────────────────────────────────────
 // Reads frequency data from analyserL (already in the Analyzer's audio
-// graph as a metering tap — see startAudio). Bins the FFT output by log
+// graph as a metering tap - see startAudio). Bins the FFT output by log
 // frequency, smooths over time, paints to the same canvas as the static
 // spectrum. Runs while audio plays, stops on pause. Peak-hold trails
 // linger after the active level drops, like a real analyzer.
@@ -2334,7 +2432,7 @@ let _liveSpectrumPaintCount = 0;   // throttles paint to 30fps while keeping sta
 let _liveSpectrumNumBins = 192;    // visual resolution — 192 for Pro-Q3-feel detail
 
 function startLiveSpectrum() {
-  // If no analyser is connected yet, bail — analysers are created in
+  // If no analyser is connected yet, bail - analysers are created in
   // startVU which fires alongside startAudio, but in some race conditions
   // (rapid play/pause/play) they may not exist for one frame.
   if (!analyserL) return;
@@ -2409,7 +2507,7 @@ function startLiveSpectrum() {
   _liveSpectrumFftData = new Float32Array(N);
   let _fftDataR = (analyserR && analyserR !== analyserL) ? new Float32Array(N) : null;
 
-  // Wire up the hover crosshair (one-time per session — guarded by data attr)
+  // Wire up the hover crosshair (one-time per session - guarded by data attr)
   _wireSpectrumHover();
 
   const tick = () => {
@@ -2421,7 +2519,7 @@ function startLiveSpectrum() {
     if (_fftDataR) analyserR.getFloatFrequencyData(_fftDataR);
 
     // Per-visual-bin extraction. Both channels are read and combined in
-    // the POWER domain — (pL + pR) / 2 — which is the mathematically
+    // the POWER domain - (pL + pR) / 2 - which is the mathematically
     // correct "energy of the track" and fixes two old errors: only the
     // left channel was analyzed (side-heavy content read up to 3dB low,
     // right-only elements were invisible), and dB-domain averaging
@@ -2450,19 +2548,19 @@ function startLiveSpectrum() {
       tmpMax[b] = db;
     }
 
-    // Temporal smoothing — three layers (state updates 60fps so motion is
+    // Temporal smoothing - three layers (state updates 60fps so motion is
     // smooth even at throttled paint):
     //   1. Instant curve: fast attack (peaks rise immediately), slow release
     //      (smooth decay). This is what the eye tracks for transients.
     //   2. Average curve: slow exponential moving avg (~2s window). Shows
-    //      the "tonal balance" of the track — flat = balanced mix.
+    //      the "tonal balance" of the track - flat = balanced mix.
     //   3. Peak hold: tracks highest point per bin, decays after ~25 frames.
     for (let b = 0; b < NUM_BINS; b++) {
       const v = tmpMax[b];
       // Instant curve
       if (v > _liveSpectrumBins[b]) _liveSpectrumBins[b] = v;
       else _liveSpectrumBins[b] = _liveSpectrumBins[b] * 0.82 + v * 0.18;
-      // Long average — EMA in the POWER domain, converted back to dB.
+      // Long average - EMA in the POWER domain, converted back to dB.
       // dB-domain EMA (the old code) is a geometric mean of power, which
       // reads several dB below the true energy average on dynamic
       // material. Power-domain is what "tonal balance" actually means.
@@ -2487,7 +2585,7 @@ function startLiveSpectrum() {
     // Throttle the canvas paint to ~30fps. The paint is the expensive part
     // (canvas clear + background grid + 3 curves with quadratic splines +
     // gradient fill + peak line + shadow blur). 30fps is visually identical
-    // to 60fps for spectrum analyzers — humans can't distinguish above ~24fps
+    // to 60fps for spectrum analyzers - humans can't distinguish above ~24fps
     // for smooth waveforms. State still updates 60fps so when paint fires,
     // the data is fresh and motion stays fluid.
     _liveSpectrumPaintCount++;
@@ -2530,7 +2628,7 @@ function stopLiveSpectrum() {
 }
 
 function paintLiveSpectrumFrame() {
-  // Skip paint entirely when the window/tab is hidden — the user can't see
+  // Skip paint entirely when the window/tab is hidden - the user can't see
   // it, and browser RAFs already throttle hard when hidden, but this saves
   // the wasted canvas work for the cases where RAF still fires.
   if (document.hidden) return;
@@ -2541,7 +2639,7 @@ function paintLiveSpectrumFrame() {
   const dpr = window.devicePixelRatio || 1;
   const W = wrap.clientWidth;
   const H = 280;
-  // Only resize the canvas if dimensions actually changed — resizing every
+  // Only resize the canvas if dimensions actually changed - resizing every
   // frame clears the buffer state and tanks performance.
   if (canvas.width !== Math.floor(W * dpr) || canvas.height !== Math.floor(H * dpr)) {
     canvas.width = Math.floor(W * dpr);
@@ -2572,7 +2670,7 @@ function paintLiveSpectrumFrame() {
   };
 
   // ── Slow-average curve (dim, in the background) ────────────────────────
-  // Shows the "tonal balance" of the track — flat = balanced mix.
+  // Shows the "tonal balance" of the track - flat = balanced mix.
   if (_liveSpectrumAvg) {
     ctx.beginPath();
     for (let b = 0; b < NUM_BINS; b++) {
@@ -2588,7 +2686,7 @@ function paintLiveSpectrumFrame() {
 
   // ── Instant filled curve with frequency-mapped color gradient ──────────
   // Pro-Q3 uses a single color, but producers benefit from quickly seeing
-  // WHERE energy lives — purple bass, green mids, yellow highs. Gradient
+  // WHERE energy lives - purple bass, green mids, yellow highs. Gradient
   // is applied as a horizontal fill across the spectrum.
   const screenPts = [];
   for (let b = 0; b < NUM_BINS; b++) {
@@ -2617,7 +2715,7 @@ function paintLiveSpectrumFrame() {
   ctx.fillStyle = grad;
   ctx.fill();
 
-  // Outline on top — single warm color so the eye reads it as one curve.
+  // Outline on top - single warm color so the eye reads it as one curve.
   // Visual glow comes from two passes (wide soft + crisp inner) instead of
   // ctx.shadowBlur, which is one of the most expensive Canvas2D ops. Two
   // strokes are ~10× cheaper than a shadowBlur stroke and look identical.
@@ -2629,7 +2727,7 @@ function paintLiveSpectrumFrame() {
     ctx.quadraticCurveTo(p1.x, p1.y, mx, my);
   }
   ctx.lineTo(last.x, last.y);
-  // Soft outer glow — wide stroke, low alpha
+  // Soft outer glow - wide stroke, low alpha
   ctx.strokeStyle = 'rgba(248,165,72,0.20)';
   ctx.lineWidth = 4;
   ctx.stroke();
@@ -2653,11 +2751,11 @@ function paintLiveSpectrumFrame() {
 
 // ── Hover crosshair + readout ──────────────────────────────────────────────
 // Mouse over the spectrum to see frequency + dB at that point, plus the
-// nearest musical note (A2, A3 etc) — helpful for producers tracking
+// nearest musical note (A2, A3 etc) - helpful for producers tracking
 // resonant peaks or fundamentals.
 
 // Paint a fresh empty grid into the spectrum canvas. Used on app init so
-// the grid + freq labels are visible even before any audio plays — without
+// the grid + freq labels are visible even before any audio plays - without
 // this the canvas looked like a black rectangle until you ran an analysis.
 function _paintEmptySpectrum() {
   const canvas = document.getElementById('pro-spectrum-canvas');
@@ -2695,7 +2793,7 @@ function _wireSpectrumHover() {
   if (!wrap || !hover) return;
   _spectrumHoverWired = true;
   // Mouse can fire hundreds of mousemove events per second. We coalesce
-  // them to one paint per animation frame — the user can't perceive faster
+  // them to one paint per animation frame - the user can't perceive faster
   // updates than that anyway. This drops hover CPU from ~5% to ~0.5% on
   // a fast mouse sweep.
   wrap.addEventListener('mousemove', (e) => {
@@ -2834,7 +2932,7 @@ function togglePlay() {
 
 function startAudio() {
   if (!audioBuf) return;
-  // Stop the global mini player if it's running — both share the audio output
+  // Stop the global mini player if it's running - both share the audio output
   // device. Letting them run in parallel was causing rapid range-request
   // ECANCELED errors and (rarely) a renderer freeze.
   if (globalPlayer.audio && !globalPlayer.audio.paused) {
@@ -2846,7 +2944,7 @@ function startAudio() {
   // called moments ago but whose onended fires async) check this token in
   // their end-handler and bail if they're not the active source. Without
   // this guard, the stale onended runs after a fresh startAudio has set
-  // playing=true and resets playing/pauseOff — making the UI show "stopped"
+  // playing=true and resets playing/pauseOff - making the UI show "stopped"
   // even though the new srcNode is happily ringing.
   _srcGen++;
   const myGen = _srcGen;
@@ -2868,12 +2966,12 @@ function startAudio() {
 
   document.getElementById('play-ico').innerHTML = '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>';
   // Flag distinguishing natural end-of-track from manual stop. Web Audio's
-  // onended fires for both — without this flag we'd hide the mirror player
+  // onended fires for both - without this flag we'd hide the mirror player
   // every time the user just hits pause, which is wrong.
   let _wasManuallyStopped = false;
   srcNode._endHandler = () => {
     // If a newer srcNode has been created since this one started, this is a
-    // stale event from the old node's .stop() — ignore it completely.
+    // stale event from the old node's .stop() - ignore it completely.
     // This is THE fix for the "seek stops the analyzer but audio keeps
     // playing" bug: stale end-handlers were resetting playing/pauseOff to
     // false/0 while the new srcNode was still ringing.
@@ -2881,7 +2979,7 @@ function startAudio() {
     const wasNaturalEnd = playing && !_wasManuallyStopped;
     if (playing) {
       playing = false; pauseOff = 0; resetProg(); setPlayIco(); stopVU();
-      // Reset the history row's play button — track is no longer playing
+      // Reset the history row's play button - track is no longer playing
       if (typeof _refreshHistoryRowPlayState === 'function') _refreshHistoryRowPlayState();
     }
 
@@ -2906,7 +3004,7 @@ function startAudio() {
         return;
       }
       // Try to advance. If we're at the end with no loop, globalPlayerNext
-      // will bail with a notification — fall through to hideAnalyzeMirror.
+      // will bail with a notification - fall through to hideAnalyzeMirror.
       const atEnd = analyzePlaylist.index >= analyzePlaylist.tracks.length - 1;
       const canAdvance = shuffleMode && analyzePlaylist.tracks.length > 1 ||
                          !atEnd ||
@@ -2930,7 +3028,7 @@ function startAudio() {
   rafLoop();
   startVU();
   // Live spectrum analyzer reuses the VU's analyserL (created inside
-  // startVU) — must be called AFTER startVU so the analyser node exists.
+  // startVU) - must be called AFTER startVU so the analyser node exists.
   startLiveSpectrum();
   // Surface the mini player in mirror mode so the user can see playback
   // info and control it from anywhere in the app.
@@ -2942,7 +3040,7 @@ function startAudio() {
 function stopAudio() {
   // Mark the stop as manual (pause) so the onended handler doesn't hide
   // the mirror player. Without this, hitting pause makes the mini player
-  // vanish — confusing and unwanted.
+  // vanish - confusing and unwanted.
   if (srcNode && srcNode._setManualStop) srcNode._setManualStop(true);
   // Clear the onended handler completely so the .stop() below can't
   // trigger any stale state mutations even if the gen-token check is bypassed.
@@ -2955,7 +3053,7 @@ function stopAudio() {
   // Disconnect immediately. Even though stop() is supposed to be sample-
   // accurate, on some Windows audio drivers there's a brief window where
   // the source keeps producing samples until the audio thread catches up.
-  // Disconnecting guarantees no audio reaches the destination — critical
+  // Disconnecting guarantees no audio reaches the destination - critical
   // when stopAudio() is followed within the same frame by startAudio() or
   // by the global player starting (the duplicate-audio scenario).
   try { srcNode?.disconnect(); } catch {}
@@ -2966,7 +3064,7 @@ function stopAudio() {
   setPlayIco();
   stopVU();
   stopLiveSpectrum();  // graceful decay then stops
-  // Update mirror state if shown — pause icon, no auto-hide so seek still works
+  // Update mirror state if shown - pause icon, no auto-hide so seek still works
   if (analyzeMirrorActive) {
     const svg = document.getElementById('sp-fv-mini-toggle-svg');
     if (svg) svg.innerHTML = '<polygon points="7,5 7,19 19,12"/>'; // play triangle (paused state)
@@ -2978,7 +3076,7 @@ function stopAudio() {
 // ── Analyze ↔ Mini Player bridge ───────────────────────────────────────────
 // When the Analyze view plays audio, we surface the global mini player in
 // "mirror mode". The mini player's UI reflects analyze state but doesn't
-// own the audio — controls (play/pause, seek, volume) are forwarded back
+// own the audio - controls (play/pause, seek, volume) are forwarded back
 // to the Analyze functions. This avoids the dual-stream conflict that
 // caused freezes while still giving the user a persistent control surface
 // across tabs.
@@ -2987,7 +3085,7 @@ let analyzeMirrorRaf = null;
 // Analyzer playlist context. When the user plays a history row, we capture
 // the visible history list as a playlist on the ANALYZER (the actual audio
 // source in mirror mode). Mini player prev/next then walks this list and
-// loads the prev/next track into the Analyzer — keeping the audio source
+// loads the prev/next track into the Analyzer - keeping the audio source
 // consistent (no global <audio> involvement).
 let analyzePlaylist = null;   // { tracks: [{id, file_path, title, ...}], index: 0 }
 
@@ -3049,7 +3147,7 @@ function showAnalyzeMirror() {
   // Play icon → pause (since we're playing)
   const svg = document.getElementById('sp-fv-mini-toggle-svg');
   if (svg) svg.innerHTML = '<rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/>'; // pause bars
-  // Prev/Next walk the Analyzer playlist (analyzePlaylist) — enabled when
+  // Prev/Next walk the Analyzer playlist (analyzePlaylist) - enabled when
   // a playlist context exists. Shuffle/Loop don't make sense in mirror mode
   // since they're really mini-player playback modes; keep them disabled.
   const prev = document.getElementById('sp-fv-mini-prev');
@@ -3068,7 +3166,7 @@ function showAnalyzeMirror() {
   // Shuffle + loop are now wired through to analyzePlaylist when in mirror
   // mode (see globalPlayerNext / pickNextTrackAfterEnd). Previously these
   // were force-disabled here because the mirror flow had no concept of
-  // playlist-end handling — that's been added, so the buttons work again.
+  // playlist-end handling - that's been added, so the buttons work again.
   for (const btn of [shuf, loop]) {
     if (btn) {
       btn.disabled = !hasPlaylist;
@@ -3078,7 +3176,7 @@ function showAnalyzeMirror() {
   // Refresh on/off classes from current state (button might have been
   // re-rendered between sessions)
   if (typeof applyModeButtonStates === 'function') applyModeButtonStates();
-  // Heart reflects the displayed track's favorite state immediately —
+  // Heart reflects the displayed track's favorite state immediately -
   // covers playing a track that was already favorited from History.
   syncMiniFavHeart();
   // Wire seek handlers in mirror mode
@@ -3086,7 +3184,7 @@ function showAnalyzeMirror() {
   spFvVolumeDragSetup();
   // Volume slider reflects analyze volume
   // Volume bar reflects Analyzer volume. Use the slider's raw 0-100 value
-  // — NOT volumeLevel, which is the post-taper linear gain (~0.01 at slider
+  // - NOT volumeLevel, which is the post-taper linear gain (~0.01 at slider
   // 50, ~1.0 at slider 100). Reading volumeLevel into a percent would show
   // a wrong position for any slider value below 100. The slider's value
   // attribute is the source of truth for what the user actually selected.
@@ -3110,7 +3208,7 @@ function showAnalyzeMirror() {
       const dur = audioBuf.duration;
       // Time labels: every 6th frame (~10fps), and only when the displayed
       // string actually changed. fmtSec rounds to seconds so most frames
-      // produce the same text — no point hitting textContent every time.
+      // produce the same text - no point hitting textContent every time.
       if ((mirrorFrame++ % 6) === 0) {
         if (mCur) {
           const s = fmtSec(cur);
@@ -3121,7 +3219,7 @@ function showAnalyzeMirror() {
           if (s !== lastDurText) { mDur.textContent = s; lastDurText = s; }
         }
       }
-      // Seek bar — keep at 60fps so the playhead motion is smooth.
+      // Seek bar - keep at 60fps so the playhead motion is smooth.
       if (!spFvSeekDragging && mFill && dur > 0) {
         const pct = (cur / dur) * 100;
         mFill.style.width = pct + '%';
@@ -3180,7 +3278,7 @@ function setVolume(val) {
   if (gainNode) gainNode.gain.value = volumeLevel;
   // Move the analyzer slider DOM too. When this function is called
   // programmatically (e.g. from the mini-player or toggle-mute), the
-  // slider thumb wouldn't move otherwise — only direct user-drags on the
+  // slider thumb wouldn't move otherwise - only direct user-drags on the
   // slider would update it. Setting .value here keeps both controls in
   // visual lockstep regardless of who triggered the change.
   const sliderEl = document.getElementById('vol-slider');
@@ -3198,7 +3296,7 @@ function setVolume(val) {
   // Also reflect the change in the mini-player's volume bar so the two
   // stay synchronized. Without this, dragging the Analyzer slider left
   // the mini-player bar showing a stale level. We only update visuals
-  // here — the actual audio gain is already applied via `gainNode` above,
+  // here - the actual audio gain is already applied via `gainNode` above,
   // and in mirror mode the mini player and Analyzer share the same audio
   // path so there's no second gain to set.
   _syncMiniPlayerVolumeBar(val);
@@ -3256,7 +3354,7 @@ function updateVolIcon(val) {
 // - PPM bars: true peak per AnalyserNode frame (fast, accurate)
 // - LUFS: proper 400ms integrated block accumulation with EBU R128 gating
 // - RMS: 300ms sliding window
-// - True Peak: max sample seen (display-only — Python gives exact 4x oversampled value)
+// - True Peak: max sample seen (display-only - Python gives exact 4x oversampled value)
 // - DR: proper peak/RMS crest factor
 
 // K-weighting biquad state (run in JS for real-time LUFS approximation)
@@ -3333,7 +3431,7 @@ function startVU() {
     analyserR.smoothingTimeConstant = 0;
     splitter.connect(analyserL, 0);
     splitter.connect(analyserR, 1);
-    // Connect analysers to destination — required for Web Audio graph to process them
+    // Connect analysers to destination - required for Web Audio graph to process them
     // Use a silent gain (0) merger so we don't double the audio output
     const merger = audioCtx.createChannelMerger(2);
     const silentGain = audioCtx.createGain();
@@ -3366,7 +3464,7 @@ function startVU() {
   let frameCount = 0;
 
   // Ring buffer for RMS over the last ~300ms of frames. Old impl used a
-  // regular array with .shift() (O(n)) + .reduce() (O(n)) every frame —
+  // regular array with .shift() (O(n)) + .reduce() (O(n)) every frame -
   // dominant cost in the VU loop on long playback. Ring buffer + running
   // sum is O(1) per frame.
   const RMS_FRAMES = Math.round(0.3 * fps);
@@ -3375,7 +3473,7 @@ function startVU() {
   let rmsRingFilled = 0;
   let rmsRunningSum = 0;
 
-  // Cache the DOM elements the stats panel writes to — getElementById in a
+  // Cache the DOM elements the stats panel writes to - getElementById in a
   // hot loop is cheap individually but adds up at 60fps × 8 stats × N seconds.
   const elStatLufs  = document.getElementById('stat-lufs');
   const elStatShort = document.getElementById('stat-short');
@@ -3383,7 +3481,7 @@ function startVU() {
   const elStatPeak  = document.getElementById('stat-peak');
   const elStatDr    = document.getElementById('stat-dr');
   const elStatRms   = document.getElementById('stat-rms');
-  // Per-channel meter elements + value labels — written every frame for L/R
+  // Per-channel meter elements + value labels - written every frame for L/R
   // PPM display. updateMeter() used to getElementById these on each call;
   // now we pass the refs in and it just writes styles.
   const elMeterL = document.getElementById('meter-l');
@@ -3422,7 +3520,7 @@ function startVU() {
     const dbL = peakL > 0 ? Math.max(-60, 20*Math.log10(peakL)) : -60;
     const dbR = peakR > 0 ? Math.max(-60, 20*Math.log10(peakR)) : -60;
 
-    // ── RMS (300ms sliding window) — O(1) ring buffer ─────────────────────
+    // ── RMS (300ms sliding window) - O(1) ring buffer ─────────────────────
     // Subtract the oldest frame from the running sum, overwrite with the new
     // frame, add to running sum. No allocations, no array shifts, no reduce.
     const framePower = (sumSqL + sumSqR) / 2 / N;
@@ -3496,7 +3594,7 @@ function startVU() {
       if (peakHoldR < -60) peakHoldR = -60;
     }
 
-    // ── Update meters — inline writes against cached element refs ────────
+    // ── Update meters - inline writes against cached element refs ────────
     // Skips two function calls per frame and ~6 getElementById lookups.
     // The cached refs are captured once when vuStart runs.
     {
@@ -3525,7 +3623,7 @@ function startVU() {
     if (elValL) elValL.textContent = dbL <= -59.9 ? '-∞' : dbL.toFixed(1)+' dB';
     if (elValR) elValR.textContent = dbR <= -59.9 ? '-∞' : dbR.toFixed(1)+' dB';
 
-    // Stats — update every 6 frames (~10fps) for readability. Text changes
+    // Stats - update every 6 frames (~10fps) for readability. Text changes
     // faster than ~10fps are imperceptible anyway, and toFixed/string concat
     // is non-trivial when done 6 times per frame at 60fps.
     if (frameCount % 6 === 0) {
@@ -3554,7 +3652,7 @@ function updateMeter(ch, db, peakDb) {
   const pct   = Math.max(0, Math.min(100, (db + 60) / 60 * 100));
   const pkPct = Math.max(0, Math.min(100, (peakDb + 60) / 60 * 100));
   fill.style.width = pct + '%';
-  // Colour changes based on actual level — not a baked gradient
+  // Colour changes based on actual level - not a baked gradient
   fill.style.background = db > -3 ? '#e84040' : db > -12 ? '#f59e0b' : '#4caf50';
   peak.style.left       = pkPct + '%';
   peak.style.background = peakDb > -3 ? '#e84040' : peakDb > -12 ? '#f59e0b' : '#ffffff';
@@ -3587,7 +3685,7 @@ function resetProg() { document.getElementById('seek-fill').style.width='0%'; do
 //   • when currentHistId changes (new track loaded into Analyzer)
 //   • when globalPlayer.track changes (legacy mode)
 //
-// Idempotent and cheap — runs through ~500 rows in <1ms on the test machine.
+// Idempotent and cheap - runs through ~500 rows in <1ms on the test machine.
 const PLAY_SVG  = '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="7,5 7,19 19,12"/></svg>';
 const PAUSE_SVG = '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>';
 function _refreshHistoryRowPlayState() {
@@ -3633,7 +3731,7 @@ function rafLoop() {
   const pct = Math.min(elapsed/audioBuf.duration,1)*100;
   if (_rafSeekFill) _rafSeekFill.style.width = pct+'%';
   if (_rafPlaybar)  _rafPlaybar.style.left   = pct+'%';
-  // Time text only changes once per second — guard textContent writes by it.
+  // Time text only changes once per second - guard textContent writes by it.
   const sec = elapsed | 0;
   const dur = audioBuf.duration | 0;
   if (_rafTtime && (sec !== _rafLastSec || dur !== _rafLastDur)) {
@@ -3651,7 +3749,7 @@ function seekEl(e, el) {
   const newPos = pct * audioBuf.duration;
 
   if (playing) {
-    // NULL onended FIRST — prevents old node firing after new node starts
+    // NULL onended FIRST - prevents old node firing after new node starts
     if (srcNode) { srcNode.onended = null; try { srcNode.stop(); } catch {} srcNode = null; }
     playing = false;
     cancelAnimationFrame(rafId);
@@ -3935,7 +4033,7 @@ async function startTranscribeFile(file) {
   document.getElementById('transcript-out').value = '';
   _startTranscribeTimer();
 
-  // Rotate status every 15s — Whisper has no live progress events.
+  // Rotate status every 15s - Whisper has no live progress events.
   const phases = [
     (t('transPhaseLoading')   || 'Loading {model} model into memory...').replace('{model}', model),
     (t('transPhaseListening') || 'Listening for speech segments...'),
@@ -4065,7 +4163,7 @@ function subscribeToServerEvents() {
       renderHistory();
     });
 
-    // Background analysis worker (0.2.2) — surface its state in a small
+    // Background analysis worker (0.2.2) - surface its state in a small
     // pill near the History header so users see "Analyzing 5 tracks…"
     // happening live as bulk downloads catch up. The pill auto-hides
     // when the worker goes idle.
@@ -4080,7 +4178,7 @@ function subscribeToServerEvents() {
       // flip _eventsSubscribed back because the same es object retries.
     };
   } catch (e) {
-    // SSE unavailable — fall back to no live updates. Not fatal; the
+    // SSE unavailable - fall back to no live updates. Not fatal; the
     // user can still refresh manually by revisiting the tab.
     _eventsSubscribed = false;
   }
@@ -4104,7 +4202,7 @@ function toggleSelectMode() {
   const batch = document.getElementById('hist-batch');
   const stockRow = document.getElementById('hist-stockpile-row');
   if (selectMode) {
-    // Update only the text label — leave the SVG icon intact. Using
+    // Update only the text label - leave the SVG icon intact. Using
     // btn.textContent would nuke the inline <svg>.
     if (lbl) lbl.textContent = 'Cancel';
     btn.classList.add('pri');
@@ -4197,7 +4295,7 @@ function toggleWatchFolder(checked) {
   showAppNotification(checked ? t('watchOnNotif') : t('watchOffNotif'), 'info', null, 3000);
 }
 
-// yt-dlp self-update — settings row actions
+// yt-dlp self-update - settings row actions
 async function refreshYtdlpStatus() {
   const el = document.getElementById('ytdlp-status-desc');
   if (!el) return;
@@ -4246,7 +4344,7 @@ async function bulkMoveSelected(mode) {
   // If a user does "Select All" and then "Send to Stockpile," we should
   // ONLY move items that aren't already in stockpile. Previously every
   // selected track was sent, including ones whose file path was already
-  // inside the stockpile folder — those silently no-op'd on the backend
+  // inside the stockpile folder - those silently no-op'd on the backend
   // and the user saw "X/X moved" without knowing some weren't really
   // sent. Cleaner UX: detect those locally first so the count and
   // progress reflect actual work being done.
@@ -4261,7 +4359,7 @@ async function bulkMoveSelected(mode) {
   for (const id of allIds) {
     const track = histData.find(h => h.id === id);
     if (!track || !track.file_path) {
-      // No file path on this track — can't move it. Include it anyway
+      // No file path on this track - can't move it. Include it anyway
       // so the backend returns a clear error.
       idsToMove.push(id);
       continue;
@@ -4274,7 +4372,7 @@ async function bulkMoveSelected(mode) {
     }
   }
 
-  // If everything was already at destination, tell the user and stop —
+  // If everything was already at destination, tell the user and stop -
   // no need to show a progress bar that does nothing.
   if (idsToMove.length === 0) {
     showAppNotification(
@@ -4334,7 +4432,7 @@ async function bulkMoveSelected(mode) {
       if (d.ok) {
         // Backend now returns status='moved' or 'already_at_destination'
         // so we count them separately. Pre-15n backends just returned
-        // {ok:true} without status — treat those as moved for compat.
+        // {ok:true} without status - treat those as moved for compat.
         if (d.status === 'already_at_destination') {
           alreadyAtDest++;
         } else {
@@ -4356,7 +4454,7 @@ async function bulkMoveSelected(mode) {
     fill.style.width = pct + '%';
   }
 
-  // Done — honest summary of what actually happened
+  // Done - honest summary of what actually happened
   fill.style.width = '100%';
   // Build the status line. We want it to reflect REALITY: what was
   // actually moved vs what was skipped or already there or errored.
@@ -4371,9 +4469,9 @@ async function bulkMoveSelected(mode) {
   if (errors.length) {
     showAppNotification('' + errors.length + ' file(s) could not be moved', 'err');
   } else if (moved > 0) {
-    // Honest success toast — distinguishes "all done" from "some already
+    // Honest success toast - distinguishes "all done" from "some already
     // there." Old version only showed errors, so the user got NO feedback
-    // when moves succeeded — they'd just see the progress bar disappear.
+    // when moves succeeded - they'd just see the progress bar disappear.
     const skipNote = totalSkipped ? ' · ' + totalSkipped + ' already there' : '';
     showAppNotification('' + moved + ' moved to ' + folderName + skipNote, 'ok');
   } else if (totalSkipped > 0) {
@@ -4591,7 +4689,7 @@ async function bulkReanalyzeSelected() {
   if (prog) prog.classList.remove('hidden');
   if (status) status.textContent = 'Analyzing…';
 
-  // Sequential — analyze.py uses CPU and parallelizing would just thrash.
+  // Sequential - analyze.py uses CPU and parallelizing would just thrash.
   for (let i = 0; i < ids.length; i++) {
     const id = ids[i];
     const track = histData.find(h => h.id === id);
@@ -4599,14 +4697,14 @@ async function bulkReanalyzeSelected() {
     if (curEl) curEl.textContent = track.title || '(untitled)';
 
     try {
-      // /analyze is SSE — we just need the final "done" event with bpm/key
+      // /analyze is SSE - we just need the final "done" event with bpm/key
       const result = await new Promise((resolve, reject) => {
         const es = new EventSource(API + '/analyze?path=' + encodeURIComponent(track.file_path));
         let final = null;
         es.addEventListener('result', e => { try { final = JSON.parse(e.data); } catch {} });
         es.addEventListener('done', () => { es.close(); resolve(final); });
         es.addEventListener('error', e => { es.close(); reject(new Error('SSE error')); });
-        // Hard timeout — 60s per track is generous
+        // Hard timeout - 60s per track is generous
         setTimeout(() => { try { es.close(); } catch {}; reject(new Error('timeout')); }, 60000);
       });
 
@@ -4871,7 +4969,7 @@ function renderDuplicateFinder(data) {
   const missing = totalTracks - hashed;
 
   // If most of the library is unhashed, offer to backfill before showing
-  // anything else — the duplicate detection is useless without coverage.
+  // anything else - the duplicate detection is useless without coverage.
   const backfillBanner = (missing > 5) ? `
     <div style="margin-bottom:14px;padding:12px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--white)">
       <div style="margin-bottom:6px"><strong>${t('dupBackfillHead').replace('{n}', missing)}</strong></div>
@@ -4887,7 +4985,7 @@ function renderDuplicateFinder(data) {
   }
 
   // NOTE: the inner map's track parameter used to be named `t`, which
-  // shadowed the t() translation function — any t('key') inside the row
+  // shadowed the t() translation function - any t('key') inside the row
   // template would have crashed. Renamed to `tr` and translations are
   // captured before the loop.
   const keepLbl = t('dupKeep');
@@ -4967,14 +5065,14 @@ async function deleteDuplicateGroup(gi) {
 }
 
 // ── Library doctor ──────────────────────────────────────────────────
-// Finds rows that share near-identical audio under DIFFERENT titles —
+// Finds rows that share near-identical audio under DIFFERENT titles -
 // the damage signature of the pre-0.4.3 bulk-download bug. For each
 // suspect, offers a one-click "Re-download" that grabs the correct
 // audio from the row's own youtube_url into the same folder, then
 // removes the corrupted row.
 // ── Smart folders ───────────────────────────────────────────────────
 // Rules-based folders that auto-populate: "138-150 BPM, minor keys"
-// stays current forever — new downloads that match just appear. Rules
+// stays current forever - new downloads that match just appear. Rules
 // are evaluated live server-side; nothing to maintain.
 function openCreateSmartFolderDialog() {
   let modal = document.getElementById('smart-folder-modal');
@@ -5087,7 +5185,7 @@ async function openLibraryDoctor() {
 
 // Re-download a suspect row's real audio using its own youtube_url,
 // into the same folder its (corrupt) file lives in. On success, the
-// corrupt row is removed — the fresh download created its own row.
+// corrupt row is removed - the fresh download created its own row.
 async function doctorRedownload(suspectId, btn) {
   const row = (histData || []).find(h => h.id === suspectId);
   let info = row;
@@ -5276,9 +5374,9 @@ async function startFingerprintBackfill() {
 // ── Background analysis pill (0.2.2) ──────────────────────────────
 // Drawn into #bg-analyze-pill (added to index.html, lives next to the
 // History header). Three visible states:
-//   • hidden — worker idle, queue empty (the normal state)
-//   • active — "Analyzing 5 tracks… (current title)"
-//   • done   — brief "All caught up" flash, auto-hides after 4s
+//   • hidden - worker idle, queue empty (the normal state)
+//   • active - "Analyzing 5 tracks… (current title)"
+//   • done   - brief "All caught up" flash, auto-hides after 4s
 function renderBgAnalyzePill(d) {
   let pill = document.getElementById('bg-analyze-pill');
   if (!pill) {
@@ -5300,7 +5398,7 @@ function renderBgAnalyzePill(d) {
       t('bgAnalyzing') + ' ' + d.remaining + ' · ' + escapeHtml(title);
   } else if (d.state === 'idle') {
     if (d.remaining > 0) {
-      // Worker stopped but rows still pending — usually all hit retry cap
+      // Worker stopped but rows still pending - usually all hit retry cap
       pill.classList.add('active');
       pill.classList.remove('hidden');
       pill.innerHTML = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01"/></svg> ' + d.remaining + ' ' + t('bgPending');
@@ -5347,7 +5445,7 @@ function requestRenderHistory(){
 // synchronous render can still call _renderHistoryImpl() directly.
 
 
-// v0.4.1: Auto-paste suggestion. On URL-input focus, peek at the
+// Auto-paste suggestion. On URL-input focus, peek at the
 // clipboard. If it contains a YouTube URL and the input is empty, show
 // a small inline tooltip offering a one-click paste. Privacy-safe: we
 // never read clipboard without an active user gesture (focus counts).
@@ -5396,7 +5494,7 @@ async function _maybeSuggestClipboardPaste() {
   setTimeout(() => hint.remove(), 8000);
 }
 
-// v0.4.1: History search helpers — show/hide clear button + result counter.
+// History search helpers - show/hide clear button + result counter.
 let _histSearchDebounce = null;
 function onHistSearchInput() {
   const el = document.getElementById('hist-search');
@@ -5430,7 +5528,7 @@ function renderHistory() { requestRenderHistory(); }
 
 // real Hood Knights gothic HK monogram as the fallback thumb.
 // PNG composite (256x256, dark tile + desaturated brand mark at 45%
-// alpha) encoded as base64 so it lives entirely in the JS bundle —
+// alpha) encoded as base64 so it lives entirely in the JS bundle -
 // no network request, no file path resolution, decodes once and the
 // browser caches the bitmap for every row that uses it. ~10 KB total.
 const HK_FALLBACK_THUMB = 'data:image/png;base64,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';
@@ -5454,7 +5552,7 @@ window._thumbFail = function(img) {
 
 
 
-// v0.4.1: Right-click context menu on history rows. Standard set of
+// Right-click context menu on history rows. Standard set of
 // quick actions so users don't have to hunt through tabs. Built fresh
 // per right-click and removed on any outside interaction.
 let _historyCtxMenuEl = null;
@@ -5498,7 +5596,7 @@ function showHistoryContextMenu(ev, id) {
   document.body.appendChild(m);
   _historyCtxMenuEl = m;
 
-  // Position — clamp to viewport.
+  // Position - clamp to viewport.
   const pad = 4;
   const r = m.getBoundingClientRect();
   let x = ev.clientX, y = ev.clientY;
@@ -5563,7 +5661,7 @@ function sendHistoryToTranscribe(id) {
 
 function _renderHistoryImpl(){
   const q=(document.getElementById('hist-search')?.value||'').toLowerCase(),list=document.getElementById('hist-list');
-  // Category filter — drives a virtual subset of histData based on the
+  // Category filter - drives a virtual subset of histData based on the
   // user's selection in the "Filter by folder" dropdown. Supported values:
   //   all              → no filter (default)
   //   untagged         → only tracks with no folder tags
@@ -5572,7 +5670,7 @@ function _renderHistoryImpl(){
   // The tags map is cached on window.histTagsByHistoryId (populated by
   // hydrateAllHistoryTags). If the cache isn't ready yet, "untagged" and
   // folder filters fall through to "all" gracefully rather than showing
-  // nothing — better UX than blanking the list on a transient state.
+  // nothing - better UX than blanking the list on a transient state.
   const filterVal = document.getElementById('hist-filter')?.value || 'all';
   const tagsByHist = window.histTagsByHistoryId || {};
   const matchesFilter = (h) => {
@@ -5595,13 +5693,13 @@ function _renderHistoryImpl(){
   _updateHistSearchCount(rows.length, histData.length);
   // Pulse detection: rows whose id is newer than the highest id we'd
   // rendered before. On the first render we just set the baseline (no
-  // pulse — otherwise every row would flash on app open). After that,
+  // pulse - otherwise every row would flash on app open). After that,
   // any id above the baseline gets a brief green pulse so downloads
   // that arrived from the extension / another window are noticeable.
   const prevSeenHistId = window._lastSeenHistId || 0;
   const maxHistId = histData.reduce((m, h) => Math.max(m, h.id || 0), 0);
   if (!rows.length) {
-    // Tailor the empty message to what the user is doing — searching,
+    // Tailor the empty message to what the user is doing - searching,
     // filtering, or just has no history yet. Easier to diagnose.
     let empty = 'No history yet — download a track to get started';
     if (q && filterVal !== 'all') empty = 'No matching tracks in this filter';
@@ -5623,9 +5721,9 @@ function _renderHistoryImpl(){
     const rowClass = 'hist-row' + (checked ? ' selected' : '');
     // Click behavior on the row:
     //   • Select mode: single-click toggles selection (touch-friendly, no
-    //     ambiguity with the play button — play btn is hidden in select mode)
+    //     ambiguity with the play button - play btn is hidden in select mode)
     //   • Normal mode: DOUBLE-CLICK opens the track in Analyze. Single
-    //     click does nothing on purpose — users frequently miss the small
+    //     click does nothing on purpose - users frequently miss the small
     //     play button by a few pixels and would land on the row outline,
     //     accidentally opening Analyze and interrupting whatever they
     //     were doing. Requiring a double-click eliminates the misfire
@@ -5633,10 +5731,10 @@ function _renderHistoryImpl(){
     const onclick = selectMode
       ? `onclick="toggleRowSelect(${h.id})"`
       : `ondblclick="loadFromHistory(${h.id})"`;
-    // Play button — routes through global player so the mini player surfaces
+    // Play button - routes through global player so the mini player surfaces
     // and prev/next walks the visible history list.
     //
-    // "Is this row's track currently playing?" — must check BOTH modes:
+    // "Is this row's track currently playing?" - must check BOTH modes:
     //   • Legacy mode → globalPlayer.track.id matches
     //   • Mirror mode → currentHistId matches AND Web Audio `playing` is true
     // Without the mirror check, history rows never light up because the
@@ -5644,7 +5742,7 @@ function _renderHistoryImpl(){
     // globalPlayer.track null.
     // distinguish ACTIVE (track loaded) from PLAYING (audio
     // actually advancing). Mirror mode used to drop the row highlight
-    // as soon as the user paused — visually you "lost your place" the
+    // as soon as the user paused - visually you "lost your place" the
     // moment you hit stop. Now the row stays lit while the track is
     // loaded (matches legacy mode's pre-existing behavior); the icon
     // alone flips between pause-bars and play-triangle.
@@ -5660,18 +5758,18 @@ function _renderHistoryImpl(){
       ? '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>'
       : '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="7,5 7,19 19,12"/></svg>';
     const playBtn = selectMode ? '' : `<button class="hist-play ${isActive ? 'active' : ''} ${isPlaying ? 'playing' : ''}" tabindex="-1" onmousedown="this.blur()" onclick="event.stopPropagation();playFromHistory(${h.id});this.blur()" title="Preview">${playIcon}</button>`;
-    // Favorite heart — filled when favorited. Click toggles. The toggle
+    // Favorite heart - filled when favorited. Click toggles. The toggle
     // optimistically updates h.is_favorite then sends to the server so
     // there's no perceptible delay.
     const heartIcon = h.is_favorite
       ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="#ff5555" stroke="#ff5555" stroke-width="1.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>'
       : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
     const favBtn = selectMode ? '' : `<button class="hist-fav ${h.is_favorite ? 'on' : ''}" tabindex="-1" onmousedown="this.blur()" onclick="event.stopPropagation();toggleFavorite(${h.id});this.blur()" title="${t('histFavorite') || 'Favorite'}">${heartIcon}</button>`;
-    // Tag strip — populated lazily after render to avoid blocking the list draw.
+    // Tag strip - populated lazily after render to avoid blocking the list draw.
     const tagStrip = `<div class="hist-tag-row" id="hist-tags-${h.id}" onclick="event.stopPropagation()"></div>`;
     // Title attribute gives users a hover hint about the double-click
     // requirement so the behavior isn't a mystery on first try. Only set
-    // in normal mode — in selectMode it'd contradict the actual single-click
+    // in normal mode - in selectMode it'd contradict the actual single-click
     // selection behavior.
     const rowTitle = selectMode ? '' : ' title="Double-click to open in Analyze"';
     // Pulse rows that arrived since the last render (and only when this
@@ -5730,7 +5828,7 @@ function _renderHistoryImpl(){
       if (existingEl) {
         // Row exists. Only rewrite if its fingerprint changed.
         if (existingEl.dataset.fp !== fp) {
-          // Patch contents in place — <img> nodes get swapped only when
+          // Patch contents in place - <img> nodes get swapped only when
           // src actually differs (browsers preserve the decoded image
           // for same-src). This is what kills the flash.
           const tmp = document.createElement('div');
@@ -5755,14 +5853,14 @@ function _renderHistoryImpl(){
             existingEl.dataset.fp = fp;
           }
         }
-        // Ensure ordering — only touch DOM if position changed
+        // Ensure ordering - only touch DOM if position changed
         if (prevEl ? existingEl.previousElementSibling !== prevEl
                    : list.firstElementChild !== existingEl) {
           if (prevEl) prevEl.after(existingEl); else list.prepend(existingEl);
         }
         prevEl = existingEl;
       } else {
-        // New row — insert with pulse animation
+        // New row - insert with pulse animation
         const tmp = document.createElement('div');
         tmp.innerHTML = buildHistoryRowHTML(h);
         const fresh = tmp.firstElementChild;
@@ -5788,7 +5886,7 @@ function _renderHistoryImpl(){
   hydrateAllHistoryTags(rows);
 }
 
-// Bulk version of hydrateHistoryTags — fetches all tags once and populates
+// Bulk version of hydrateHistoryTags - fetches all tags once and populates
 // all visible rows synchronously.
 async function hydrateAllHistoryTags(rows) {
   try {
@@ -5797,7 +5895,7 @@ async function hydrateAllHistoryTags(rows) {
     const byId = j.tags_by_history || {};
     // Cache so renderHistory() can filter by folder without an extra
     // round-trip. We rebuild this whenever history loads (and whenever a
-    // tag changes via refreshUIForAction('tag-changed', ...) — see below
+    // tag changes via refreshUIForAction('tag-changed', ...) - see below
     // where we invalidate it).
     window.histTagsByHistoryId = byId;
     populateHistoryFilterDropdown();
@@ -5815,7 +5913,7 @@ async function hydrateAllHistoryTags(rows) {
       cell.innerHTML = chips + addBtn;
     }
   } catch (e) {
-    // Silent fallback — tags just won't show, but the history list works fine
+    // Silent fallback - tags just won't show, but the history list works fine
   }
 }
 
@@ -5871,7 +5969,7 @@ function playFromHistory(historyId) {
   analyzePlaylist = { tracks: visible, index: idx >= 0 ? idx : 0 };
 
   // FAST PATH: this track is already loaded in the Analyzer. Just toggle
-  // playback — don't reload the file (that would reset pauseOff to 0 and
+  // playback - don't reload the file (that would reset pauseOff to 0 and
   // kill the running position). Three cases:
   //   - Already playing → pause it
   //   - Paused mid-track → resume from pauseOff
@@ -5962,7 +6060,7 @@ async function ensureFavoritesFolder() {
   // Check in-memory cache first (fast path)
   let folder = spFolders.find(f => f.name === 'Favorites');
   if (folder) return folder.id;
-  // Cache may be stale — refresh from server before deciding to create.
+  // Cache may be stale - refresh from server before deciding to create.
   // This avoids the UNIQUE constraint error from racing creations across
   // tabs or stale cache states.
   try {
@@ -5976,7 +6074,7 @@ async function ensureFavoritesFolder() {
       }
     }
   } catch {}
-  // Still not there — try to create
+  // Still not there - try to create
   try {
     const r = await fetch(API + '/stockpile/folders', {
       method: 'POST',
@@ -5989,7 +6087,7 @@ async function ensureFavoritesFolder() {
       spFolders.push({ id: j.id, name: 'Favorites', color: '#ff5555', icon: '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>', track_count: 0 });
       return j.id;
     }
-    // POST failed (likely UNIQUE constraint from a parallel race) — refresh
+    // POST failed (likely UNIQUE constraint from a parallel race) - refresh
     // and look again.
     const r2 = await fetch(API + '/stockpile/folders');
     if (r2.ok) {
@@ -6015,7 +6113,7 @@ function updateFavoriteUI(historyId, on) {
     row.innerHTML = on ? heartIconFilled : heartIconEmpty;
   }
   // Mini player heart. IMPORTANT: resolve the displayed track through
-  // getMiniPlayerTrack() — NOT globalPlayer.track directly. In mirror mode
+  // getMiniPlayerTrack() - NOT globalPlayer.track directly. In mirror mode
   // (track playing inside the Analyzer, mini player just reflecting it)
   // globalPlayer.track is null and the old check silently skipped the
   // update: the tag applied but the heart never turned red.
@@ -6027,7 +6125,7 @@ function updateFavoriteUI(historyId, on) {
   }
 }
 
-// Sync the mini player heart from current data — called whenever a track
+// Sync the mini player heart from current data - called whenever a track
 // is (re)loaded into the mini player, in EITHER mode. Without this, playing
 // an already-favorited track showed an empty heart until you clicked it.
 function syncMiniFavHeart() {
@@ -6047,7 +6145,7 @@ async function hydrateHistoryTags(historyId) {
     const cell = document.getElementById('hist-tags-' + historyId);
     const tags = j.tags || [];
     // Keep the global tag cache in sync so the History filter dropdown
-    // sees this change immediately — otherwise users would have to
+    // sees this change immediately - otherwise users would have to
     // reload history to filter on a freshly-tagged track.
     if (!window.histTagsByHistoryId) window.histTagsByHistoryId = {};
     window.histTagsByHistoryId[historyId] = tags;
@@ -6086,7 +6184,7 @@ async function untagFromHistory(historyId, folderId) {
 // Different state changes touch different UI surfaces. Rather than every
 // action manually re-rendering 4 different lists, this centralizes the
 // "what to refresh after which action" logic. Each branch knows the minimal
-// set of refetches/repaints to do — keeps the UI consistent without a
+// set of refetches/repaints to do - keeps the UI consistent without a
 // full page reload that would feel laggy.
 async function refreshUIForAction(action, payload) {
   payload = payload || {};
@@ -6104,7 +6202,7 @@ async function refreshUIForAction(action, payload) {
         }
         break;
       case 'track-downloaded':
-        // New track in history — refetch and rerender. Preserve scroll.
+        // New track in history - refetch and rerender. Preserve scroll.
         if (typeof loadHistory === 'function') {
           const main = document.getElementById('main');
           const savedScroll = main ? main.scrollTop : 0;
@@ -6126,7 +6224,7 @@ async function refreshUIForAction(action, payload) {
       case 'folder-deleted':
       case 'folder-renamed':
         if (typeof loadStockpile === 'function') loadStockpile();
-        // History rows show tag chips that reference folder names — refresh them
+        // History rows show tag chips that reference folder names - refresh them
         if (typeof renderHistory === 'function' && histData && histData.length) {
           renderHistory();
         }
@@ -6153,7 +6251,7 @@ async function loadFromHistory(id, opts){
 
   // FAST PATH: this track is ALREADY loaded in the Analyzer (currentHistId
   // matches AND we have an audioBuf). Don't re-fetch the file, don't reset
-  // playback — just switch to the Analyze tab. This preserves the live
+  // playback - just switch to the Analyze tab. This preserves the live
   // playback position perfectly when the user clicks a row to "open" a
   // track they're already previewing via the mini player. Re-loading here
   // was the desync bug: it reset pauseOff to 0 and restarted audio.
@@ -6224,7 +6322,7 @@ async function loadFromHistory(id, opts){
   }catch(e){showAppNotification('Could not load: '+e.message.slice(0,50),'err');}
 }
 async function deleteHistory(id){
-  // Styled confirm — danger style because removing from history is
+  // Styled confirm - danger style because removing from history is
   // destructive (the row is gone from DB; file on disk is preserved).
   const ok = await confirmModal({
     title: 'Remove from history?',
@@ -6324,7 +6422,7 @@ async function prepareDragWav() {
   }
 }
 
-// ── Pure JS WAV parser — reads PCM directly, avoids decodeAudioData which hangs in packaged Electron
+// ── Pure JS WAV parser - reads PCM directly, avoids decodeAudioData which hangs in packaged Electron
 function parseWAV(arrayBuffer, ctx) {
   const view = new DataView(arrayBuffer);
   const riff = String.fromCharCode(view.getUint8(0),view.getUint8(1),view.getUint8(2),view.getUint8(3));
@@ -6335,7 +6433,7 @@ function parseWAV(arrayBuffer, ctx) {
     const size = view.getUint32(pos+4, true);
     if (id === 'fmt ') {
       // audioFormat: 1 = PCM, 3 = IEEE float, 0xFFFE = extensible.
-      // Without this, IEEE float WAVs read as INT32 produce garbage —
+      // Without this, IEEE float WAVs read as INT32 produce garbage -
       // playback would sound like white noise, peaks would show as a
       // uniform amplitude rectangle. Parse it so we route to the right
       // sample-reading branch below.
@@ -6381,7 +6479,7 @@ function fmtSec(s){if(!s)return'—';return s>60?Math.floor(s/60)+'m '+Math.floo
 
 // ── Stem separator ────────────────────────────────────────────────────────────
 
-// Called from the Analyze tab — ships the currently loaded track to the separator
+// Called from the Analyze tab - ships the currently loaded track to the separator
 // ── Separator queue engine ──────────────────────────────────────────
 function enqueueSeparation(filePath, name) {
   if (!filePath) return false;
@@ -6399,7 +6497,7 @@ function processSepQueue() {
   sepQueueRunning = true;
   next.status = 'running';
   renderSepQueue();
-  // Load it as the active source and reuse the normal start path — all
+  // Load it as the active source and reuse the normal start path - all
   // quality toggles apply exactly as if the user clicked Separate.
   sepSourcePath = next.path;
   sepSourceName = next.name;
@@ -6513,7 +6611,7 @@ function setDirectMode(checked) {
   // active so the user understands the pipeline shape they picked.
   const stage1 = document.getElementById('stage-pill-1');
   if (stage1) stage1.style.opacity = sepDirectMode ? '0.35' : '';
-  // Direct mode + split lead are mutually exclusive — lead-vocal split needs
+  // Direct mode + split lead are mutually exclusive - lead-vocal split needs
   // a clean vocals.wav from Stage 1 to operate on. Disable the toggle.
   const splitLeadBox = document.getElementById('stems-split-lead');
   if (splitLeadBox) {
@@ -6528,7 +6626,7 @@ function setDirectMode(checked) {
 function setSplitLead(checked) {
   // Lead-vocal split adds Stage 1.5: separating the Stage 1 vocals.wav into
   // lead and backing+samples sub-stems. Stored as a window-scoped flag so
-  // startSeparation can read it. Persisted? No — user re-picks per track.
+  // startSeparation can read it. Persisted? No - user re-picks per track.
   window.sepSplitLead = !!checked;
 }
 
@@ -6543,7 +6641,7 @@ function setEnsemble(checked) {
 }
 
 // Vocal ensemble: runs a second vocal isolation model alongside the primary
-// and averages outputs. Different from Stage 2 ensemble — targets vocal
+// and averages outputs. Different from Stage 2 ensemble - targets vocal
 // quality specifically. Persisted because vocal-focused workflows (sampling,
 // remixing, karaoke production) typically want it on by default.
 function setVocalEnsemble(checked) {
@@ -6566,7 +6664,7 @@ function setDereverb(checked) {
 //   - sepFullnessDuckingOverride:    null or float 0..8 (dB)
 //   - sepFullnessTransientOverride:  null or float 0..8 (dB)
 // All persist in localStorage so power users don't reset their workflow
-// every time. Override values of null mean "use preset default" — the
+// every time. Override values of null mean "use preset default" - the
 // server only forwards them to python when they're set.
 window.sepFullnessPreset = 'balanced';
 window.sepFullnessSustainOverride = null;
@@ -6616,7 +6714,7 @@ function setFullnessPreset(name) {
   }
   // Move the sliders to match the new preset's default values. This
   // ALSO clears any per-pass overrides because picking a preset is the
-  // primary user intent — if they wanted overrides, they'd touch the
+  // primary user intent - if they wanted overrides, they'd touch the
   // sliders after.
   const vals = _FULLNESS_PRESET_VALUES[name];
   if (vals) {
@@ -6670,17 +6768,17 @@ function onFullnessTransientChange(val) {
 }
 
 function resetFullnessOverrides() {
-  // "Reset overrides" doesn't change the preset — just clears any per-pass
+  // "Reset overrides" doesn't change the preset - just clears any per-pass
   // overrides and moves the sliders back to the preset's defaults.
   const name = window.sepFullnessPreset || 'balanced';
   setFullnessPreset(name);
 }
 
-// "Auto-send to detected folder" — when enabled, the post-download
+// "Auto-send to detected folder" - when enabled, the post-download
 // auto-match call passes commit:true so the server promotes the best
 // match to primary AND physically moves the file into the folder.
 // "Auto-tag downloads": when OFF, the post-download auto-match call is
-// skipped entirely — tracks arrive in History untagged regardless of
+// skipped entirely - tracks arrive in History untagged regardless of
 // whether their title matches a folder's artist seeds. Users who want
 // pure manual organization opt out here. Defaults ON (the original
 // behavior since 0.0.8). Stored as freqphull.autoTag === '0' for OFF,
@@ -6692,7 +6790,7 @@ function toggleAutoTag(checked) {
     showAppNotification(checked ? t('autoTagOnNotif') : t('autoTagOffNotif'), 'info', null, 3000);
   }
 }
-// Single source of truth — every gate uses this helper.
+// Single source of truth - every gate uses this helper.
 function autoTagEnabled() { return localStorage.getItem('freqphull.autoTag') !== '0'; }
 
 function toggleAutoSend(checked) {
@@ -6734,7 +6832,7 @@ async function toggleHardwareAcceleration(checked) {
 }
 
 // ── Extension repo link + how-to modal (v0.2.8) ────────────────────
-// corrected — the extension folder doesn't live on /tree/main.
+// corrected - the extension folder doesn't live on /tree/main.
 // It's published as a .zip on the Releases page (per the repo README).
 // "Open repo" goes to the Releases page so users can download the latest
 // version immediately.
@@ -6858,7 +6956,7 @@ function toggleCpuOnly(checked) {
 }
 
 // Toggle whether to stamp BPM/key into audio file metadata after analysis.
-// Default ON — the value '0' means OFF; any other value (including absent)
+// Default ON - the value '0' means OFF; any other value (including absent)
 // means ON. This way new users get the feature by default and only people
 // who explicitly disabled it stay disabled.
 function toggleWriteTags(checked) {
@@ -6899,7 +6997,7 @@ async function startSeparation() {
       return;
     }
   } catch (e) {
-    // Backend probably hiccup — just proceed and let SSE surface any error
+    // Backend probably hiccup - just proceed and let SSE surface any error
     diagLog('engines preflight failed: ' + e.message, 'err');
   }
 
@@ -6957,7 +7055,7 @@ async function startSeparation() {
     } catch {}
   });
 
-  // Warnings — non-fatal messages from the python pipeline. Currently used
+  // Warnings - non-fatal messages from the python pipeline. Currently used
   // for CPU+ultra slow-warning and for lead-vocal-split failure fallback.
   // Render as toast notifications; pipeline keeps running underneath.
   sepEvtSource.addEventListener('warning', e => {
@@ -6984,7 +7082,7 @@ async function startSeparation() {
       setStemProgress(100, t('sepStageDone'), '');
       renderStemPlayers(m);
       document.getElementById('stems-results').classList.remove('hidden');
-      // Smooth UX — fade out the progress card after a beat
+      // Smooth UX - fade out the progress card after a beat
       setTimeout(() => document.getElementById('stems-progress').classList.add('hidden'), 600);
       const procTime = m.processing_time ? ' · ' + m.processing_time + 's' : '';
       showAppNotification('' + t('sepReady') + procTime, 'done');
@@ -7003,7 +7101,7 @@ async function startSeparation() {
       if (m.message) msg = m.message;
       if (m.hint) hint = m.hint;
     } catch {
-      // EventSource native error — connection dropped
+      // EventSource native error - connection dropped
     }
     document.getElementById('stems-progress').classList.add('hidden');
     showAppNotification('' + msg.slice(0, 60), 'err');
@@ -7021,10 +7119,10 @@ function stepToLabel(step, msg) {
   const en = {
     loading_engine:              'Initializing ensemble…',
     loading_vocal_model:         'Loading Stage 1 model…',
-    separating_vocals:           'Isolating vocals — Stage 1 of 2',
+    separating_vocals:           'Isolating vocals - Stage 1 of 2',
     vocal_split_complete:        'Vocals isolated',
     loading_vocal_ensemble_model:'Loading vocal ensemble model…',
-    separating_vocal_ensemble:   'Vocal ensemble pass — second model for vocal isolation…',
+    separating_vocal_ensemble:   'Vocal ensemble pass - second model for vocal isolation…',
     vocal_ensemble_complete:     'Vocal ensemble pass',
     loading_lead_vocal_model:    'Loading lead-vocal model…',
     separating_lead_vocal:       'Splitting lead from backing vocals…',
@@ -7033,11 +7131,11 @@ function stepToLabel(step, msg) {
     dereverberating:             'Removing reverb from vocal stem…',
     dereverb_complete:           'Vocal de-reverbed',
     loading_instrumental_model:  'Loading Stage 2 model…',
-    separating_instrumental:     'Splitting instrumental — Stage 2 of 2',
+    separating_instrumental:     'Splitting instrumental - Stage 2 of 2',
     instrumental_split_complete: 'Instrumental split',
-    separating_instrumental_ensemble: 'Running ensemble pass — second model for harmonic stems…',
+    separating_instrumental_ensemble: 'Running ensemble pass - second model for harmonic stems…',
     instrumental_split_ensemble_complete: 'Ensemble pass',
-    recovering_stems:            'AI stem recovery — routing misclassified content…',
+    recovering_stems:            'AI stem recovery - routing misclassified content…',
     restoring_fullness:          'Restoring note tails and ducking compensation…',
     cleaning_back_vocal:         'Removing hat bleed from back vocal stem…',
     post_processing:             'Cleaning bleeds in harmonic stems…',
@@ -7054,10 +7152,10 @@ function stepToLabel(step, msg) {
   const fr = {
     loading_engine:              'Initialisation de l\'ensemble…',
     loading_vocal_model:         'Chargement du modèle Étape 1…',
-    separating_vocals:           'Isolation des voix — Étape 1 sur 2',
+    separating_vocals:           'Isolation des voix - Étape 1 sur 2',
     vocal_split_complete:        'Voix isolées',
     loading_vocal_ensemble_model:'Chargement du modèle ensemble vocal…',
-    separating_vocal_ensemble:   'Pass d\'ensemble vocal — second modèle pour l\'isolation…',
+    separating_vocal_ensemble:   'Pass d\'ensemble vocal - second modèle pour l\'isolation…',
     vocal_ensemble_complete:     'Pass d\'ensemble vocal',
     loading_lead_vocal_model:    'Chargement du modèle voix lead…',
     separating_lead_vocal:       'Séparation lead / chœurs…',
@@ -7066,11 +7164,11 @@ function stepToLabel(step, msg) {
     dereverberating:             'Suppression de la réverb sur la voix…',
     dereverb_complete:           'Voix dé-réverbée',
     loading_instrumental_model:  'Chargement du modèle Étape 2…',
-    separating_instrumental:     'Séparation instrumentale — Étape 2 sur 2',
+    separating_instrumental:     'Séparation instrumentale - Étape 2 sur 2',
     instrumental_split_complete: 'Instrumental séparé',
-    separating_instrumental_ensemble: 'Pass d\'ensemble — second modèle pour stems harmoniques…',
+    separating_instrumental_ensemble: 'Pass d\'ensemble - second modèle pour stems harmoniques…',
     instrumental_split_ensemble_complete: 'Pass d\'ensemble',
-    recovering_stems:            'Récupération IA — routage du contenu mal classé…',
+    recovering_stems:            'Récupération IA - routage du contenu mal classé…',
     restoring_fullness:          'Restauration des queues de notes et compensation du ducking…',
     cleaning_back_vocal:         'Nettoyage des charlestons dans le stem back vocal…',
     post_processing:             'Nettoyage des fuites inter-stems…',
@@ -7103,7 +7201,7 @@ function formatStepDetail(m) {
 // Real model identities are intentionally not referenced anywhere in this file.
 function formatModelName(name) {
   if (!name) return '';
-  // Codename map — kept tight on purpose. New codenames should map here.
+  // Codename map - kept tight on purpose. New codenames should map here.
   const known = {
     'Phull-V2': 'Phull-V2 (vocal)',
     'Phull-I4': 'Phull-I4 (4-stem)',
@@ -7112,7 +7210,7 @@ function formatModelName(name) {
   };
   if (known[name]) return known[name];
   // Anything else: display as-is. Old separator-history rows from a previous
-  // build may carry legacy real-name strings — those are stripped on read
+  // build may carry legacy real-name strings - those are stripped on read
   // by stripLegacyModelName() below before reaching the UI.
   return stripLegacyModelName(name);
 }
@@ -7179,7 +7277,7 @@ function renderStemPlayers(result) {
   destroyMixer();
   sepAudioMap = {};
 
-  // Show the ensemble badge — proves the quality on screen
+  // Show the ensemble badge - proves the quality on screen
   const badge = document.getElementById('ensemble-badge');
   const badgeTxt = document.getElementById('ensemble-badge-text');
   if (badge && badgeTxt) {
@@ -7198,7 +7296,7 @@ function renderStemPlayers(result) {
   // points back into the stable sepAudioMap keys.
   stemOrder = stems.map((_, i) => i);
 
-  // Master transport — appears above the stem rows.
+  // Master transport - appears above the stem rows.
   // Per-stem rows have: drag-handle, color, name, mute, solo, volume, pan, seek bar, drag-to-DAW
   list.innerHTML = `
     <div class="mixer-master">
@@ -7266,7 +7364,7 @@ function renderStemPlayers(result) {
   // Master chain: stems → masterGain → masterAnalyser → destination.
   // masterGain is the single fader that controls the whole mix without
   // touching individual stem volumes. masterAnalyser feeds the VU meter
-  // — it's a tap (not in series), so meter failure can't break audio.
+  // - it's a tap (not in series), so meter failure can't break audio.
   mixerMasterGain = mixerCtx.createGain();
   mixerMasterGain.gain.value = mixerMasterVolume;
   mixerMasterAnalyser = mixerCtx.createAnalyser();
@@ -7296,7 +7394,7 @@ function renderStemPlayers(result) {
   });
 
   // Stage 2: serial fetch + decode loop. We do these one at a time so the
-  // renderer never has >1 outstanding HTTP request for a stem file — that
+  // renderer never has >1 outstanding HTTP request for a stem file - that
   // was the crash trigger on Windows (multiple parallel fetches against
   // the same server racing against MediaElementSource binding). One file
   // at a time is plenty fast (~50ms per stem at local server speed).
@@ -7306,7 +7404,7 @@ function renderStemPlayers(result) {
     diagLog('Stem load failed: ' + err.message, 'err');
   });
 
-  // Start the master tick — keeps the master seek bar + timestamp in sync
+  // Start the master tick - keeps the master seek bar + timestamp in sync
   // with the longest playing stem. RequestAnimationFrame at ~60fps; cheap.
   startMixerTick();
 }
@@ -7340,7 +7438,7 @@ async function loadStemsSerially(stems) {
   setupStemRowResizeObservers();
 }
 
-// Master waveform — all stems overlaid in their respective colors, at low
+// Master waveform - all stems overlaid in their respective colors, at low
 // alpha so they layer transparently. The user sees the overall song shape
 // at a glance: vocal phrases pop in red over the bass+drum bed, dropouts
 // are visible as flat sections, etc. Like a DAW overview lane.
@@ -7361,7 +7459,7 @@ function paintMasterWaveform() {
   const stemColors = {
     vocals: '#e84040', drums: '#f59e0b', bass: '#a855f7',
     other: '#6b7280', guitar: '#4caf50', piano: '#3b82f6',
-    // Lead/backing/sample vocal sub-stems — vocals-family palette, distinct shades
+    // Lead/backing/sample vocal sub-stems - vocals-family palette, distinct shades
     lead_vocal: '#ff5566', back_vocal: '#b03030', sample_vocal: '#7a2424',
   };
 
@@ -7375,12 +7473,12 @@ function paintMasterWaveform() {
   // Paint each stem in its color at low alpha. Layer order matters: paint
   // bigger/quieter stuff first (bass, drums) and vocals/leads last so they
   // pop on top. The vocal sub-stems (lead_vocal, back_vocal, sample_vocal)
-  // share the top layer with vocals — order within that group is arbitrary.
+  // share the top layer with vocals - order within that group is arbitrary.
   const layerOrder = ['bass', 'drums', 'other', 'piano', 'guitar', 'vocals',
                       'back_vocal', 'sample_vocal', 'lead_vocal'];
 
   // Pre-compute master peaks at full pixel width using each stem's already-
-  // decoded buffer. We don't recompute every paint — once is enough.
+  // decoded buffer. We don't recompute every paint - once is enough.
   const entries = Object.entries(sepAudioMap)
     .map(([k, e]) => [parseInt(k, 10), e])
     .filter(([, e]) => e && (e.miniPeaks || e.peaks));
@@ -7407,7 +7505,7 @@ function paintMasterWaveform() {
   for (const [idx, e] of entries) {
     const cls = stemClassOf(idx);
     const color = stemColors[cls] || '#888';
-    // Peaks at master width — resample from mini-peaks cache
+    // Peaks at master width - resample from mini-peaks cache
     let peaks = e.masterPeaks;
     if (!peaks || peaks.length !== numPx) {
       const src = e.miniPeaks || e.peaks;
@@ -7416,7 +7514,7 @@ function paintMasterWaveform() {
       e.masterPeaks = peaks;
     }
     ctx.fillStyle = color;
-    // Layer alpha — vocals brightest, other quieter
+    // Layer alpha - vocals brightest, other quieter
     ctx.globalAlpha = (cls === 'vocals') ? 0.75 :
                       (cls === 'drums' || cls === 'bass') ? 0.50 : 0.35;
     for (let px = 0; px < numPx; px++) {
@@ -7432,7 +7530,7 @@ async function loadOneStem(i, s) {
   const url = API + '/file?path=' + encodeURIComponent(s.path);
   diagLog('Stem ' + i + ' (' + s.name + '): fetching ' + url, 'info');
 
-  // Single fetch — get the full WAV bytes.
+  // Single fetch - get the full WAV bytes.
   const resp = await fetchWithTimeout(url, 30000);
   if (!resp.ok) throw new Error('HTTP ' + resp.status);
   const arrayBuf = await resp.arrayBuffer();
@@ -7444,13 +7542,13 @@ async function loadOneStem(i, s) {
   // Cache the raw WAV bytes on the entry. The mini-DAW needs Web Audio
   // AudioBuffers (not MediaElementSource bindings) to schedule
   // BufferSourceNodes against the timeline; we lazily build those when the
-  // DAW opens via parseWAV. Holding ArrayBuffers here is OK — typical stem
+  // DAW opens via parseWAV. Holding ArrayBuffers here is OK - typical stem
   // is 25-40 MB, 6 stems × 35 MB ≈ 210 MB, well within Electron renderer
   // memory budget on Windows. Cleared in teardownStemsView when the user
   // closes the results screen.
   entry.rawWavBytes = arrayBuf;
 
-  // Compute peaks DIRECTLY from the WAV bytes — NEVER call decodeAudioData.
+  // Compute peaks DIRECTLY from the WAV bytes - NEVER call decodeAudioData.
   // We've confirmed decodeAudioData hangs the renderer thread on Windows
   // for stem-sized WAVs (28MB+). The hang is at the native Chromium level
   // so JS timeouts can't rescue from it. The Analyze tab already worked
@@ -7463,16 +7561,16 @@ async function loadOneStem(i, s) {
     entry.peaks = peaksFromWAV(arrayBuf, targetPx);
     // Also store enough to recompute peaks at different pixel widths later
     // (e.g., on resize). We keep a compact "mini-peaks" array at 8192px
-    // and resample from that — far cheaper than re-scanning the WAV.
+    // and resample from that - far cheaper than re-scanning the WAV.
     entry.miniPeaks = (targetPx >= 8192) ? entry.peaks : peaksFromWAV(arrayBuf, 8192);
     diagLog('Stem ' + i + ': peaks computed (' + entry.peaks.length + ' px)', 'info');
   } catch (err) {
     diagLog('Stem ' + i + ': peak computation failed: ' + err.message, 'err');
-    // Audio still plays — just no waveform display
+    // Audio still plays - just no waveform display
     entry.peaks = null;
   }
 
-  // Audio element from Blob URL — same bytes, no network re-fetch.
+  // Audio element from Blob URL - same bytes, no network re-fetch.
   // Audio elements use their own internal decoder for playback (not the
   // Web Audio decodeAudioData path), so this works reliably even when
   // decodeAudioData would hang.
@@ -7523,7 +7621,7 @@ function peaksFromWAV(arrayBuffer, numPx) {
     const size = view.getUint32(pos+4, true);
     if (id === 'fmt ') {
       // fmt chunk layout (little-endian, byte offsets from pos):
-      //   8  audioFormat (uint16) — 1=PCM, 3=IEEE float, 0xFFFE=extensible
+      //   8  audioFormat (uint16) - 1=PCM, 3=IEEE float, 0xFFFE=extensible
       //  10  numChannels (uint16)
       //  22  bitsPerSample (uint16)
       audioFormat   = view.getUint16(pos+8,  true);
@@ -7543,7 +7641,7 @@ function peaksFromWAV(arrayBuffer, numPx) {
   const framesPerPx = Math.max(1, Math.floor(totalFrames / numPx));
   const peaks = new Float32Array(numPx);
 
-  // IEEE 754 float WAV branch — emitted by some downstream tools / our own
+  // IEEE 754 float WAV branch - emitted by some downstream tools / our own
   // soundfile.write(... subtype="FLOAT") in earlier versions. If we read
   // these bytes as INT32 the peak values come out roughly uniform across
   // the whole track (float representation clusters in similar magnitudes
@@ -7568,7 +7666,7 @@ function peaksFromWAV(arrayBuffer, numPx) {
     return peaks;
   }
 
-  // Tight inner loops keyed by bit depth — branch out of the hot path
+  // Tight inner loops keyed by bit depth - branch out of the hot path
   if (bitsPerSample === 16) {
     for (let px = 0; px < numPx; px++) {
       let maxAbs = 0;
@@ -7651,7 +7749,7 @@ function resamplePeaks(srcPeaks, numPx) {
   return out;
 }
 
-// fetch() with a timeout — never wait forever
+// fetch() with a timeout - never wait forever
 function fetchWithTimeout(url, ms) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ms);
@@ -7697,7 +7795,7 @@ function getWaveformPixelWidth() {
 // `analysisMap` is the per_stem_analysis dict from the done payload: maps
 // stem name → { bpm, key, mode, camelot } (or { error } / { silent }).
 // When provided, we render BPM + key chips next to the stem name. The
-// chips degrade gracefully — missing values just don't render.
+// chips degrade gracefully - missing values just don't render.
 function renderStemRow(s, i, analysisMap) {
   // Map stem `name` to a CSS color class. The 6 standard stems map 1:1.
   // The vocal sub-stems (lead_vocal, back_vocal, sample_vocal) are also
@@ -7710,7 +7808,7 @@ function renderStemRow(s, i, analysisMap) {
   const colorClass = s.name in KNOWN_COLOR_CLASSES ? s.name : 'other';
 
   // Build the BPM/key chips. We only show them when the analyzer actually
-  // produced a reading — silent or errored stems get nothing so the row
+  // produced a reading - silent or errored stems get nothing so the row
   // doesn't show noise. Drums are the most reliable for BPM, harmonic
   // stems (piano/bass/other/guitar) are most reliable for key. Vocals
   // are often weak on both since pitched vocals confuse key detection
@@ -7821,7 +7919,7 @@ function destroyMixer() {
         e.audio.load();  // forces the HTTP stream to close
       } catch {}
     }
-    // Revoke blob URL — each stem creates one in loadOneStem() and we'd
+    // Revoke blob URL - each stem creates one in loadOneStem() and we'd
     // leak ~10-50MB per project open otherwise (one Blob URL holds a
     // reference to the full ArrayBuffer).
     if (e && e.blobUrl) {
@@ -7836,7 +7934,7 @@ function destroyMixer() {
     if (e) { e.buffer = null; e.peaks = null; e.masterPeaks = null; e.miniPeaks = null; e._lastPaintedPx = null; e.rawWavBytes = null; }
   }
 
-  // Clear waveform peak cache — different project = different files, the
+  // Clear waveform peak cache - different project = different files, the
   // cached peaks would be wrong. Also close the dedicated decode context
   // so we don't pile up AudioContexts (Chromium caps at 6).
   if (typeof stemPeaksCache !== 'undefined') {
@@ -7932,14 +8030,14 @@ function mixerResetLevels() {
   if (mv) mv.value = 1.0;
 }
 
-// Master volume — sets the single fader that controls the whole mix.
+// Master volume - sets the single fader that controls the whole mix.
 // Range [0, 1.4] (slight gain headroom for quiet stems collections; the
 // peak meter shows clipping if you push too far). Setting via setTargetAtTime
 // avoids zipper noise during fast drags.
 function setMasterVolume(val) {
   mixerMasterVolume = Math.max(0, Math.min(1.4, parseFloat(val) || 0));
   if (mixerMasterGain) {
-    // Smooth ramp over 30ms — fast enough to feel instant, slow enough
+    // Smooth ramp over 30ms - fast enough to feel instant, slow enough
     // to suppress zipper noise on rapid slider drags.
     try {
       mixerMasterGain.gain.setTargetAtTime(
@@ -7972,7 +8070,7 @@ function startVUMeter() {
     const buf = new Float32Array(mixerMasterAnalyser.fftSize);
     mixerMasterAnalyser.getFloatTimeDomainData(buf);
     // Compute peak level (max abs sample in the buffer). One analyser
-    // serves both channels in this graph — we can't easily split L/R
+    // serves both channels in this graph - we can't easily split L/R
     // without rewiring, so we paint both bars the same level (true stereo
     // metering would require ChannelSplitter + two analysers; not worth
     // the complexity for a level indicator).
@@ -7987,7 +8085,7 @@ function startVUMeter() {
       const db = 20 * Math.log10(peak);
       level = Math.max(0, Math.min(1, (db + 36) / 36));
     }
-    // Smooth release — fast attack, slower release (DAW-like)
+    // Smooth release - fast attack, slower release (DAW-like)
     _vuLevels.l = (level > _vuLevels.l) ? level : _vuLevels.l * 0.85 + level * 0.15;
     _vuLevels.r = _vuLevels.l;
     const fillL = document.getElementById('mixer-master-vu-l');
@@ -8154,7 +8252,7 @@ function paintBpmGrid() {
     const x = (t / dur) * w;
     ctx.fillRect(x, 0, 1, h);
   }
-  // Bar lines — slightly brighter
+  // Bar lines - slightly brighter
   ctx.fillStyle = 'rgba(255,255,255,0.18)';
   for (let bar = 0; bar <= totalBars; bar++) {
     const t = bar * barSec;
@@ -8162,7 +8260,7 @@ function paintBpmGrid() {
     const x = (t / dur) * w;
     ctx.fillRect(x, 0, 1, h);
   }
-  // Bar numbers — only at every 4 bars to avoid clutter
+  // Bar numbers - only at every 4 bars to avoid clutter
   ctx.font = '9px Inter,sans-serif';
   ctx.fillStyle = 'rgba(255,255,255,0.35)';
   for (let bar = 0; bar <= totalBars; bar += 4) {
@@ -8303,7 +8401,7 @@ function stemRowDrop(ev, targetIdx) {
     dragSrcIdx = null;
     return;
   }
-  // Reorder the DOM only — sepAudioMap keys stay stable.
+  // Reorder the DOM only - sepAudioMap keys stay stable.
   const list = document.getElementById('mixer-stems');
   const src = document.getElementById('stem-row-' + dragSrcIdx);
   const tgt = document.getElementById('stem-row-' + targetIdx);
@@ -8348,7 +8446,7 @@ function startMixerTick() {
 
 function updateMixerTime() {
   // Find the first stem that has an audio element loaded. During async
-  // load, sepAudioMap[0] may exist but its .audio is still null — pick
+  // load, sepAudioMap[0] may exist but its .audio is still null - pick
   // the first entry that's actually ready.
   let ref = null;
   for (const k of Object.keys(sepAudioMap)) {
@@ -8359,7 +8457,7 @@ function updateMixerTime() {
   const cur = ref.audio.currentTime || 0;
   const dur = ref.audio.duration || 0;
 
-  // Loop region enforcement — if user set a loop and playback crossed the
+  // Loop region enforcement - if user set a loop and playback crossed the
   // end, seek all stems back to the start. Done before UI update so the
   // playhead doesn't visibly briefly jump past the end before snapping back.
   if (mixerLoopStart != null && mixerLoopEnd != null &&
@@ -8392,7 +8490,7 @@ function updateMixerTime() {
 
 // ── Stem waveform painting ──────────────────────────────────────────────────
 // Peaks are pre-computed in loadOneStem() using the SAME ArrayBuffer that
-// becomes the audio source — no second fetch. paintStemWaveform() is now
+// becomes the audio source - no second fetch. paintStemWaveform() is now
 // a pure UI function: it reads entry.peaks (already a Float32Array of pixel
 // amplitudes) and draws to the canvas. Re-paint on resize recomputes peaks
 // at the new pixel width from the already-decoded AudioBuffer (also in
@@ -8448,13 +8546,13 @@ function paintStemWaveform(idx) {
   }
 
   // Paint: filled bipolar waveform (centered around mid-line, mirrored).
-  // This is the DAW look — solid color, full vertical fill at each pixel.
+  // This is the DAW look - solid color, full vertical fill at each pixel.
   ctx.clearRect(0, 0, w, h);
   // Faint background centerline shows under quiet sections
   ctx.fillStyle = 'rgba(255,255,255,0.03)';
   ctx.fillRect(0, h/2 - 0.5, w, 1);
 
-  // Bipolar bars — top half + bottom half, mirrored
+  // Bipolar bars - top half + bottom half, mirrored
   ctx.fillStyle = color;
   ctx.globalAlpha = 0.92;
   const mid = h / 2;
@@ -8507,7 +8605,7 @@ function paintStemPlaceholder(idx, label) {
 }
 
 // Repaint waveforms on resize. Uses ResizeObserver per stem-row when
-// available — fires when each row actually settles to a new width rather
+// available - fires when each row actually settles to a new width rather
 // than during the transient frames of the resize gesture (where the row
 // can briefly read clientWidth=0 and produce empty peaks).
 //
@@ -8537,7 +8635,7 @@ function setupStemRowResizeObservers() {
         const entry = sepAudioMap[idx];
         if (!entry) continue;
         // Only repaint if width is non-zero AND has actually changed by
-        // more than a pixel — skip the noisy mid-flow updates.
+        // more than a pixel - skip the noisy mid-flow updates.
         const newW = Math.floor(wrap.clientWidth);
         if (newW < 2) continue;
         const dpr = window.devicePixelRatio || 1;
@@ -8575,7 +8673,7 @@ window.addEventListener('resize', () => {
     paintBpmGrid();
     updateLoopRegionUI();
     // ResizeObserver handles per-stem rows; fallback for environments
-    // where it doesn't exist (very old Electron — unlikely):
+    // where it doesn't exist (very old Electron - unlikely):
     if (typeof ResizeObserver === 'undefined') {
       for (const k of Object.keys(sepAudioMap)) {
         const e = sepAudioMap[k];
@@ -8620,7 +8718,7 @@ function openStemFolder() {
 // Calls the /master SSE endpoint to apply a rule-based mastering preset
 // to the ORIGINAL source track (not the stems). We feed it sepSourcePath
 // because the mastering preset is meant to give the user a finished
-// version of the song they just separated — not a remix from stems.
+// version of the song they just separated - not a remix from stems.
 
 let masterEvtSource = null;
 let masterResult = null;
@@ -8680,7 +8778,7 @@ function onMasterStrengthChange(val) {
   if (el) el.textContent = Math.round(masterMatchStrength * 100) + '%';
 }
 
-// Drag-and-drop on the reference picker — same UX as the main track drops
+// Drag-and-drop on the reference picker - same UX as the main track drops
 // so users can drag any audio file onto it without opening a file dialog.
 window.addEventListener('DOMContentLoaded', () => {
   const drop = document.getElementById('master-ref-drop');
@@ -8827,7 +8925,7 @@ function playMastered() {
   if (!masterResult || !masterResult.output_path) return;
   // Quick preview via a temporary HTMLAudioElement. We don't try to
   // integrate with the analyzer / mini-player here because the mastered
-  // file isn't a stem and doesn't belong in the mixer view — just play
+  // file isn't a stem and doesn't belong in the mixer view - just play
   // it back briefly so the user can A/B with the unmastered original.
   try {
     const a = new Audio('file://' + masterResult.output_path);
@@ -8856,7 +8954,7 @@ function dragStem(ev, i) {
     api.startDrag(e.path, ghost);
     return;
   }
-  // Browser fallback (rare — Electron preload always provides startDrag)
+  // Browser fallback (rare - Electron preload always provides startDrag)
   const filename = e.path.split(/[/\\]/).pop();
   ev.dataTransfer.setData('DownloadURL', 'audio/wav:' + filename + ':file://' + e.path);
 }
@@ -8910,7 +9008,7 @@ function renderStemDragGhost(label) {
 //     nothing. We can't easily fs.existsSync from the renderer without
 //     an IPC round-trip, and the latency would kill the drag's
 //     responsiveness. Better to fire and fail silently than block.
-//   • Browser fallback path (no api.startDrag) sets DownloadURL — works
+//   • Browser fallback path (no api.startDrag) sets DownloadURL - works
 //     in browsers but unlikely to ever fire in Electron.
 
 function dragHistoryRowToExternal(ev, histId) {
@@ -8944,7 +9042,7 @@ function _performExternalDrag(ev, filePath, label) {
     window.api.startDrag(filePath, ghost);
     return;
   }
-  // Browser fallback — unlikely path in Electron, included for safety
+  // Browser fallback - unlikely path in Electron, included for safety
   const filename = filePath.split(/[/\\]/).pop();
   ev.dataTransfer.setData('DownloadURL', 'audio/wav:' + filename + ':file://' + filePath);
 }
@@ -9120,7 +9218,7 @@ async function deleteSepHistory(id) {
   } catch {}
 }
 
-// Wire up the separator drop zone — same pattern as analyze drop
+// Wire up the separator drop zone - same pattern as analyze drop
 window.addEventListener('DOMContentLoaded', () => {
   const drop = document.getElementById('drop-stems');
   if (drop) {
@@ -9219,7 +9317,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   } catch {}
   // Start the periodic auto-clear sweep. The dropdown that controls this
-  // lives in Settings → "Auto-clear download queue" — its onchange wires
+  // lives in Settings → "Auto-clear download queue" - its onchange wires
   // straight into setDlAutoclear which updates dlAutoclearHours and runs
   // an immediate sweep. The interval below is the steady-state pass that
   // catches items as they age out.
@@ -9515,7 +9613,7 @@ function retryEnginesSetup() {
 }
 
 // Expected wall-clock seconds per setup step (measured on a mid-range
-// machine with ~50Mbps). Only used to pace the trickle — real events
+// machine with ~50Mbps). Only used to pace the trickle - real events
 // always win.
 const SETUP_STEP_ETA = {
   provisioning_runtime: 30, checking_python: 5, downloading_python: 60,
@@ -9533,7 +9631,7 @@ function _startSetupTrickle(fromPct, step) {
   _stopSetupTrickle();
   const eta = SETUP_STEP_ETA[step] || 60;
   // Ease toward +8% of the bar (a typical inter-step gap) over the
-  // step's ETA, asymptotically — cap the ceiling so a stalled step
+  // step's ETA, asymptotically - cap the ceiling so a stalled step
   // visibly stalls instead of lying its way to 99%.
   _setupTrickle.cur = fromPct;
   _setupTrickle.target = Math.min(97, fromPct + 8);
@@ -9556,8 +9654,7 @@ function setSetupProgress(pct, msg, detail, step) {
   const stepEl = document.getElementById('setup-step-msg');
   const detailEl = document.getElementById('setup-prog-detail');
   if (typeof pct === 'number') {
-    // Real event: never move backwards past what the trickle showed —
-    // a bar that retreats reads as failure.
+    // Real event: never move backwards past what the trickle showed.
     const shown = Math.max(pct, _setupTrickle.cur || 0);
     if (fill) fill.style.width = Math.max(0, Math.min(100, shown)) + '%';
     if (pctEl) pctEl.textContent = Math.round(shown) + '%';
@@ -9588,13 +9685,13 @@ function stepToHuman(step) {
     downloading_models:     'Downloading AI models…',
     dl_vocal:               'Downloading Stage 1 model (~640MB)…',
     dl_vocal_done:          'Stage 1 model ready',
-    dl_vocal_skip:          'Stage 1 model skipped — will download on first separation',
+    dl_vocal_skip:          'Stage 1 model skipped - will download on first separation',
     dl_demucs:              'Downloading Stage 2 model (~330MB)…',
     dl_demucs_done:         'Stage 2 model ready',
-    dl_demucs_skip:         'Stage 2 model skipped — will download on first separation',
+    dl_demucs_skip:         'Stage 2 model skipped - will download on first separation',
     dl_whisper:             'Downloading transcription model (~150MB)…',
     dl_whisper_done:        'Transcription model ready',
-    dl_whisper_skip:        'Transcription model skipped — will download on first transcription',
+    dl_whisper_skip:        'Transcription model skipped - will download on first transcription',
     all_models_done:        'All models ready',
     finalizing:             'Finalizing…',
   };
@@ -9605,7 +9702,7 @@ function stepToHuman(step) {
 const T = {
   en: {
     // ── engines circuit-breaker ──
-    enginesMissing:'Python engine not detected. Click to set it up — automatic BPM/key analysis is paused until then.',
+    enginesMissing:'Python engine not detected. Click to set it up - automatic BPM/key analysis is paused until then.',
     enginesDepsMissing:'Engine dependencies missing. Click to run setup again - analysis is paused until then.',
     enginesDiagTitle:'Engines unavailable',
     enginesDiagTitleDeps:'Engine dependencies missing',
@@ -9621,13 +9718,13 @@ const T = {
     crashReportTestBtn:'Send test event',
     crashReportTestSending:'Sending...',
     crashReportTestSent:'Test event sent',
-    crashReportTestQueued:'Test event queued — check Sentry in 1-2 min',
+    crashReportTestQueued:'Test event queued - check Sentry in 1-2 min',
     crashReportTestFailed:'Test send failed',
     crashReportDiagLoading:'Checking...',
     dlPhaseConverting:'Converting…',
     selfHealStart:'Engine self-repair started',
-    selfHealDone:'Engines repaired automatically — everything works again',
-    selfHealFailed:'Automatic engine repair failed — open Settings > AI engines to run full setup',
+    selfHealDone:'Engines repaired automatically - everything works again',
+    selfHealFailed:'Automatic engine repair failed - open Settings > AI engines to run full setup',
     verifyName:'Verify engines',
     verifyDesc:'Deep-checks every AI component (analysis, stems, transcription) and pinpoints exactly what is broken. Repairs are one click.',
     verifyBtn:'Verify now',
@@ -9640,23 +9737,23 @@ const T = {
     plQueuedNotif:'Playlist queued',
     plSkipped:'already in queue',
     doctorName:'Library doctor',
-    doctorDesc:'Scan for corrupted downloads — tracks whose file contains a DIFFERENT track\'s audio (a bug fixed in 0.4.3 could cause this in bulk grabs). Offers one-click re-download of the real audio.',
+    doctorDesc:'Scan for corrupted downloads - tracks whose file contains a DIFFERENT track\'s audio (a bug fixed in 0.4.3 could cause this in bulk grabs). Offers one-click re-download of the real audio.',
     doctorBtn:'Scan library',
     doctorTitle:'Library doctor',
     doctorScanning:'Scanning your library for mismatched audio...',
-    doctorClean:'All clear — {n} fingerprinted tracks scanned, no title/audio mismatches found.',
+    doctorClean:'All clear - {n} fingerprinted tracks scanned, no title/audio mismatches found.',
     doctorOriginal:'Audio belongs to',
     doctorSuspects:'These rows share that same audio under a different name',
-    doctorSameAudio:'Same audio, different title — likely corrupted',
+    doctorSameAudio:'Same audio, different title - likely corrupted',
     doctorRedl:'Re-download',
     doctorNoUrl:'No source URL stored',
     doctorFixed:'Fixed',
-    doctorFixedNotif:'Correct audio downloaded — corrupted entry removed',
-    doctorRedlFailed:'Re-download failed — try again or grab it manually',
+    doctorFixedNotif:'Correct audio downloaded - corrupted entry removed',
+    doctorRedlFailed:'Re-download failed - try again or grab it manually',
     fileTagsName:'Write BPM/key into file tags',
     fileTagsDesc:'After analysis, stamp BPM and key into the audio file\'s metadata so FL Studio, Rekordbox, Mixed In Key and others see them. On by default.',
     autoRenameName:'Auto-rename with BPM/key',
-    autoRenameDesc:'After analysis, rename files to "Title [140BPM Cm].mp3". Off by default — skips files already stamped and files currently in use.',
+    autoRenameDesc:'After analysis, rename files to "Title [140BPM Cm].mp3". Off by default - skips files already stamped and files currently in use.',
     scrubHint:'Click to seek',
     smartTitle:'New smart folder',
     smartSub:'Rules-based folder that auto-populates. New downloads matching the rules appear automatically.',
@@ -9670,7 +9767,7 @@ const T = {
     smartMinor:'Minor',
     smartMajor:'Major',
     smartCreate:'Create smart folder',
-    smartCreated:'Smart folder created — it will stay current automatically',
+    smartCreated:'Smart folder created - it will stay current automatically',
     smartNeedName:'Give the folder a name',
     smartNeedRule:'Set at least one rule (BPM range, key, or mode)',
     closeWord:'Close',
@@ -9683,7 +9780,6 @@ const T = {
     ctxCopyUrl:'Copy source URL',
     ctxShowFolder:'Show in folder',
     ctxRemove:'Remove from history',
-    copied:'Copied',
     noSourceUrl:'No URL stored for this track',
     transReady:'Ready',
     transStartBtn:'Start transcription',
@@ -9748,7 +9844,7 @@ const T = {
     extDownloadDone:'Extension downloaded',
     extDownloadFailed:'Download failed',
     extHowToOpenManual:'Open releases page',
-    extDownloadFallback:'Opening releases page — grab the latest zip there.',
+    extDownloadFallback:'Opening releases page - grab the latest zip there.',
     clipboardDetected:'Clipboard:',
     paste:'Paste',
     extHowToStep2Title:'Open your extensions page',
@@ -9781,14 +9877,14 @@ const T = {
 
     // ── Background analysis pill (0.2.2) ──
     bgAnalyzing:'Analyzing',
-    bgPending:'tracks pending — click to retry',
+    bgPending:'tracks pending - click to retry',
     bgCaughtUp:'All tracks analyzed',
 
     // ── Auto-tag opt-out (0.2.2) ──
     autoTagName:'Auto-tag downloads',
     autoTagDesc:"After each download, scan the title against your Stockpile folders' artist seeds and tag matches automatically. Turn OFF to keep new downloads completely untagged — you'll handle organization manually, or in batches via Auto-organize. (Disabling this also turns Auto-send into a no-op, since there's no tag to act on.)",
-    autoTagOnNotif:'Auto-tag ON — downloads will be matched to folders by artist',
-    autoTagOffNotif:'Auto-tag OFF — downloads stay untagged, organize manually',
+    autoTagOnNotif:'Auto-tag ON - downloads will be matched to folders by artist',
+    autoTagOffNotif:'Auto-tag OFF - downloads stay untagged, organize manually',
 
     // ── Beat switch (0.1.3) ──
     bsTitle:'Beat switch detected',
@@ -9803,11 +9899,11 @@ const T = {
     // ── 0.1.1 features ──
     watchName:'Watch stockpile folder',
     watchDesc:"Monitor the stockpile root for new audio files dropped in from anywhere (Explorer, other apps, network drives). New files are imported into the library, fingerprinted, and auto-matched automatically — combined with Auto-send they get filed into the right folder without you touching anything.",
-    watchOnNotif:'Watching stockpile folder — new audio gets imported automatically',
+    watchOnNotif:'Watching stockpile folder - new audio gets imported automatically',
     watchOffNotif:'Watch folder off',
-    ytdlpAvail:'update available — click to install',
+    ytdlpAvail:'update available - click to install',
     ytdlpUpToDate:'up to date',
-    ytdlpSystem:'yt-dlp is system-installed — update it via your package manager',
+    ytdlpSystem:'yt-dlp is system-installed - update it via your package manager',
     sepqTitle:'Separation queue',
     sepqWaiting:'waiting',
     sepqAdded:'{n} added to separation queue',
@@ -9817,12 +9913,12 @@ const T = {
     simBtn:'Find similar tracks',
     simTitle:'Similar tracks',
     simLooking:'Comparing fingerprints, mood, BPM and key…',
-    simNone:'No similar tracks found. More tracks need fingerprints or analysis — run the backfill in Find duplicates, or analyze more of your library.',
+    simNone:'No similar tracks found. More tracks need fingerprints or analysis - run the backfill in Find duplicates, or analyze more of your library.',
     simOpen:'Open',
     simReason_sound:'sound', simReason_mood:'mood', simReason_bpm:'BPM', simReason_key:'key',
 
     // ── i18n sweep batch 2 (0.1.0) ──
-    backendOfflineRetry:'Backend offline — try again in a moment',
+    backendOfflineRetry:'Backend offline - try again in a moment',
     dupBackfillHead:'{n} tracks aren\'t fingerprinted yet.',
     dupBackfillDesc:'New downloads are fingerprinted automatically. Existing tracks need a one-time scan. Each takes a few seconds; runs in the background.',
     dupBackfillBtn:'Backfill {n} tracks',
@@ -9836,7 +9932,7 @@ const T = {
     dupGroupOne:'group', dupGroupMany:'groups',
     dupNothingChecked:'Nothing checked',
     dupDeleteTitle:'Delete {n} {w}?',
-    dupDeleteMsg:'Removes the selected entries from your history. The actual audio files on disk are NOT deleted — only the history records. To free disk space, delete the files in your file manager afterward.',
+    dupDeleteMsg:'Removes the selected entries from your history. The actual audio files on disk are NOT deleted - only the history records. To free disk space, delete the files in your file manager afterward.',
     deletedWord:'Deleted',
     fixFilesConfirmTitle:'Fix file locations?',
     fixFilesConfirmMsg:"Scans every tagged track and moves any whose files aren't in their primary folder on disk. Files are never deleted — only moved into place.",
@@ -9846,12 +9942,12 @@ const T = {
     alreadyInPlace:'already in place',
     missingOnDisk:'missing on disk',
     errorsWord:'errors',
-    checkedNothing:'Checked {n} — nothing to do',
+    checkedNothing:'Checked {n} - nothing to do',
     cleanConfirmTitle:'Clean Freq.Phull temp files?',
     cleanConfirmMsg:'Removes WAV files older than 1 hour from Windows Temp that Freq.Phull left behind from analysis, stem separation, and conversion. Anything currently being processed is safe.',
     cleaningBtn:'Cleaning…',
     cleanedResult:'Cleaned {n} {w} ({mb} MB freed)',
-    cleanNothing:'Nothing to clean — temp folder is tidy',
+    cleanNothing:'Nothing to clean - temp folder is tidy',
     updDevOnly:'Updates only work in packaged builds',
     updDevOnlyLong:'Updates only work in the packaged (installed) build, not in dev mode.',
     updApiUnavailable:'Update API unavailable in this build',
@@ -9867,7 +9963,7 @@ const T = {
     autoSendName:'Auto-send to detected folder',
     autoSendDesc:"When a new download matches a Stockpile folder's artist seeds, don't just tag it — automatically make that folder the track's primary and move the file into <code>StockpileRoot/FolderName/</code> right away. Tracks with no confident match stay where they land and can be sorted later with Auto-organize.",
     autoSendOnNotif:'New downloads will be moved into their detected folder',
-    autoSendOffNotif:'Auto-send off — downloads stay put, tags only',
+    autoSendOffNotif:'Auto-send off - downloads stay put, tags only',
     sentTo:'Sent to',
     storName:'Storage breakdown',
     storDesc:'See how much disk space each Stockpile folder uses, find missing files, spot orphaned audio in your stockpile root.',
@@ -9903,7 +9999,7 @@ const T = {
     storMissingOne:'missing file', storMissingMany:'missing files',
     storOrphanOne:'untagged audio file in root', storOrphanMany:'untagged audio files in root',
     storMissingNote:'missing',
-    storNoFolders:'No folders yet — create one in Stockpile to start organizing',
+    storNoFolders:'No folders yet - create one in Stockpile to start organizing',
     fileWord:'file', filesWord:'files',
     storLocate:'Locate missing files',
     storPrune:'Remove dead entries',
@@ -9912,7 +10008,7 @@ const T = {
     notifImported:'Imported', notifStemsSkipped:'stem files skipped',
     importFailed:'Import failed:',
     pruneNoDead:'No dead entries found',
-    pruneConfirm:'Remove {n} history entries whose audio file no longer exists?\n\nThis only deletes the database rows (and their folder tags) — no files are touched.\nTip: run "Locate missing files" first if the files might just have moved.',
+    pruneConfirm:'Remove {n} history entries whose audio file no longer exists?\n\nThis only deletes the database rows (and their folder tags) - no files are touched.\nTip: run "Locate missing files" first if the files might just have moved.',
     pruneRemoved:'Removed', deadEntriesWord:'dead entries',
     pruneFailed:'Prune failed:',
     scanRelocatable:'Scanning for relocatable files…',
@@ -9951,12 +10047,12 @@ const T = {
     // Download tab
     dlTitle:'Download', dlSub:'Paste a YouTube URL and save as MP3, WAV, FLAC and more',
     ytUrl:'YouTube URL', format:'Format', fetch:'Fetch',
-    dlReady:'Ready — choose a format and download',
+    dlReady:'Ready - choose a format and download',
     dlPaste:'Paste a YouTube URL to get started',
     folderLbl:'Downloads folder', change:'Change',
     // Analyze tab
     anaTitle:'Analyze', anaSub:'Detect BPM, key, chords and more from any audio file',
-    dropTitle:'Drop an audio file here', dropSub:'or click to browse — MP3 · WAV · FLAC · OGG · M4A',
+    dropTitle:'Drop an audio file here', dropSub:'or click to browse - MP3 · WAV · FLAC · OGG · M4A',
     bpm:'BPM', key:'KEY', length:'LENGTH',
     camelot:'CAMELOT', chords:'CHORDS', pitch:'PITCH',
     exportWav:'<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v16M5 13l7 7 7-7"/></svg> Export WAV', dragHint:'After grabbing, drag from Chrome\'s download bar straight into FL Studio',
@@ -9966,8 +10062,8 @@ const T = {
     transModel:'Model', transLang:'Language', transAuto:'Auto',
     transCopy:'Copy', transSave:'Save .txt',
     // Separator tab
-    sepTitle:'Separator', sepSub:'Pro-grade stem separation — multi-stage ensemble, runs locally',
-    sepDropTitle:'Drop a track to separate', sepDropSub:'or click to browse — MP3 · WAV · FLAC · OGG · M4A',
+    sepTitle:'Separator', sepSub:'Pro-grade stem separation - multi-stage ensemble, runs locally',
+    sepDropTitle:'Drop a track to separate', sepDropSub:'or click to browse - MP3 · WAV · FLAC · OGG · M4A',
     sepStemsLbl:'Stems', sepQualityLbl:'Quality',
     sep4Stems:'4 Stems', sep6Stems:'6 Stems',
     sepFast:'Fast', sepHigh:'High', sepUltra:'Ultra',
@@ -9976,9 +10072,9 @@ const T = {
     sepHistory:'Separator History', sepEmpty:'No separations yet',
     sepMode4Desc:'Vocals · Drums · Bass · Other',
     sepMode6Desc:'Vocals · Drums · Bass · Guitar · Piano · Other',
-    sepQuality_fast:'Fast — single-shot · ~1× realtime on CPU',
-    sepQuality_high:'Balanced — 1 shift on instrumental · ~2× realtime on CPU',
-    sepQuality_ultra:'Ultra — 1 shift, max overlap · ~2.5× realtime on CPU',
+    sepQuality_fast:'Fast - single-shot · ~1× realtime on CPU',
+    sepQuality_high:'Balanced - 1 shift on instrumental · ~2× realtime on CPU',
+    sepQuality_ultra:'Ultra - 1 shift, max overlap · ~2.5× realtime on CPU',
 
     // Stockpile
     spTitle:'Stockpile', spSub:'Organize your beats by style, mood, and artist',
@@ -9997,11 +10093,11 @@ const T = {
     spTagThisTrack:'Tag this track',
     spSuggestions:'Suggestions',
     spAllFolders:'All folders',
-    spNoSuggestions:'No suggestions — pick a folder below',
+    spNoSuggestions:'No suggestions - pick a folder below',
     spFolderViewComingSoon:'(folder browser coming next patch)',
     spNewFolder:'New style folder', spEditFolder:'Edit folder',
     spFolderName:'Folder name', spFolderDesc:'Description (optional)',
-    spFolderSeeds:'Artist seeds — comma-separated',
+    spFolderSeeds:'Artist seeds - comma-separated',
     spFolderSeedsHint:'When a track filename mentions any of these, it\'ll be auto-suggested for this folder.',
     spCancel:'Cancel', spCreate:'Create', spSave:'Save',
     spNameRequired:'Folder name is required',
@@ -10010,7 +10106,7 @@ const T = {
     spFolderDeleted:'Folder deleted',
     spDeleteFolder:'Delete the folder "{name}"? This won\'t delete any audio files.',
     spDeleteFolderWithTracks:'Delete the folder "{name}"? It currently has {n} tagged tracks. The tags will be removed but the audio files won\'t be touched.',
-    stockpileNotSet:'Not set — click to choose',
+    stockpileNotSet:'Not set - click to choose',
     // Bulk match
     spAutoMatchTooltip:'Auto-match tracks to this folder',
     spFindingMatches:'Finding matches…',
@@ -10066,7 +10162,7 @@ const T = {
     miniSaved:'Saved',
     miniSaving:'Saving…',
     histFavorite:'Favorite',
-    sepLoopRegion:'Loop region — Shift+drag to set',
+    sepLoopRegion:'Loop region - Shift+drag to set',
     sepLoopHint:'Shift+drag on the waveform to set loop region',
     sepLoopSet:'⟲ Loop:',
     sepLoopCleared:'Loop cleared',
@@ -10099,23 +10195,23 @@ const T = {
     metStart:'Start', metStop:'Stop',
     tapHint:'tap at least 4 times', reset:'Reset',
     // History tab
-    histTitle:'History', histSub:'Every track downloaded — BPM and key saved automatically',
+    histTitle:'History', histSub:'Every track downloaded - BPM and key saved automatically',
     searchTracks:'Search tracks…', select:'Select', cancel:'Cancel',
     selectAll:'Select All', selected:'selected',
     toStockpile:'<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v13H3zM3 7l3-4h12l3 4M12 3v17"/></svg> To Stockpile', moveTo:'<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> Move to…',
-    stockpile:'Stockpile', stockpileNotSet:'Not set — click to choose',
-    noHistory:'No history yet — download a track to get started',
+    stockpile:'Stockpile', stockpileNotSet:'Not set - click to choose',
+    noHistory:'No history yet - download a track to get started',
     noMatch:'No matching tracks', remove:'Remove',
     // Settings
     setTitle:'Settings', setSub:'Customize your Freq.Phull experience',
     langLabel:'Language', langDesc:'Choose the application language',
     autoLabel:'Auto-analyze on download',
-    autoDesc:'When off, downloads won\'t switch to the analyzer page — use the notification to access it. Better for batch downloading.',
+    autoDesc:'When off, downloads won\'t switch to the analyzer page - use the notification to access it. Better for batch downloading.',
     stockLabel:'Stockpile folder',
     repairLabel:'Repair history', repairDesc:'Scan stockpile and downloads to reconnect moved files.',
     repairBtn:'Scan now', repairFixed:'files reconnected', repairOk:'All files are linked correctly.',
     repairReviewTitle:'Review matches',
-    repairReviewSub:'tracks need confirmation — pick the right file or skip',
+    repairReviewSub:'tracks need confirmation - pick the right file or skip',
     repairApply:'Apply', repairSkip:'Skip', repairApplyAll:'Apply all top matches',
     repairDone:'Done',
     removeConfirm:'Remove from history?',
@@ -10130,11 +10226,11 @@ const T = {
     setupNotInstalled:'AI engines are not installed. Run setup now?',
     enginesReady:'AI engines ready',
     enginesInstalled:'Installed',
-    enginesNotInstalled:'Not installed — stem separator and transcription unavailable',
-    enginesStale:'Setup is out-of-date — re-run setup to fix',
+    enginesNotInstalled:'Not installed - stem separator and transcription unavailable',
+    enginesStale:'Setup is out-of-date - re-run setup to fix',
     runSetup:'Run setup',
     diagnose:'Diagnose', diagnoseTitle:'Diagnose Paths',
-    diagnoseDesc:'Check which binaries the app can find — useful when ffmpeg, yt-dlp etc. aren\'t working',
+    diagnoseDesc:'Check which binaries the app can find - useful when ffmpeg, yt-dlp etc. aren\'t working',
     viewLogs:'View logs', viewLogsDesc:'Server + setup logs, useful for debugging',
     copyToClipboard:'Copy to clipboard', copied:'Copied to clipboard',
     refresh:'Refresh',
@@ -10163,13 +10259,13 @@ const T = {
     crashReportTestBtn:'Envoyer un evenement test',
     crashReportTestSending:'Envoi...',
     crashReportTestSent:'Evenement test envoye',
-    crashReportTestQueued:'Evenement test en attente — verifiez Sentry dans 1-2 min',
+    crashReportTestQueued:'Evenement test en attente - verifiez Sentry dans 1-2 min',
     crashReportTestFailed:'Echec de l\'envoi',
     crashReportDiagLoading:'Verification...',
     dlPhaseConverting:'Conversion…',
     selfHealStart:'Auto-reparation des moteurs demarree',
-    selfHealDone:'Moteurs repares automatiquement — tout fonctionne a nouveau',
-    selfHealFailed:'Echec de la reparation automatique — ouvrez Parametres > Moteurs IA pour relancer la configuration complete',
+    selfHealDone:'Moteurs repares automatiquement - tout fonctionne a nouveau',
+    selfHealFailed:'Echec de la reparation automatique - ouvrez Parametres > Moteurs IA pour relancer la configuration complete',
     verifyName:'Verifier les moteurs',
     verifyDesc:'Verifie en profondeur chaque composant IA (analyse, pistes, transcription) et identifie precisement ce qui est casse. Reparation en un clic.',
     verifyBtn:'Verifier maintenant',
@@ -10182,23 +10278,23 @@ const T = {
     plQueuedNotif:'Playlist ajoutee a la file',
     plSkipped:'deja en file',
     doctorName:'Docteur de bibliotheque',
-    doctorDesc:'Detecte les telechargements corrompus — pistes dont le fichier contient l\'audio d\'une AUTRE piste (bug corrige en 0.4.3 lors des telechargements en masse). Propose un re-telechargement en un clic.',
+    doctorDesc:'Detecte les telechargements corrompus - pistes dont le fichier contient l\'audio d\'une AUTRE piste (bug corrige en 0.4.3 lors des telechargements en masse). Propose un re-telechargement en un clic.',
     doctorBtn:'Analyser la bibliotheque',
     doctorTitle:'Docteur de bibliotheque',
     doctorScanning:'Analyse de votre bibliotheque en cours...',
-    doctorClean:'Tout est bon — {n} pistes analysees, aucune discordance titre/audio trouvee.',
+    doctorClean:'Tout est bon - {n} pistes analysees, aucune discordance titre/audio trouvee.',
     doctorOriginal:'L\'audio appartient a',
     doctorSuspects:'Ces entrees partagent le meme audio sous un autre nom',
-    doctorSameAudio:'Meme audio, titre different — probablement corrompu',
+    doctorSameAudio:'Meme audio, titre different - probablement corrompu',
     doctorRedl:'Re-telecharger',
     doctorNoUrl:'Aucune URL source enregistree',
     doctorFixed:'Repare',
-    doctorFixedNotif:'Audio correct telecharge — entree corrompue supprimee',
-    doctorRedlFailed:'Echec du re-telechargement — reessayez ou recuperez-le manuellement',
+    doctorFixedNotif:'Audio correct telecharge - entree corrompue supprimee',
+    doctorRedlFailed:'Echec du re-telechargement - reessayez ou recuperez-le manuellement',
     fileTagsName:'Ecrire BPM/tonalite dans les tags',
     fileTagsDesc:'Apres analyse, inscrit le BPM et la tonalite dans les metadonnees du fichier pour FL Studio, Rekordbox, Mixed In Key et autres. Active par defaut.',
     autoRenameName:'Renommage auto avec BPM/tonalite',
-    autoRenameDesc:'Apres analyse, renomme les fichiers en "Titre [140BPM Cm].mp3". Desactive par defaut — ignore les fichiers deja marques et ceux en cours d\'utilisation.',
+    autoRenameDesc:'Apres analyse, renomme les fichiers en "Titre [140BPM Cm].mp3". Desactive par defaut - ignore les fichiers deja marques et ceux en cours d\'utilisation.',
     scrubHint:'Cliquez pour naviguer',
     smartTitle:'Nouveau dossier intelligent',
     smartSub:'Dossier base sur des regles, auto-alimente. Les nouveaux telechargements correspondants apparaissent automatiquement.',
@@ -10212,7 +10308,7 @@ const T = {
     smartMinor:'Mineur',
     smartMajor:'Majeur',
     smartCreate:'Creer le dossier intelligent',
-    smartCreated:'Dossier intelligent cree — il restera a jour automatiquement',
+    smartCreated:'Dossier intelligent cree - il restera a jour automatiquement',
     smartNeedName:'Donnez un nom au dossier',
     smartNeedRule:'Definissez au moins une regle (plage BPM, tonalite ou mode)',
     closeWord:'Fermer',
@@ -10225,7 +10321,6 @@ const T = {
     ctxCopyUrl:'Copier l\'URL source',
     ctxShowFolder:'Ouvrir le dossier',
     ctxRemove:'Retirer de l\'historique',
-    copied:'Copie',
     noSourceUrl:'Aucune URL enregistree pour cette piste',
     transReady:'Pret',
     transStartBtn:'Demarrer la transcription',
@@ -10291,7 +10386,7 @@ const T = {
     extDownloadDone:'Extension telechargee',
     extDownloadFailed:'Echec du telechargement',
     extHowToOpenManual:'Ouvrir la page des releases',
-    extDownloadFallback:'Ouverture de la page des releases — recuperez le zip la-bas.',
+    extDownloadFallback:'Ouverture de la page des releases - recuperez le zip la-bas.',
     clipboardDetected:'Presse-papiers :',
     paste:'Coller',
     extHowToStep2Title:'Ouvrez votre page d\'extensions',
@@ -10324,14 +10419,14 @@ const T = {
 
     // ── Bandeau d'analyse en arrière-plan (0.2.2) ──
     bgAnalyzing:'Analyse de',
-    bgPending:'pistes en attente — cliquez pour relancer',
+    bgPending:'pistes en attente - cliquez pour relancer',
     bgCaughtUp:'Toutes les pistes sont analysées',
 
     // ── Désactivation auto-étiquetage (0.2.2) ──
     autoTagName:'Étiquetage auto des téléchargements',
     autoTagDesc:"Après chaque téléchargement, analyse le titre par rapport aux artistes de référence de vos dossiers Stockpile et étiquette automatiquement les correspondances. Désactivez pour garder les nouveaux téléchargements totalement non étiquetés — vous gérerez l'organisation manuellement ou par lots avec Auto-organiser. (Désactiver ceci rend également l'Envoi auto sans effet, puisqu'il n'y a plus d'étiquette à promouvoir.)",
-    autoTagOnNotif:'Étiquetage auto activé — les téléchargements seront associés aux dossiers par artiste',
-    autoTagOffNotif:'Étiquetage auto désactivé — les téléchargements restent non étiquetés, organisez à la main',
+    autoTagOnNotif:'Étiquetage auto activé - les téléchargements seront associés aux dossiers par artiste',
+    autoTagOffNotif:'Étiquetage auto désactivé - les téléchargements restent non étiquetés, organisez à la main',
 
     // ── Beat switch (0.1.3) ──
     bsTitle:'Beat switch détecté',
@@ -10346,11 +10441,11 @@ const T = {
     // ── Fonctionnalités 0.1.1 ──
     watchName:'Surveiller le dossier stockpile',
     watchDesc:"Surveille la racine du stockpile pour tout nouveau fichier audio déposé depuis n'importe où (Explorateur, autres applications, disques réseau). Les nouveaux fichiers sont importés dans la bibliothèque, indexés et associés automatiquement — combiné avec l'Envoi auto, ils sont classés dans le bon dossier sans que vous touchiez à rien.",
-    watchOnNotif:'Dossier stockpile surveillé — le nouvel audio est importé automatiquement',
+    watchOnNotif:'Dossier stockpile surveillé - le nouvel audio est importé automatiquement',
     watchOffNotif:'Surveillance du dossier désactivée',
-    ytdlpAvail:'mise à jour disponible — cliquez pour installer',
+    ytdlpAvail:'mise à jour disponible - cliquez pour installer',
     ytdlpUpToDate:'à jour',
-    ytdlpSystem:'yt-dlp est installé au niveau système — mettez-le à jour via votre gestionnaire de paquets',
+    ytdlpSystem:'yt-dlp est installé au niveau système - mettez-le à jour via votre gestionnaire de paquets',
     sepqTitle:'File de séparation',
     sepqWaiting:'en attente',
     sepqAdded:'{n} ajoutée(s) à la file de séparation',
@@ -10360,12 +10455,12 @@ const T = {
     simBtn:'Trouver des pistes similaires',
     simTitle:'Pistes similaires',
     simLooking:'Comparaison des empreintes, du mood, du BPM et de la tonalité…',
-    simNone:'Aucune piste similaire trouvée. Plus de pistes doivent être indexées ou analysées — lancez l\'indexation dans Trouver les doublons, ou analysez davantage votre bibliothèque.',
+    simNone:'Aucune piste similaire trouvée. Plus de pistes doivent être indexées ou analysées - lancez l\'indexation dans Trouver les doublons, ou analysez davantage votre bibliothèque.',
     simOpen:'Ouvrir',
     simReason_sound:'son', simReason_mood:'mood', simReason_bpm:'BPM', simReason_key:'tonalité',
 
     // ── i18n balayage lot 2 (0.1.0) ──
-    backendOfflineRetry:'Moteur hors ligne — réessayez dans un instant',
+    backendOfflineRetry:'Moteur hors ligne - réessayez dans un instant',
     dupBackfillHead:'{n} pistes ne sont pas encore indexées.',
     dupBackfillDesc:'Les nouveaux téléchargements sont indexés automatiquement. Les pistes existantes nécessitent une analyse unique. Quelques secondes chacune ; s\'exécute en arrière-plan.',
     dupBackfillBtn:'Indexer {n} pistes',
@@ -10379,22 +10474,22 @@ const T = {
     dupGroupOne:'groupe', dupGroupMany:'groupes',
     dupNothingChecked:'Rien de coché',
     dupDeleteTitle:'Supprimer {n} {w} ?',
-    dupDeleteMsg:'Retire les entrées sélectionnées de votre historique. Les fichiers audio sur le disque ne sont PAS supprimés — seulement les entrées. Pour libérer de l\'espace, supprimez ensuite les fichiers dans votre explorateur.',
+    dupDeleteMsg:'Retire les entrées sélectionnées de votre historique. Les fichiers audio sur le disque ne sont PAS supprimés - seulement les entrées. Pour libérer de l\'espace, supprimez ensuite les fichiers dans votre explorateur.',
     deletedWord:'Supprimé(s)',
     fixFilesConfirmTitle:'Corriger l\'emplacement des fichiers ?',
-    fixFilesConfirmMsg:'Analyse chaque piste étiquetée et déplace celles dont le fichier n\'est pas dans son dossier principal sur le disque. Aucun fichier n\'est supprimé — seulement déplacé à sa place.',
+    fixFilesConfirmMsg:'Analyse chaque piste étiquetée et déplace celles dont le fichier n\'est pas dans son dossier principal sur le disque. Aucun fichier n\'est supprimé - seulement déplacé à sa place.',
     stockRootLbl:'Racine du stockpile :',
     scanningBtn:'Analyse…',
     movedWord:'Déplacé(s)',
     alreadyInPlace:'déjà en place',
     missingOnDisk:'manquant(s) sur le disque',
     errorsWord:'erreurs',
-    checkedNothing:'{n} vérifiées — rien à faire',
+    checkedNothing:'{n} vérifiées - rien à faire',
     cleanConfirmTitle:'Nettoyer les fichiers temporaires de Freq.Phull ?',
     cleanConfirmMsg:'Supprime les fichiers WAV de plus d\'une heure laissés par Freq.Phull dans le Temp de Windows (analyse, séparation de stems, conversion). Tout ce qui est en cours de traitement est protégé.',
     cleaningBtn:'Nettoyage…',
     cleanedResult:'{n} {w} nettoyé(s) ({mb} Mo libérés)',
-    cleanNothing:'Rien à nettoyer — le dossier temporaire est propre',
+    cleanNothing:'Rien à nettoyer - le dossier temporaire est propre',
     updDevOnly:'Les mises à jour ne fonctionnent que dans les versions installées',
     updDevOnlyLong:'Les mises à jour ne fonctionnent que dans la version installée (packagée), pas en mode développement.',
     updApiUnavailable:'API de mise à jour indisponible dans cette version',
@@ -10410,7 +10505,7 @@ const T = {
     autoSendName:'Envoi auto vers le dossier détecté',
     autoSendDesc:"Quand un nouveau téléchargement correspond aux artistes d'un dossier Stockpile, ne pas seulement l'étiqueter — faire de ce dossier le principal et déplacer le fichier dans <code>RacineStockpile/NomDossier/</code> immédiatement. Les pistes sans correspondance fiable restent en place et pourront être triées plus tard avec Auto-organiser.",
     autoSendOnNotif:'Les nouveaux téléchargements seront déplacés vers leur dossier détecté',
-    autoSendOffNotif:'Envoi auto désactivé — les fichiers restent en place, étiquettes seulement',
+    autoSendOffNotif:'Envoi auto désactivé - les fichiers restent en place, étiquettes seulement',
     sentTo:'Envoyé vers',
     storName:'Répartition du stockage',
     storDesc:'Voyez l\'espace disque utilisé par chaque dossier Stockpile, trouvez les fichiers manquants, repérez l\'audio orphelin à la racine de votre stockpile.',
@@ -10431,7 +10526,7 @@ const T = {
     enginesName:'Moteurs IA',
     runSetupBtn:'Lancer l\'installation',
     diagName:'Diagnostiquer les chemins',
-    diagDesc:'Vérifie quels binaires l\'application trouve — utile quand ffmpeg, yt-dlp etc. ne fonctionnent pas',
+    diagDesc:'Vérifie quels binaires l\'application trouve - utile quand ffmpeg, yt-dlp etc. ne fonctionnent pas',
     btnDiagnose:'Diagnostiquer',
     logsName:'Voir les journaux',
     logsDesc:'Journaux du serveur et de l\'installation, utiles pour le débogage',
@@ -10446,7 +10541,7 @@ const T = {
     storMissingOne:'fichier manquant', storMissingMany:'fichiers manquants',
     storOrphanOne:'fichier audio non étiqueté à la racine', storOrphanMany:'fichiers audio non étiquetés à la racine',
     storMissingNote:'manquant(s)',
-    storNoFolders:'Aucun dossier pour l\'instant — créez-en un dans Stockpile pour commencer à organiser',
+    storNoFolders:'Aucun dossier pour l\'instant - créez-en un dans Stockpile pour commencer à organiser',
     fileWord:'fichier', filesWord:'fichiers',
     storLocate:'Localiser les fichiers manquants',
     storPrune:'Supprimer les entrées mortes',
@@ -10455,7 +10550,7 @@ const T = {
     notifImported:'Importé(s)', notifStemsSkipped:'fichiers de stems ignorés',
     importFailed:'Échec de l\'importation :',
     pruneNoDead:'Aucune entrée morte trouvée',
-    pruneConfirm:'Supprimer {n} entrées de l\'historique dont le fichier audio n\'existe plus ?\n\nSeules les lignes de la base de données (et leurs étiquettes) sont supprimées — aucun fichier n\'est touché.\nAstuce : lancez d\'abord « Localiser les fichiers manquants » si les fichiers ont peut-être juste été déplacés.',
+    pruneConfirm:'Supprimer {n} entrées de l\'historique dont le fichier audio n\'existe plus ?\n\nSeules les lignes de la base de données (et leurs étiquettes) sont supprimées - aucun fichier n\'est touché.\nAstuce : lancez d\'abord « Localiser les fichiers manquants » si les fichiers ont peut-être juste été déplacés.',
     pruneRemoved:'Supprimé', deadEntriesWord:'entrées mortes',
     pruneFailed:'Échec de la suppression :',
     scanRelocatable:'Recherche de fichiers déplaçables…',
@@ -10494,12 +10589,12 @@ const T = {
     // Download tab
     dlTitle:'Télécharger', dlSub:'Collez un lien YouTube et enregistrez en MP3, WAV, FLAC et plus',
     ytUrl:'Lien YouTube', format:'Format', fetch:'Récupérer',
-    dlReady:'Prêt — choisissez un format et téléchargez',
+    dlReady:'Prêt - choisissez un format et téléchargez',
     dlPaste:'Collez un lien YouTube pour commencer',
     folderLbl:'Dossier de téléchargement', change:'Changer',
     // Analyze tab
     anaTitle:'Analyser', anaSub:'Détectez le BPM, la tonalité, les accords et plus depuis n\'importe quel fichier audio',
-    dropTitle:'Déposez un fichier audio ici', dropSub:'ou cliquez pour parcourir — MP3 · WAV · FLAC · OGG · M4A',
+    dropTitle:'Déposez un fichier audio ici', dropSub:'ou cliquez pour parcourir - MP3 · WAV · FLAC · OGG · M4A',
     bpm:'BPM', key:'TONALITÉ', length:'DURÉE',
     camelot:'CAMELOT', chords:'ACCORDS', pitch:'HAUTEUR',
     exportWav:'<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v16M5 13l7 7 7-7"/></svg> Exporter en WAV', dragHint:'Après le téléchargement, glissez la piste depuis la barre de Chrome directement dans FL Studio',
@@ -10509,8 +10604,8 @@ const T = {
     transModel:'Modèle', transLang:'Langue', transAuto:'Auto',
     transCopy:'Copier', transSave:'Enregistrer en .txt',
     // Separator tab
-    sepTitle:'Séparateur', sepSub:'Séparation de stems professionnelle — ensemble multi-étapes, exécution locale',
-    sepDropTitle:'Déposez une piste à séparer', sepDropSub:'ou cliquez pour parcourir — MP3 · WAV · FLAC · OGG · M4A',
+    sepTitle:'Séparateur', sepSub:'Séparation de stems professionnelle - ensemble multi-étapes, exécution locale',
+    sepDropTitle:'Déposez une piste à séparer', sepDropSub:'ou cliquez pour parcourir - MP3 · WAV · FLAC · OGG · M4A',
     sepStemsLbl:'Stems', sepQualityLbl:'Qualité',
     sep4Stems:'4 stems', sep6Stems:'6 stems',
     sepFast:'Rapide', sepHigh:'Haute', sepUltra:'Ultra',
@@ -10519,9 +10614,9 @@ const T = {
     sepHistory:'Historique du séparateur', sepEmpty:'Aucune séparation pour l\'instant',
     sepMode4Desc:'Voix · Batterie · Basse · Autre',
     sepMode6Desc:'Voix · Batterie · Basse · Guitare · Piano · Autre',
-    sepQuality_fast:'Rapide — passe unique · ~1× temps réel sur CPU',
-    sepQuality_high:'Équilibré — 1 décalage sur l\'instrumental · ~2× temps réel sur CPU',
-    sepQuality_ultra:'Ultra — 1 décalage, chevauchement max · ~2.5× temps réel sur CPU',
+    sepQuality_fast:'Rapide - passe unique · ~1× temps réel sur CPU',
+    sepQuality_high:'Équilibré - 1 décalage sur l\'instrumental · ~2× temps réel sur CPU',
+    sepQuality_ultra:'Ultra - 1 décalage, chevauchement max · ~2.5× temps réel sur CPU',
     sepStageDone:'Terminé', sepFailed:'Échec de la séparation',
     sepStageVocal:'Voix', sepStageInst:'Instrumental',
     sepDirectLabel:'Garder les samples vocaux du beat',
@@ -10539,7 +10634,7 @@ const T = {
     spDestHint:'Les pistes étiquetées vont dans <code>{root}/{nom du dossier}/</code> lors de l\'engagement.',
     spStyleFolders:'Dossiers de style', spNewFolderBtn:'+ Nouveau dossier',
     spNoFolders:'Aucun dossier pour l\'instant.',
-    spNoFoldersHint:'Créez votre premier dossier de style — Cali Trap, Detroit, Atlanta Trap, Drill, peu importe la scène.',
+    spNoFoldersHint:'Créez votre premier dossier de style - Cali Trap, Detroit, Atlanta Trap, Drill, peu importe la scène.',
     spUntagged:'Sans étiquette', spAllTagged:'Toutes les pistes sont étiquetées.',
     spLoadingSugs:'Chargement des suggestions…',
     spTrack:'piste', spTracks:'pistes',
@@ -10548,11 +10643,11 @@ const T = {
     spTagThisTrack:'Étiqueter cette piste',
     spSuggestions:'Suggestions',
     spAllFolders:'Tous les dossiers',
-    spNoSuggestions:'Aucune suggestion — choisissez un dossier ci-dessous',
+    spNoSuggestions:'Aucune suggestion - choisissez un dossier ci-dessous',
     spFolderViewComingSoon:'(navigateur de dossier au prochain patch)',
     spNewFolder:'Nouveau dossier de style', spEditFolder:'Modifier le dossier',
     spFolderName:'Nom du dossier', spFolderDesc:'Description (facultatif)',
-    spFolderSeeds:'Artistes de référence — séparés par virgules',
+    spFolderSeeds:'Artistes de référence - séparés par virgules',
     spFolderSeedsHint:'Quand un nom de fichier mentionne l\'un de ces artistes, il sera suggéré pour ce dossier.',
     spCancel:'Annuler', spCreate:'Créer', spSave:'Enregistrer',
     spNameRequired:'Le nom du dossier est requis',
@@ -10561,7 +10656,7 @@ const T = {
     spFolderDeleted:'Dossier supprimé',
     spDeleteFolder:'Supprimer le dossier « {name} » ? Aucun fichier audio ne sera supprimé.',
     spDeleteFolderWithTracks:'Supprimer le dossier « {name} » ? Il contient actuellement {n} pistes étiquetées. Les étiquettes seront retirées mais les fichiers audio resteront intacts.',
-    stockpileNotSet:'Non défini — cliquez pour choisir',
+    stockpileNotSet:'Non défini - cliquez pour choisir',
     // Bulk match FR
     spAutoMatchTooltip:'Détecter les pistes correspondant à ce dossier',
     spFindingMatches:'Recherche des correspondances…',
@@ -10617,7 +10712,7 @@ const T = {
     miniSaved:'Enregistré',
     miniSaving:'Enregistrement…',
     histFavorite:'Favori',
-    sepLoopRegion:'Boucle — Maj+glisser pour définir',
+    sepLoopRegion:'Boucle - Maj+glisser pour définir',
     sepLoopHint:'Maj+glissez sur la forme d\'onde pour définir une boucle',
     sepLoopSet:'⟲ Boucle :',
     sepLoopCleared:'Boucle effacée',
@@ -10641,23 +10736,23 @@ const T = {
     metStart:'Démarrer', metStop:'Arrêter',
     tapHint:'tapez au moins 4 fois', reset:'Réinitialiser',
     // History tab
-    histTitle:'Historique', histSub:'Toutes les pistes téléchargées — BPM et tonalité enregistrés automatiquement',
+    histTitle:'Historique', histSub:'Toutes les pistes téléchargées - BPM et tonalité enregistrés automatiquement',
     searchTracks:'Rechercher des pistes…', select:'Sélectionner', cancel:'Annuler',
     selectAll:'Tout sélectionner', selected:'sélectionnée(s)',
     toStockpile:'<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v13H3zM3 7l3-4h12l3 4M12 3v17"/></svg> Vers le stockage', moveTo:'Déplacer vers…',
-    stockpile:'Stockage', stockpileNotSet:'Non défini — cliquez pour choisir',
-    noHistory:'Aucun historique pour l\'instant — téléchargez une piste pour commencer',
+    stockpile:'Stockage', stockpileNotSet:'Non défini - cliquez pour choisir',
+    noHistory:'Aucun historique pour l\'instant - téléchargez une piste pour commencer',
     noMatch:'Aucune piste correspondante', remove:'Supprimer',
     // Settings
     setTitle:'Paramètres', setSub:'Personnalisez votre expérience Freq.Phull',
     langLabel:'Langue', langDesc:'Choisissez la langue de l\'application',
     autoLabel:'Analyse automatique au téléchargement',
-    autoDesc:'Lorsque désactivé, les téléchargements ne basculent pas vers l\'analyseur — utilisez la notification pour y accéder. Idéal pour les téléchargements en lot.',
+    autoDesc:'Lorsque désactivé, les téléchargements ne basculent pas vers l\'analyseur - utilisez la notification pour y accéder. Idéal pour les téléchargements en lot.',
     stockLabel:'Dossier de stockage',
     repairLabel:'Réparer l\'historique', repairDesc:'Scanne le stockage et les téléchargements pour reconnecter les fichiers déplacés.',
     repairBtn:'Scanner maintenant', repairFixed:'fichiers reconnectés', repairOk:'Tous les fichiers sont correctement liés.',
     repairReviewTitle:'Vérifier les correspondances',
-    repairReviewSub:'pistes nécessitent une confirmation — choisissez le bon fichier ou ignorez',
+    repairReviewSub:'pistes nécessitent une confirmation - choisissez le bon fichier ou ignorez',
     repairApply:'Appliquer', repairSkip:'Ignorer', repairApplyAll:'Appliquer toutes les meilleures correspondances',
     repairDone:'Terminé',
     removeConfirm:'Supprimer de l\'historique ?',
@@ -10672,11 +10767,11 @@ const T = {
     setupNotInstalled:'Les moteurs IA ne sont pas installés. Lancer l\'installation maintenant ?',
     enginesReady:'Moteurs IA prêts',
     enginesInstalled:'Installé',
-    enginesNotInstalled:'Non installé — la séparation et la transcription sont indisponibles',
-    enginesStale:'Installation obsolète — relancer pour corriger',
+    enginesNotInstalled:'Non installé - la séparation et la transcription sont indisponibles',
+    enginesStale:'Installation obsolète - relancer pour corriger',
     runSetup:'Lancer l\'installation',
     diagnose:'Diagnostiquer', diagnoseTitle:'Diagnostic des chemins',
-    diagnoseDesc:'Vérifie quels binaires l\'application trouve — utile lorsque ffmpeg, yt-dlp, etc. ne fonctionnent pas',
+    diagnoseDesc:'Vérifie quels binaires l\'application trouve - utile lorsque ffmpeg, yt-dlp, etc. ne fonctionnent pas',
     viewLogs:'Voir les journaux', viewLogsDesc:'Journaux serveur et installation, utiles pour le débogage',
     copyToClipboard:'Copier dans le presse-papiers', copied:'Copié dans le presse-papiers',
     refresh:'Actualiser',
@@ -10908,7 +11003,7 @@ async function sendTestCrashReport() {
     const r = await fetch(API + '/sentry-test', { method: 'POST' });
     const j = await r.json();
     if (j.ok || j.event_id) {
-      // event_id was assigned even on flush timeout — that means the
+      // event_id was assigned even on flush timeout - that means the
       // SDK accepted the event; only delivery confirmation is missing.
       const idTail = j.event_id ? ' (id: ' + j.event_id.slice(0, 8) + ')' : '';
       const msg = j.warning
@@ -11498,7 +11593,7 @@ async function repairHistory(silent) {
       showAppNotification('<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-7 7 2 2 7-7a4 4 0 0 0 5.4-5.4L13 9l-2-2 2.5-2.5z"/></svg> ' + data.repaired + ' track(s) reconnected', 'done');
       // Re-render only if repairs were made AND user can see the change.
       // The silent startup scan that returns repaired=0 must NOT trigger a
-      // second render — that's the visible "jiggle" on app load.
+      // second render - that's the visible "jiggle" on app load.
       await loadHistory();
     } else if (!silent && data.broken === 0) {
       showAppNotification('All tracks are already linked', 'info');
@@ -11508,7 +11603,7 @@ async function repairHistory(silent) {
     if (data.needsReview > 0 && !silent) {
       showRepairReviewModal(data.reviewItems);
     } else if (data.needsReview > 0 && silent) {
-      // Silent startup scan — don't pop the modal but tell the user via notification
+      // Silent startup scan - don't pop the modal but tell the user via notification
       showAppNotification('<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-7 7 2 2 7-7a4 4 0 0 0 5.4-5.4L13 9l-2-2 2.5-2.5z"/></svg> ' + data.repaired + ' linked, ' + data.needsReview + ' need review',
         'info', () => showRepairReviewModal(data.reviewItems));
     }
@@ -11592,7 +11687,7 @@ async function repairFileLocations() {
 // automatic 6-hour sweep handles most cases, but if Windows Temp is
 // filling the drive (we've seen 80GB accumulate), the user wants relief
 // NOW, not in 6 hours. Confirms before running because killing in-flight
-// conversions is bad — maxAge=1h ensures we don't touch anything fresh.
+// conversions is bad - maxAge=1h ensures we don't touch anything fresh.
 async function cleanTempFiles() {
   if (!backendOnline) {
     showAppNotification(t('backendOffline'), 'err');
@@ -11631,7 +11726,7 @@ async function cleanTempFiles() {
 // ── Manual update check (Settings button) ───────────────────────────────
 // Triggered by the "Check now" button. Calls into the main-process updater
 // which pings GitHub's latest.yml. The existing onAvailable/onNone/onError
-// event handlers wired in _setupUpdater() do the heavy lifting — they pop
+// event handlers wired in _setupUpdater() do the heavy lifting - they pop
 // the update banner if a new version is found, or log "up to date"
 // silently. This handler just adds an explicit foreground toast so the
 // user gets immediate feedback on a button they clicked (the silent
@@ -11645,7 +11740,7 @@ async function manualCheckForUpdates() {
   const origDesc = desc ? desc.textContent : '';
   if (btn) { btn.disabled = true; btn.innerHTML = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> ' + t('checkingBtn'); }
   // known-benign updater errors get treated as "up to date"
-  // here too — match what updater.js does on the main side. Without
+  // here too - match what updater.js does on the main side. Without
   // this, the user clicked "Check now" and saw a red error toast even
   // for non-problems (missing latest.yml, offline, etc.).
   const isBenignUpdateError = (msg) => {
@@ -11667,7 +11762,7 @@ async function manualCheckForUpdates() {
         if (desc) desc.textContent = t('updDevOnlyLong');
       } else {
         const errMsg = (result && result.error) || 'Update check failed';
-        // Benign? Pretend we're up to date — that's functionally true.
+        // Benign? Pretend we're up to date - that's functionally true.
         if (isBenignUpdateError(errMsg)) {
           showAppNotification('' + t('updUpToDate'), 'ok');
           if (desc) desc.textContent = t('updUpToDate');
@@ -11711,7 +11806,7 @@ async function manualCheckForUpdates() {
 //   1. Which folder is biggest? (visual bar chart helps spot bloat)
 //   2. How much total space is the library using?
 //   3. Are there orphans? (audio files in the stockpile root that aren't
-//      tagged into any folder — easy to forget about)
+//      tagged into any folder - easy to forget about)
 //
 // The modal is built ad-hoc on open since this is rarely accessed and
 // keeping it out of the static HTML keeps app.js leaner.
@@ -11726,7 +11821,7 @@ async function openStorageBreakdown() {
     return;
   }
 
-  // Build modal shell first so the user sees a loading state immediately —
+  // Build modal shell first so the user sees a loading state immediately -
   // the disk walk can take ~500ms on a big library and a frozen settings
   // page in the meantime feels broken.
   let modal = document.getElementById('storage-breakdown-modal');
@@ -11775,7 +11870,7 @@ function closeStorageBreakdown() {
 // These give the warnings chips actual teeth. Each one re-opens the
 // breakdown afterwards so the user immediately sees the updated numbers.
 
-// "Locate missing files" — run the existing repair scan in review mode.
+// "Locate missing files" - run the existing repair scan in review mode.
 // Anything fuzzy-matchable gets surfaced in the repair review modal where
 // the user approves each relocation. We close the storage modal first so
 // the two modals don't stack.
@@ -11785,7 +11880,7 @@ async function storageFixMissing() {
   await repairHistory(false);
 }
 
-// "Remove dead entries" — prune history rows whose file no longer exists.
+// "Remove dead entries" - prune history rows whose file no longer exists.
 // Dry-run first to show an exact count in the confirm prompt; the server
 // only deletes on confirm=true.
 async function storagePruneMissing() {
@@ -11810,7 +11905,7 @@ async function storagePruneMissing() {
   }
 }
 
-// "Import N untagged files" — adopt orphan audio files in the stockpile
+// "Import N untagged files" - adopt orphan audio files in the stockpile
 // root into the library, then jump straight into Auto-organize so they
 // get folder suggestions in the same motion.
 // Repair-metadata (v0.2.7): fixes blank thumbnails + duration on rows
@@ -11874,7 +11969,7 @@ async function storageAdoptOrphans() {
 function renderStorageBreakdown(data) {
   const body = document.getElementById('storage-breakdown-body');
   if (!body) return;
-  // Sort folders by size descending — biggest first is what people actually
+  // Sort folders by size descending - biggest first is what people actually
   // want to see (find the bloat, decide what to thin out).
   const folders = (data.folders || []).slice().sort((a, b) => b.bytes - a.bytes);
   const maxBytes = folders.reduce((m, f) => Math.max(m, f.bytes), 0) || 1;
@@ -11893,7 +11988,7 @@ function renderStorageBreakdown(data) {
     ? `<span class="storage-chip warn">${data.untracked.files} ${data.untracked.files === 1 ? t('storOrphanOne') : t('storOrphanMany')} (${orphanMB})</span>`
     : '';
 
-  // Action buttons — the whole point of surfacing problems is letting the
+  // Action buttons - surfacing a problem should also let the
   // user fix them right here instead of hunting through Settings.
   const fixActions = [];
   if (data.missing_files > 0) {
@@ -11943,7 +12038,7 @@ function renderStorageBreakdown(data) {
   body.innerHTML = summaryHTML + folderRowsHTML;
 }
 
-// Repair review modal — shows broken history entries with the top candidate(s)
+// Repair review modal - shows broken history entries with the top candidate(s)
 // the server found via fuzzy matching. User picks "Apply" per row or "Skip".
 function showRepairReviewModal(items) {
   if (!items || !items.length) return;
@@ -12105,7 +12200,7 @@ function toggleAutoAnalyze(on) {
 
 
 // ════════════════════════════════════════════════════════════════════════════
-// Stockpile organization — style folders, mood tagging, suggestions
+// Stockpile organization - style folders, mood tagging, suggestions
 // ════════════════════════════════════════════════════════════════════════════
 
 let spFolders = [];        // cached folder list
@@ -12113,7 +12208,7 @@ let spUntagged = [];       // cached untagged track list
 let spTagsByTrack = {};    // historyId -> [tags]
 let spSuggestionsByTrack = {}; // historyId -> [suggestions]
 
-// Top-level loader — called when the Stockpile tab opens.
+// Top-level loader - called when the Stockpile tab opens.
 async function loadStockpile() {
   try {
     const [summary, folders, untagged] = await Promise.all([
@@ -12187,13 +12282,13 @@ function renderStockpileFolders() {
     grid.appendChild(card);
   }
   // Lazy-fill disk usage badges on each folder card. Single endpoint hit
-  // populates all of them in one round trip — cheaper than per-card requests
+  // populates all of them in one round trip - cheaper than per-card requests
   // and avoids the cards flickering in one by one.
   hydrateFolderCardSizes();
 }
 
 // Fetches disk usage for all folders in one call and writes the formatted
-// byte count into each card's size span. Failures are silent — the cards
+// byte count into each card's size span. Failures are silent - the cards
 // just don't get a size annotation, which is no worse than before.
 async function hydrateFolderCardSizes() {
   try {
@@ -12318,7 +12413,7 @@ async function openTagPicker(historyId) {
   // Lazy-load folders if the cache is empty. spFolders is normally
   // populated when the user visits the Stockpile tab, but they can also
   // open this picker from History without ever opening Stockpile this
-  // session — in which case spFolders is still `[]` from its initial
+  // session - in which case spFolders is still `[]` from its initial
   // declaration and the picker would show "No folders yet" even when
   // folders exist on the backend. Refetching here costs one HTTP call
   // and guarantees the picker reflects current state.
@@ -12329,7 +12424,7 @@ async function openTagPicker(historyId) {
       spFolders = j.folders || [];
     } catch (e) {
       diagLog('openTagPicker: failed to load folders: ' + e.message, 'err');
-      // Carry on — the picker will show empty state and the user can
+      // Carry on - the picker will show empty state and the user can
       // close and retry, rather than blocking on a backend hiccup.
     }
   }
@@ -12387,7 +12482,7 @@ async function openTagPicker(historyId) {
 //
 // `globalPlayer.track` holds the currently playing track metadata.
 // `globalPlayer.context` holds the playlist context (list + index) for
-// prev/next behavior. Source-agnostic — works whether the playlist came
+// prev/next behavior. Source-agnostic - works whether the playlist came
 // from a folder, history, or anywhere else.
 const globalPlayer = {
   audio: null,
@@ -12396,7 +12491,7 @@ const globalPlayer = {
   loadCounter: 0,        // monotonic counter to detect stale load callbacks
 };
 
-// Legacy aliases — the rest of the code still references these names. We
+// Legacy aliases - the rest of the code still references these names. We
 // keep them as live getters/setters that delegate to globalPlayer so the
 // refactor is incremental and safe.
 let spFvTracks = [];        // cached folder tracks (used when context.source = 'folder')
@@ -12451,7 +12546,7 @@ async function openFolderView(folder) {
     seedsRow.style.display = 'none';
   }
 
-  // Mood centroid bars — only show if the folder has tracks (centroid exists)
+  // Mood centroid bars - only show if the folder has tracks (centroid exists)
   const moodRow = document.getElementById('sp-fv-mood-row');
   let centroid = null;
   try { if (folder.mood_centroid) centroid = JSON.parse(folder.mood_centroid); } catch {}
@@ -12638,7 +12733,7 @@ function getVisibleFolderTracks() {
   return visible;
 }
 
-// The actual play logic — single entry point used everywhere.
+// The actual play logic - single entry point used everywhere.
 // `track` must have { id, title, file_path, thumbnail? }.
 // `context` is { source: 'folder'|'history'|'analyze', tracks: [...], index: N }.
 function playTrack(track, context) {
@@ -12650,7 +12745,7 @@ function playTrack(track, context) {
   // has stopped the Analyzer's Web Audio source, both ring out simultaneously.
   // The lock is a simple monotonic guard: only one transition runs at a time.
   // Concurrent calls during the lock window are ignored (latest-wins would be
-  // worse — it lets stale fetches cancel fresh ones and leave nothing playing).
+  // worse - it lets stale fetches cancel fresh ones and leave nothing playing).
   if (globalPlayer._transitionLock) {
     return;
   }
@@ -12680,7 +12775,7 @@ function playTrack(track, context) {
   const myLoad = globalPlayer.loadCounter;
   // Store the active load on the audio element itself so event handlers
   // (attached once during initial setup) can compare against the *current*
-  // load — closures captured at handler-attach time would only see the
+  // load - closures captured at handler-attach time would only see the
   // first call's myLoad forever, defeating the staleness check.
 
   // If the Analyze view is currently playing audio, stop it. They share
@@ -12694,7 +12789,7 @@ function playTrack(track, context) {
       stopAudio();
     } catch {}
   }
-  // Also exit mirror mode silently — we're taking over with the global player
+  // Also exit mirror mode silently - we're taking over with the global player
   if (typeof analyzeMirrorActive !== 'undefined' && analyzeMirrorActive) {
     analyzeMirrorActive = false;
     if (typeof analyzeMirrorRaf !== 'undefined' && analyzeMirrorRaf) {
@@ -12709,7 +12804,7 @@ function playTrack(track, context) {
   // close the in-flight HTTP stream gracefully (avoids the rapid-fire
   // ECANCELED errors that were thrashing the server log).
   // We set a flag so the 'error' event triggered by removeAttribute('src')
-  // is ignored — that's a teardown artifact, not a real audio error.
+  // is ignored - that's a teardown artifact, not a real audio error.
   if (globalPlayer.audio) {
     globalPlayer._tearingDown = true;
     try { globalPlayer.audio.pause(); } catch {}
@@ -12720,7 +12815,7 @@ function playTrack(track, context) {
   // Lazily create the audio element once. We attach listeners that check
   // globalPlayer._currentLoad to detect stale callbacks. (We can't use a
   // closure-captured myLoad because the handler is attached only on first
-  // creation — that closure would freeze its myLoad value forever.)
+  // creation - that closure would freeze its myLoad value forever.)
   if (!globalPlayer.audio) {
     globalPlayer.audio = new Audio();
     globalPlayer.audio.preload = 'metadata';
@@ -12757,7 +12852,7 @@ function playTrack(track, context) {
   globalPlayer.audio.src = API + '/file?path=' + encodeURIComponent(track.file_path);
   applyVolumeToAudio();
   globalPlayer.audio.play().catch(err => {
-    // The play() promise rejects when src changes mid-load — that's normal
+    // The play() promise rejects when src changes mid-load - that's normal
     // during track-switching, not a real error. Only surface if our load
     // counter is still current AND we still have a track set.
     if (myLoad !== globalPlayer._currentLoad) return;
@@ -12792,7 +12887,7 @@ function showMiniPlayerForTrack(track) {
   // Otherwise call the load path that the History → Analyzer flow uses
   // (which goes through loadAudioBuffer and uses the _handoffTime bridge).
   const openInAnalyzer = () => {
-    // Same transition lock as playTrack — blocks spam-clicks from kicking
+    // Same transition lock as playTrack - blocks spam-clicks from kicking
     // off parallel fetches that would double up the audio.
     if (globalPlayer._transitionLock) return;
     globalPlayer._transitionLock = true;
@@ -12806,7 +12901,7 @@ function showMiniPlayerForTrack(track) {
       const wasMiniPlaying = globalPlayer.audio && !globalPlayer.audio.paused;
       const miniTime = globalPlayer.audio ? globalPlayer.audio.currentTime : 0;
       // Stop the mini player to free the audio output for Analyzer.
-      // CRITICAL: hard-stop — pause + remove src + load. Just pausing leaves
+      // CRITICAL: hard-stop - pause + remove src + load. Just pausing leaves
       // the audio element in a state where it can resume on the next play()
       // call mid-transition.
       if (globalPlayer.audio) {
@@ -12845,7 +12940,7 @@ function showMiniPlayerForTrack(track) {
       }
       return;
     }
-    // Different track or no audioBuf yet — full reload via loadFromHistory.
+    // Different track or no audioBuf yet - full reload via loadFromHistory.
     // The _handoffTime bridge in loadAudioBuffer will sync the timestamp.
     if (track.id) {
       if (typeof folderViewOpenAnalysis === 'function' && spFvFolder) {
@@ -12918,7 +13013,7 @@ function showMiniPlayerForTrack(track) {
   setupMediaSessionForTrack(track);
 }
 
-// MediaSession API — exposes the current track to the OS so that physical
+// MediaSession API - exposes the current track to the OS so that physical
 // media keys (Play/Pause, Next, Previous) and Bluetooth headphone buttons
 // control the global player. Only needs setting up once per track.
 function setupMediaSessionForTrack(track) {
@@ -12981,7 +13076,7 @@ function updatePrevNextButtons() {
 // on a different tab) or if the row is already in view.
 // respect the mini player's scroll-lock toggle. When the user
 // turns it OFF, they're explicitly opting to keep browsing History
-// while skipping tracks in the background — don't yank the scroll.
+// while skipping tracks in the background - don't yank the scroll.
 function scrollLockEnabled() {
   // Stored as '0' for OFF; anything else (including absent) means ON.
   return localStorage.getItem('freqphull.scrollLock') !== '0';
@@ -13014,7 +13109,7 @@ function _scrollActiveRowIntoView() {
 
 function globalPlayerPrev() {
   // Mirror mode: walk the Analyzer playlist (set by playFromHistory). The
-  // Analyzer remains the audio source — we just swap the loaded track.
+  // Analyzer remains the audio source - we just swap the loaded track.
   if (analyzeMirrorActive) {
     if (!analyzePlaylist || !analyzePlaylist.tracks || analyzePlaylist.index <= 0) {
       showAppNotification(t('miniNoPrev') || 'No previous track', 'info');
@@ -13042,7 +13137,7 @@ function globalPlayerPrev() {
 }
 function globalPlayerNext() {
   // Mirror mode: walk the Analyzer playlist (set by playFromHistory). The
-  // Analyzer remains the audio source — we just swap the loaded track.
+  // Analyzer remains the audio source - we just swap the loaded track.
   if (analyzeMirrorActive) {
     if (!analyzePlaylist || !analyzePlaylist.tracks || analyzePlaylist.tracks.length === 0) {
       showAppNotification(t('miniNoNext') || 'No next track', 'info');
@@ -13050,7 +13145,7 @@ function globalPlayerNext() {
     }
     let nextIdx;
     if (shuffleMode && analyzePlaylist.tracks.length > 1) {
-      // Random pick — avoid the current track so we always move
+      // Random pick - avoid the current track so we always move
       do { nextIdx = Math.floor(Math.random() * analyzePlaylist.tracks.length); }
       while (nextIdx === analyzePlaylist.index);
     } else {
@@ -13254,7 +13349,7 @@ async function loadMiniNotepad(historyId) {
   if (titleEl && tr) {
     titleEl.textContent = (t('miniNotesFor') || 'Notes —') + ' ' + (tr.title || '').slice(0, 40);
   }
-  // Pull fresh notes from server — they may have been edited from elsewhere
+  // Pull fresh notes from server - they may have been edited from elsewhere
   try {
     const r = await fetch(API + '/history');
     const all = await r.json();
@@ -13298,7 +13393,7 @@ async function saveMiniNotepad() {
 // end with no next, or when an unrecoverable error occurs.
 function stopGlobalPlay() {
   // If we're in mirror mode (Analyze drives the audio), the × button
-  // should pause Analyze and hide the mirror — not stop our own audio.
+  // should pause Analyze and hide the mirror - not stop our own audio.
   if (analyzeMirrorActive) {
     if (typeof playing !== 'undefined' && playing && typeof stopAudio === 'function') {
       try { stopAudio(); } catch {}
@@ -13382,7 +13477,7 @@ function updateMiniPlayerTime() {
 
 // ── Seek bar interaction ──────────────────────────────────────────────────
 // Click anywhere on the bar to jump there. Hold-and-drag for fine scrubbing
-// (Spotify behavior — we update the visual immediately but only commit the
+// (Spotify behavior - we update the visual immediately but only commit the
 // audio.currentTime on release).
 let spFvSeekDragging = false;
 
@@ -13443,7 +13538,7 @@ function seekPreview(evt) {
   const thumb = document.getElementById('sp-fv-mini-seek-thumb');
   if (fill)  fill.style.width = (pct * 100) + '%';
   if (thumb) thumb.style.left = (pct * 100) + '%';
-  // Live time preview during drag — show the time we'd seek to, not the
+  // Live time preview during drag - show the time we'd seek to, not the
   // current playback time. Use the appropriate duration source.
   const curEl = document.getElementById('sp-fv-mini-time-cur');
   if (curEl) {
@@ -13512,7 +13607,7 @@ function updateVolumeUI() {
     if (spFvVolume === 0) btn.classList.add('muted');
     else btn.classList.remove('muted');
   }
-  // Swap the icon glyph based on volume level — gives a quick visual cue
+  // Swap the icon glyph based on volume level - gives a quick visual cue
   if (icon) {
     if (spFvVolume === 0) {
       icon.innerHTML = '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>';
@@ -13592,7 +13687,7 @@ function folderViewToggleMute() {
 // Initial volume load happens on first DOMContentLoaded
 window.addEventListener('DOMContentLoaded', () => {
   spFvLoadVolume();
-  // Wire up drag handlers — these are only created once even though the
+  // Wire up drag handlers - these are only created once even though the
   // mini player can show/hide many times.
   spFvSeekDragSetup();
   spFvVolumeDragSetup();
@@ -13604,7 +13699,7 @@ window.addEventListener('DOMContentLoaded', () => {
   // which means the blue focus ring (which appears the instant focus
   // lands, separately from CSS `outline`) is never drawn in the first
   // place. CSS-only suppression doesn't catch every Electron build's
-  // ring — this is the only approach that works universally.
+  // ring - this is the only approach that works universally.
   const player = document.getElementById('sp-fv-mini-player');
   if (player) {
     player.addEventListener('mousedown', (e) => {
@@ -13617,9 +13712,9 @@ window.addEventListener('DOMContentLoaded', () => {
 
 // Global keyboard shortcuts that apply across the whole app (not just
 // when the mini player is open). Tab back/forward navigation works
-// anywhere, anytime — like browser shortcuts.
+// anywhere, anytime - like browser shortcuts.
 
-// v0.4.1: Global keyboard shortcuts.
+// Global keyboard shortcuts.
 // Esc -> close any open modal/overlay, then unfocus search inputs
 // '/' -> focus the visible search input
 // Ctrl+1..9 -> switch tabs by index
@@ -13632,7 +13727,7 @@ window.addEventListener('DOMContentLoaded', () => {
     const overlay = document.querySelector('.modal-overlay:not(.hidden)');
     if (overlay) return overlay;
     const setup = Array.from(document.querySelectorAll('.setup-modal')).find(el => {
-      // setup-modal is created and appended on demand — assume any in DOM is open
+      // setup-modal is created and appended on demand - assume any in DOM is open
       const style = el.style && el.style.display;
       return style !== 'none';
     });
@@ -13734,9 +13829,9 @@ window.addEventListener('keydown', (e) => {
 //     Spacebar → audio.play()/.pause(). Seek arrows → audio.currentTime.
 //
 // The old check `if (!globalPlayer.audio || !globalPlayer.track) return` killed
-// shortcuts in mirror mode entirely — the spacebar bug Real reported.
+// shortcuts in mirror mode entirely - the spacebar bug Real reported.
 window.addEventListener('keydown', (e) => {
-  // DAW overlay owns the keyboard when open — don't fire global shortcuts.
+  // DAW overlay owns the keyboard when open - don't fire global shortcuts.
   if (document.getElementById('daw-overlay')) return;
   const player = document.getElementById('sp-fv-mini-player');
   if (!player || player.classList.contains('hidden')) return;
@@ -13753,7 +13848,7 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     if (isMirror) {
       // Toggle the Analyzer playback directly. folderViewTogglePlay is the
-      // stockpile-folder preview player — not what we want here.
+      // stockpile-folder preview player - not what we want here.
       if (playing) {
         if (typeof stopAudio === 'function') stopAudio();
       } else {
@@ -13800,7 +13895,7 @@ window.addEventListener('keydown', (e) => {
   } else if (e.code === 'ArrowLeft' && !e.altKey && !e.shiftKey) {
     // ← jumps to previous track (was Ctrl+← only; promoted to
     // bare ← because that's what users actually expect from a media
-    // player. Alt+← still seeks back 5s — handled above.)
+    // player. Alt+← still seeks back 5s - handled above.)
     e.preventDefault();
     globalPlayerPrev();
   } else if (e.code === 'ArrowRight' && !e.altKey && !e.shiftKey) {
@@ -13838,7 +13933,7 @@ async function folderViewUntag(trackId) {
 }
 
 async function folderViewRetag(trackId) {
-  // Open the existing tag picker — it shows all folders and applies new
+  // Open the existing tag picker - it shows all folders and applies new
   // primary tag. After they pick, refresh the list (the track may no longer
   // be in this folder, depending on whether the new pick replaced or added).
   await openTagPicker(trackId);
@@ -13886,7 +13981,7 @@ async function folderViewOpenAnalysis(trackId) {
   folderViewStopPlay();
 
   // loadFromHistory looks up the row in histData. If we never visited the
-  // History tab this session, that array may be empty — populate it first.
+  // History tab this session, that array may be empty - populate it first.
   if (!histData || !histData.length) {
     try {
       histData = await (await fetch(API + '/history')).json();
@@ -13979,7 +14074,7 @@ async function submitCreateFolder() {
       headers: {'Content-Type': 'application/json'},
       // stockpile_root is only meaningful on PUT (rename triggers an
       // on-disk folder rename + history.file_path updates). Sending it
-      // on POST is harmless — the create endpoint ignores it.
+      // on POST is harmless - the create endpoint ignores it.
       body: JSON.stringify({
         name, description: desc, artist_seeds: seeds,
         stockpile_root: stockpileFolder || undefined,
@@ -13988,7 +14083,7 @@ async function submitCreateFolder() {
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'Failed');
     closeCreateFolderDialog();
-    // Suggestions cache must be flushed — new folder might match existing untagged tracks.
+    // Suggestions cache must be flushed - new folder might match existing untagged tracks.
     spSuggestionsByTrack = {};
 
     const folderId = (j.folder && j.folder.id) || (editId ? parseInt(editId, 10) : null);
@@ -14030,7 +14125,7 @@ async function deleteFolder(id) {
   try {
     // Send stockpile_root so the backend can move any files currently
     // living inside this folder's dir back to the stockpile root before
-    // dropping the folder. Otherwise tracks would be "orphaned" — their
+    // dropping the folder. Otherwise tracks would be "orphaned" - their
     // file_path would still point inside a directory that's about to be
     // empty (or removed). Files are never deleted, only relocated.
     const root = stockpileFolder ? '?stockpile_root=' + encodeURIComponent(stockpileFolder) : '';
@@ -14044,7 +14139,7 @@ async function deleteFolder(id) {
   }
 }
 
-// Helper used in many places — escape HTML for safe insertion.
+// Helper used in many places - escape HTML for safe insertion.
 // The app already has escapeHtml defined elsewhere; this is a fallback.
 if (typeof escapeHtml !== 'function') {
   window.escapeHtml = function(s) {
@@ -14182,7 +14277,7 @@ function selectAllMatches(folderId, on) {
     document.querySelectorAll('#sp-match-body .sp-match-row').forEach(row => {
       const cb = row.querySelector('input[type=checkbox]');
       if (cb && cb.onchange) {
-        // Re-derive the trackId from the onchange handler text — cheaper than DOM walking
+        // Re-derive the trackId from the onchange handler text - cheaper than DOM walking
         const m = (cb.outerHTML.match(/toggleMatchSelection\(\d+,\s*(\d+)/) || [])[1];
         if (m) sel.add(parseInt(m, 10));
       }
@@ -14233,7 +14328,7 @@ window.addEventListener('keydown', (e) => {
       (e.target && e.target.isContentEditable)) return;
   // Only when stems tab is active
   if (lastTab !== 'stems') return;
-  // If the mini-DAW overlay is open, it owns keyboard input — don't fire
+  // If the mini-DAW overlay is open, it owns keyboard input - don't fire
   // mixer shortcuts too or the user gets double-actions (Space starts BOTH
   // the DAW playback and the legacy mixer playback simultaneously).
   if (document.getElementById('daw-overlay')) return;
@@ -14292,13 +14387,13 @@ window.addEventListener('keydown', (e) => {
 // has three logical states; each maps to a specific look and a primary
 // button action:
 //
-//   AVAILABLE   — "Update X.Y.Z available"          [Install] [Later]
-//   DOWNLOADING — "Downloading… N%" + progress bar  [Cancel ] [Later]  (no cancel impl in v1)
-//   READY       — "Update X.Y.Z ready"              [Restart] [Later]
+//   AVAILABLE   - "Update X.Y.Z available"          [Install] [Later]
+//   DOWNLOADING - "Downloading… N%" + progress bar  [Cancel ] [Later]  (no cancel impl in v1)
+//   READY       - "Update X.Y.Z ready"              [Restart] [Later]
 //
 // Banner show/hide uses a two-class system:
-//   .hidden  — display:none, gone entirely
-//   .out     — display still flex but opacity:0 translateX(20px); transitions
+//   .hidden  - display:none, gone entirely
+//   .out     - display still flex but opacity:0 translateX(20px); transitions
 //              to that state. Use this BEFORE adding .hidden so the exit
 //              animation runs. Show flow does the reverse: remove .hidden,
 //              force a reflow, then remove .out so the entrance animates.
@@ -14315,7 +14410,7 @@ let _updateBannerEl = null;
 
 function _setupUpdater() {
   if (!window.api || !window.api.updater) {
-    // Dev mode or broken preload — nothing to wire.
+    // Dev mode or broken preload - nothing to wire.
     return;
   }
   _updateBannerEl = document.getElementById('update-banner');
@@ -14348,7 +14443,7 @@ function _setupUpdater() {
   });
 
   window.api.updater.onError(info => {
-    // Quiet failure — log to diag panel only. Don't pop a banner; users
+    // Quiet failure - log to diag panel only. Don't pop a banner; users
     // shouldn't see "update check failed" noise.
     if (typeof diagLog === 'function') {
       diagLog('Updater: ' + (info && info.message || 'unknown error'), 'warn');
@@ -14379,7 +14474,7 @@ function _setupUpdater() {
 
   // Pull-based catch-up: if the main process already found an update
   // BEFORE these listeners attached (boot check beating a slow renderer),
-  // that IPC event is gone — fetch the cached payload instead. Belt and
+  // that IPC event is gone - fetch the cached payload instead. Belt and
   // suspenders with the main-side did-finish-load replay.
   if (typeof window.api.updater.getPending === 'function') {
     window.api.updater.getPending().then(info => {
@@ -14476,14 +14571,14 @@ function _renderUpdateBannerProgress(p) {
 async function onUpdateBannerPrimary() {
   if (!window.api || !window.api.updater) return;
   if (_updateState === 'AVAILABLE') {
-    // Start downloading — flip to DOWNLOADING state, kick off the download.
+    // Start downloading - flip to DOWNLOADING state, kick off the download.
     // Progress events from main will drive the progress bar.
     _updateState = 'DOWNLOADING';
     _renderUpdateBanner();
     try {
       const result = await window.api.updater.download();
       if (!result || !result.ok) {
-        // Download failed — surface as a notification + revert to AVAILABLE
+        // Download failed - surface as a notification + revert to AVAILABLE
         if (typeof showAppNotification === 'function') {
           showAppNotification('Update download failed: ' + (result && result.error || 'unknown'), 'err', null, 6000);
         }
@@ -14504,7 +14599,7 @@ async function onUpdateBannerPrimary() {
     // the HK updater window in INSTALLING state first. It shows a
     // full-screen branded "installing update X.X.X..." overlay with
     // a progress indicator. Once that window is visible we ask main
-    // process to call quitAndInstall() — which (with oneClick: true)
+    // process to call quitAndInstall() - which (with oneClick: true)
     // runs NSIS silently in the background. The branded window stays
     // up until the app quits, so the user never sees a Windows
     // wizard dialog. They see HK branding → app reappears on new
@@ -14539,7 +14634,7 @@ function onUpdateBannerLater() {
   _hideUpdateBanner();
 }
 
-// (v0.2.2's installGlobalSpaceKey was REMOVED in v0.2.4 — it double-
+// (v0.2.2's installGlobalSpaceKey was REMOVED in v0.2.4 - it double-
 // fired with the proper mode-aware mini-player keyboard handler below
 // at the "Keyboard shortcuts when the mini player is active" block.
 // Its button.click() approach also targeted folderViewTogglePlay() in
@@ -14549,7 +14644,7 @@ function onUpdateBannerLater() {
 // very first click outside the URL field.)
 // tiny mousedown handler that records where on a primary button
 // the user clicked, so the ::before ripple in CSS originates there
-// instead of the geometric center. Composite-only — no DOM injection.
+// instead of the geometric center. Composite-only - no DOM injection.
 (function installPrimaryButtonRipple(){
   // passive=true tells the browser we won't preventDefault,
   // so it can dispatch this on the compositor thread without waiting
@@ -14563,7 +14658,7 @@ function onUpdateBannerLater() {
   }, { capture: true, passive: true });
 })();
 
-// Settings sections — collapsible categories. Persisted state
+// Settings sections - collapsible categories. Persisted state
 // in localStorage so user choices survive across sessions. Defaults are
 // opinionated: "general", "library", "maintenance", "updates" open;
 // the rest collapsed so the page isn't overwhelming on first load.
@@ -14723,10 +14818,10 @@ if (typeof window.reportSoftError !== 'function') {
 // Every popup (Logs, Storage breakdown, Auto-organize, Duplicate finder,
 // Diagnose paths, Repair review, bulk-tag picker…) shares the
 // `.setup-modal` backdrop class. Clicking the dimmed area around the card
-// now closes the popup — no need to hunt for the close button.
+// now closes the popup - no need to hunt for the close button.
 //
 // Exclusions:
-//   • #setup-modal — the first-run engine setup. Dismissing that
+//   • #setup-modal - the first-run engine setup. Dismissing that
 //     mid-install by a stray click would be destructive, so it keeps
 //     requiring an explicit button.
 // Special cases:
@@ -14749,7 +14844,7 @@ if (typeof window.reportSoftError !== 'function') {
     }
     el.style.display = 'none';
   }, true);
-  // Esc closes the top-most visible popup too — same exclusions.
+  // Esc closes the top-most visible popup too - same exclusions.
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     const open = Array.from(document.querySelectorAll('.setup-modal'))

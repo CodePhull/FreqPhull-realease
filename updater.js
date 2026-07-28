@@ -4,13 +4,13 @@
 // for CodePhull/FreqPhull-realease. The `publish` block in package.json
 // also points here so the same config drives BOTH directions:
 //   • At RELEASE time, electron-builder uploads to that repo (manually for
-//     now — we drag the .exe + .yml in. Could automate later via GH Action.)
+//     now - we drag the .exe + .yml in. Could automate later via GH Action.)
 //   • At RUN time, the installed app checks the same repo for newer versions.
 //
 // Flow shown to the user:
 //   1. On startup + every 4 hours, silently check for updates
 //   2. If newer version found → IPC to renderer: 'update-available' with version + notes
-//   3. Renderer shows a banner: "Update available — Install / Later"
+//   3. Renderer shows a banner: "Update available - Install / Later"
 //   4. If user clicks Install, IPC 'update-download-start' → updater downloads
 //      in background, sending progress via 'update-download-progress'
 //   5. When done → 'update-downloaded' → banner becomes "Restart to install"
@@ -26,7 +26,7 @@ let mainLog = console.log;     // overridden via setLog()
 let mainWin = null;            // overridden via setWindow()
 let manualCheckInProgress = false;
 // Last 'update-available' payload. IPC events fired before the renderer's
-// listeners attach are simply LOST — that's the "no update detected at
+// listeners attach are simply LOST - that's the "no update detected at
 // launch" bug: the 8s boot check could beat slow renderer boots (engine
 // setup, first-run, cold disk) and its event evaporated. We cache the
 // payload, replay it on every did-finish-load, and expose it via
@@ -99,7 +99,7 @@ function setupUpdater(opts) {
   if (opts && opts.log) mainLog = opts.log;
   if (opts && opts.win) mainWin = opts.win;
 
-  // Don't run in dev/unpackaged mode — there's nothing to update.
+  // Don't run in dev/unpackaged mode - there's nothing to update.
   // electron-updater would throw on missing app-update.yml otherwise.
   if (!require('electron').app.isPackaged) {
     mainLog('[updater] dev mode — skipping auto-update setup');
@@ -119,11 +119,11 @@ function setupUpdater(opts) {
     debug: (msg) => {} // too noisy
   };
 
-  // We control the download manually — the user clicks "Install" to trigger.
+  // We control the download manually - the user clicks "Install" to trigger.
   // Auto-downloading without consent is bad UX on a CPU/IO/bandwidth sensitive
   // app like this one (separator running, download in flight, etc.).
   autoUpdater.autoDownload = false;
-  // After download, we DON'T auto-install — the user clicks "Restart".
+  // After download, we DON'T auto-install - the user clicks "Restart".
   autoUpdater.autoInstallOnAppQuit = true;
 
   // ── Event wiring → renderer IPC ──────────────────────────────────────────
@@ -230,7 +230,7 @@ function setupUpdater(opts) {
     };
   });
   // Pull-based fallback: the renderer asks "did a check already find
-  // something before my listeners attached?" — used right after
+  // something before my listeners attached?" - used right after
   // _setupUpdater wires its event handlers.
   ipcMain.handle('updater:getPending', () => lastAvailableInfo);
 
@@ -255,16 +255,16 @@ function setupUpdater(opts) {
   // info-level (verbose log only) instead of error-level so the logs
   // don't fill up with red flags for a non-problem. Same for the interval
   // check below. All other errors still log as errors.
-  // classify "benign" updater errors — conditions where there's
+  // classify "benign" updater errors - conditions where there's
   // genuinely no update the user can install, even though electron-updater
   // technically raised an error. Treating these as errors spams users
   // with red toasts that mean nothing actionable. Instead we downgrade
   // them to "up to date".
-  //   • "no published versions" — release page is empty (dev only)
-  //   • "Cannot find latest.yml" — release exists but the YAML manifest
+  //   • "no published versions" - release page is empty (dev only)
+  //   • "Cannot find latest.yml" - release exists but the YAML manifest
   //     electron-builder uses is missing from the assets. Common when
   //     a release is published manually (e.g. just the .exe attached).
-  //   • Net::ERR_INTERNET_DISCONNECTED / ENOTFOUND — user is offline; not
+  //   • Net::ERR_INTERNET_DISCONNECTED / ENOTFOUND - user is offline; not
   //     a problem with the app, will retry on next interval.
   const isBenignUpdaterError = (e) => {
     const m = e && e.message;
@@ -279,7 +279,7 @@ function setupUpdater(opts) {
   // boot check fires SOONER (1500ms vs 8s) so users see the
   // update prompt almost immediately on launch. A 'checking' event is
   // also sent to the renderer for a brief status indicator so it's
-  // visible that we're checking — silent boot was confusing users.
+  // visible that we're checking - silent boot was confusing users.
   setTimeout(() => {
     send('checking-for-update', { source: 'boot' });
     autoUpdater.checkForUpdates().catch(e => {
@@ -308,7 +308,7 @@ function setupUpdater(opts) {
   setInterval(() => {
     autoUpdater.checkForUpdates().catch(e => {
       if (isNoReleasesError(e)) {
-        // Don't log on every interval — would spam ~6 messages/day.
+        // Don't log on every interval - would spam ~6 messages/day.
         // The startup log already captured this state.
         return;
       }

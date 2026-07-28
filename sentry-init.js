@@ -131,7 +131,7 @@ function init(processKind, release, opts = {}) {
     Sentry.init(commonOptions(release));
     return Sentry;
   } catch (e) {
-    // Package not installed or init failure — don't take the app down.
+    // Package not installed or init failure - don't take the app down.
     if (typeof console !== 'undefined' && console.warn) {
       console.warn('Sentry init skipped:', e && e.message);
     }
@@ -146,7 +146,7 @@ function init(processKind, release, opts = {}) {
 // Per-category rate limit prevents a single broken machine from
 // hammering the Sentry quota: max 10 events per category per hour,
 // per process. Sentry's own quota guard is the safety net but doesn't
-// let us prioritize categories — this does.
+// let us prioritize categories - this does.
 
 const RATE_MAX = 10;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
@@ -197,7 +197,7 @@ function reportSoftError(processKind, category, error, context) {
     Sentry.withScope((scope) => {
       scope.setLevel('warning');
       scope.setTag('category', category);
-      // Group by category, not by message — "exit 1" vs "exit 9009"
+      // Group by category, not by message - "exit 1" vs "exit 9009"
       // shouldn't fragment the dashboard into single-event issues.
       scope.setFingerprint([category]);
       // Machine context on every event. Cheap to gather, and it's the

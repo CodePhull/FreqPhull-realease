@@ -212,11 +212,48 @@ function checkBackend(){
 
 // ══════════════════════════════════════════════════════════════
 // YOUTUBE CARD
+// v4.3.2: graceful 404 fallback for stored thumbnail URLs. Old
+// history rows can have maxresdefault.jpg URLs that 404 if the source
+// video doesn't have an HD upload. Fall back to hqdefault.jpg (which
+// always exists for any YouTube video), then to the no-thumb tile.
+function fphThumbFallback(img) {
+  if (!img || img.dataset.fallbackTried) {
+    // already tried fallback - hide and show the no-thumb tile
+    if (img && img.parentNode) {
+      const div = document.createElement('div');
+      div.className = 'hr-thumb hr-nothumb';
+      img.parentNode.replaceChild(div, img);
+    }
+    return;
+  }
+  img.dataset.fallbackTried = '1';
+  // Try swapping max → hq, default → mq, etc.
+  const src = img.src || '';
+  if (src.indexOf('maxresdefault') !== -1) {
+    img.src = src.replace('maxresdefault', 'hqdefault');
+  } else if (src.indexOf('sddefault') !== -1) {
+    img.src = src.replace('sddefault', 'hqdefault');
+  } else if (src.indexOf('hqdefault') !== -1) {
+    img.src = src.replace('hqdefault', 'mqdefault');
+  } else {
+    // Unknown URL pattern - just hide
+    if (img.parentNode) {
+      const div = document.createElement('div');
+      div.className = 'hr-thumb hr-nothumb';
+      img.parentNode.replaceChild(div, img);
+    }
+  }
+}
+
 // ══════════════════════════════════════════════════════════════
 function showYT(d){
   $('yttitle').textContent=d.title||'—';
   $('ytch').textContent=d.channel||'';
-  if(d.thumbnail)$('ytimg').src=d.thumbnail;
+  if(d.thumbnail){
+    const ytimg = $('ytimg');
+    ytimg.onerror = function() { fphThumbFallback(this); };
+    ytimg.src = d.thumbnail;
+  }
   ytUrl=d.url||'';
   $('ytcard').classList.remove('hide');
   maybeShowPlaylistLink();
@@ -617,7 +654,11 @@ function startDownload(item){
   const es=new EventSource(API+'/download?'+params);
 
   es.addEventListener('progress',e=>{
-    const p=JSON.parse(e.data).progress;
+    const ev=JSON.parse(e.data);
+    const p=ev.progress;
+    // Monotonic guard: SSE can reorder around the download-to-convert
+    // handoff, and the bar should never move backwards.
+    if(typeof item.progress==='number' && p<item.progress) return;
     item.progress = p;
     updateGlobalProg();
     // Update just this row's progress bar without re-rendering the
@@ -625,7 +666,7 @@ function startDownload(item){
     const bar = document.querySelector(`.qi[data-id="${item.id}"] .qbar`);
     if(bar) bar.style.width = Math.round(p)+'%';
     const meta = document.querySelector(`.qi[data-id="${item.id}"] .qmeta span:not(.qfmt)`);
-    if(meta) meta.textContent = 'Downloading… '+Math.round(p)+'%';
+    if(meta) meta.textContent = ev.phase==='converting' ? 'Converting…' : ('Downloading… '+Math.round(p)+'%');
   });
 
   es.addEventListener('status',e=>{
@@ -1214,7 +1255,7 @@ function renderHist(){const q=($('hsrch')?.value||'').toLowerCase(),l=$('hlist')
 const prevSeen = _lastSeenHistId;
 const maxId = rows.reduce((m,h)=>Math.max(m, h.id||0), 0);
 l.innerHTML=rows.map((h,i)=>{
-  const thumb=h.thumbnail?'<img class="hr-thumb" src="'+h.thumbnail+'" alt=""/>':'<div class="hr-thumb hr-nothumb"></div>';
+  const thumb=h.thumbnail?'<img class="hr-thumb" src="'+h.thumbnail+'" alt="" onerror="fphThumbFallback(this)"/>':'<div class="hr-thumb hr-nothumb"></div>';
   const bpm=h.bpm?Math.round(h.bpm):'';
   const key=h.key_note?(h.key_note+' '+(h.key_mode||'')):'';
   const dur=h.duration?Math.round(h.duration)+'s':'';

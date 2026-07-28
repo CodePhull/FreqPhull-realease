@@ -1,0 +1,53 @@
+name: release
+
+# Push a tag like v0.6.2 and this builds + attaches everything to a
+# draft GitHub release. No local tokens, no manual uploads — the
+# GITHUB_TOKEN below is provided automatically by Actions.
+#
+# One-time setup in the repo: Settings > Secrets and variables >
+# Actions > New repository secret:
+#   SENTRY_DSN = your Sentry DSN (the https://...ingest...sentry.io/... URL)
+# Without it the build still succeeds — crash reporting is just inactive.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # needed to create the release + upload assets
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Fetch bundled binaries (yt-dlp, ffmpeg)
+        run: cmd /c Download-Binaries.bat
+        continue-on-error: true   # build proceeds; setup can self-heal binaries
+
+      - name: Write Sentry config
+        if: ${{ secrets.SENTRY_DSN != '' }}
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        shell: pwsh
+        run: |
+          @{ dsn = $env:SENTRY_DSN } | ConvertTo-Json | Set-Content -Path sentry.config.json -Encoding utf8
+          Write-Host "sentry.config.json written"
+
+      - name: Build and publish draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win --x64 --publish always
+
+      - name: List artifacts
+        shell: pwsh
+        run: Get-ChildItem dist | Format-Table Name, Length

@@ -127,7 +127,7 @@ def detect_bpm(samples, sr):
     try:
         return _bpm_v11_correct(samples, sr, v10_bpm)
     except Exception as e:
-        # If correction fails, fall back to v10 result — never worse than before
+        # If correction fails, fall back to v10 result - never worse than before
         sys.stderr.write(f'BPM v11 correction error (using v10): {e}\n')
         return v10_bpm
 
@@ -151,7 +151,7 @@ def _bpm_v11_correct(samples, sr, candidate_bpm):
         mono = resample_poly(mono, 22050, sr)
     sr2 = 22050
 
-    # Use the central 60 seconds (or whole track if shorter) — the verses
+    # Use the central 60 seconds (or whole track if shorter) - the verses
     # tend to have the cleanest beat. Skip first 5s (intro) when long enough.
     total_s = len(mono) / sr2
     if total_s > 70:
@@ -308,7 +308,7 @@ def _bpm_v11_correct(samples, sr, candidate_bpm):
         kick_agree = beat_agreement(c, kick_peaks)
         snare_agree = beat_agreement(c, snare_peaks)
         # Snare typically falls on backbeat (every other beat at the candidate
-        # rate), so we also check 2× — if 2×c agrees better with snares than
+        # rate), so we also check 2× - if 2×c agrees better with snares than
         # c does, that argues for c being the half-note rate.
         # Combined score: kick weighted higher than snare since kick is the pulse
         score = (kick_agree * 1.0 + snare_agree * 0.6) * tempo_prior(c)
@@ -316,7 +316,7 @@ def _bpm_v11_correct(samples, sr, candidate_bpm):
         if score > best_score:
             best_score, best_bpm = score, c
 
-    # Log for debugging — appears in stderr next to v10
+    # Log for debugging - appears in stderr next to v10
     sys.stderr.write(f'BPM v11: candidate={candidate_bpm:.2f} → best={best_bpm:.2f} '
                      f'(scored {len(candidates)} candidates)\n')
     for c, s, k, sn in sorted(scores_log, key=lambda x: -x[1])[:5]:
@@ -612,11 +612,11 @@ def _detect_bpm_v10(samples, sr):
                 agree_count += 1
 
         if agree_count >= 3:
-            # All three agree — very high confidence, use onset (most precise)
+            # All three agree - very high confidence, use onset (most precise)
             final_bpm = bpm_onset
             final_weight = sc_onset * 1.5  # strong agreement bonus
         elif agree_count == 2:
-            # Two agree — find which two and use the one with higher score
+            # Two agree - find which two and use the one with higher score
             pairs = []
             for i in range(3):
                 for j in range(i+1, 3):
@@ -635,7 +635,7 @@ def _detect_bpm_v10(samples, sr):
                 final_bpm = bpm_onset
                 final_weight = sc_onset
         else:
-            # No agreement — trust the method with highest score
+            # No agreement - trust the method with highest score
             candidates.sort(key=lambda x: x[1], reverse=True)
             final_bpm = candidates[0][0]
             final_weight = candidates[0][1] * 0.8  # low confidence penalty
@@ -695,11 +695,11 @@ def _detect_bpm_v10(samples, sr):
             canonical.append(c)
         # Weight by segment strength
         if abs(canonical[0] - canonical[1]) < 3.0:
-            # Agreement — weighted average
+            # Agreement - weighted average
             wsum = segment_bpms[0] * segment_weights[0] + segment_bpms[1] * segment_weights[1]
             return round(float(wsum / (segment_weights[0] + segment_weights[1] + 1e-10)), 1)
         else:
-            # Disagreement — pick the one with higher weight
+            # Disagreement - pick the one with higher weight
             idx = 0 if segment_weights[0] >= segment_weights[1] else 1
             return round(float(segment_bpms[idx]), 1)
     else:
@@ -835,13 +835,13 @@ def _load_key_model():
 # ── Main key detection ────────────────────────────────────────────────────────
 def detect_key(samples, sr):
     global _KEY_MODEL
-    # Use up to 90s for key detection (was 60s — misses key info in longer intros)
+    # Use up to 90s for key detection (was 60s - misses key info in longer intros)
     max_len = min(len(samples), sr * 90)
     mono = samples[:max_len].astype(np.float64)
     p = np.max(np.abs(mono))
     if p > 0: mono /= p
 
-    # Content type detection — use multiple segments for robust classification
+    # Content type detection - use multiple segments for robust classification
     # Analyze 3 segments to avoid being fooled by a bass-heavy intro
     content_segments = []
     for t in [5, 20, 40]:
@@ -943,7 +943,7 @@ def detect_key(samples, sr):
                              'camelot':CAMELOT.get(kid,'—')})
             if len(top3)>=3: break
 
-    # Section analysis uses raw mono (HPSS removed — too slow, not needed for key)
+    # Section analysis uses raw mono (HPSS removed - too slow, not needed for key)
     harmonic=mono
 
     # ── Section key analysis ──────────────────────────────────────────────────
@@ -1010,7 +1010,7 @@ def section_analysis(mono,sr):
 # ── Beat-switch detection (0.1.3) ────────────────────────────────────────────
 #
 # Type beats with a "beat switch" change instrumental mid-track: new BPM,
-# new key, new energy. One global BPM/key is misleading for those — the
+# new key, new energy. One global BPM/key is misleading for those - the
 # producer needs per-section numbers.
 #
 # Pipeline:
@@ -1133,7 +1133,7 @@ def detect_beat_switches(mono, sr, force=False):
     if feats is None:
         return out
 
-    # Wider context window — modern hip-hop verses run 30-60s; W=12s of
+    # Wider context window - modern hip-hop verses run 30-60s; W=12s of
     # context gives the cosine more semantic weight than 8s of bars.
     nov = _novelty_curve(feats, W=12)
     # Drop the wraparound region (where nov is 0 from the W-padding)
@@ -1147,11 +1147,11 @@ def detect_beat_switches(mono, sr, force=False):
     sigma_mult = 1.2 if force else 1.7
     thresh = mu + sigma_mult * sd
 
-    # Min 30s between candidate peaks — beat switches don't come thicker
+    # Min 30s between candidate peaks - beat switches don't come thicker
     # than once per verse, and a verse is at minimum ~20s even in fast
     # tracks (4 bars at 200 BPM = 4.8s, but typebeats run 16+ bars).
     peaks, _ = find_peaks(nov, height=thresh, distance=30)
-    # Trim peaks too close to the edges — the song doesn't switch in
+    # Trim peaks too close to the edges - the song doesn't switch in
     # its first 16s or last 16s in normal cases.
     peaks = [int(p) for p in peaks if 16 <= p <= total_s - 16]
     if not peaks:
@@ -1160,7 +1160,7 @@ def detect_beat_switches(mono, sr, force=False):
     # Strongest first, cap at 5, then back to chronological
     peaks = sorted(sorted(peaks, key=lambda p: -nov[p])[:5])
 
-    # Build sections from boundaries. Minimum span 20s — anything shorter
+    # Build sections from boundaries. Minimum span 20s - anything shorter
     # is almost certainly a transition fill, not a real new beat.
     MIN_SECTION_S = 20
     bounds = [0.0] + [float(p) for p in peaks] + [total_s]
@@ -1191,7 +1191,7 @@ def detect_beat_switches(mono, sr, force=False):
         b0, b1 = int(s0), max(int(s0) + 1, int(s1))
         ch = np.mean(feats[b0:min(b1, n_blocks), 0:12], axis=0)
         # Mean spectral profile over the span (used for stricter
-        # validation — beats with the same chroma but different
+        # validation - beats with the same chroma but different
         # spectral balance ARE different beats)
         sp = np.mean(feats[b0:min(b1, n_blocks), 12:16], axis=0)
         return {'start_s': round(s0, 1), 'end_s': round(s1, 1), 'bpm': bpm,
@@ -1217,20 +1217,20 @@ def detect_beat_switches(mono, sr, force=False):
         if na > 1e-9 and nb > 1e-9 and float(np.dot(ca, cb) / (na * nb)) < 0.72:
             if 'key' not in ch:
                 ch.append('harmony')
-        # Spectral profile change — captures drum-pattern shifts that
+        # Spectral profile change - captures drum-pattern shifts that
         # leave the chroma unchanged but reorganize the timbral mix
         sa, sb = a['_spectral'], b['_spectral']
         if np.linalg.norm(sa) > 1e-9 and np.linalg.norm(sb) > 1e-9:
             ssim = float(np.dot(sa, sb) / (np.linalg.norm(sa) * np.linalg.norm(sb) + 1e-10))
             if ssim < 0.65:
                 ch.append('texture')
-        # Stricter energy delta — quiet bars happen WITHIN a single beat
+        # Stricter energy delta - quiet bars happen WITHIN a single beat
         if abs(a['rms_db'] - b['rms_db']) > 8:
             ch.append('energy')
         return ch
 
     # First pass: drop boundaries where fewer than 2 dimensions changed.
-    # These are fills, breaks, build-ups — not actual switches.
+    # These are fills, breaks, build-ups - not actual switches.
     i = 0
     while i < len(sections) - 1:
         ch = changes_between(sections[i], sections[i + 1])
@@ -1306,7 +1306,7 @@ def compute_mood_profile(lufs_i, lufs_st, crest, mode, bpm, sb):
     energy = round((e_loud * 0.6 + e_dyn * 0.4), 3)
 
     # Tonality: major mode = bright, minor = dark; mod by spectral balance.
-    # sb is a dict with low/mid/high in dB-ish — use mid/high ratio to bias.
+    # sb is a dict with low/mid/high in dB-ish - use mid/high ratio to bias.
     base_tonality = 0.7 if (mode or '').lower() == 'major' else 0.3
     if isinstance(sb, dict):
         hi = sb.get('high', 0.0) or 0.0
@@ -1410,8 +1410,8 @@ def analyze(wav_path, force_sections=False):
 
 if __name__=='__main__':
     # CLI:
-    #   analyze.py <wav>           — full mix analysis (LUFS, sections, mood, etc.)
-    #   analyze.py --stem <wav>    — lightweight per-stem analysis (BPM + key only)
+    #   analyze.py <wav>           - full mix analysis (LUFS, sections, mood, etc.)
+    #   analyze.py --stem <wav>    - lightweight per-stem analysis (BPM + key only)
     args = sys.argv[1:]
     stem_mode = False
     force_sections = False
@@ -1419,7 +1419,7 @@ if __name__=='__main__':
         stem_mode = True
         args = args[1:]
     if args and args[0] == '--sections':
-        # Lowers the beat-switch novelty threshold — used when the
+        # Lowers the beat-switch novelty threshold - used when the
         # filename says "beat switch" or the user explicitly asks.
         force_sections = True
         args = args[1:]

@@ -1,6 +1,6 @@
 {
   "name": "freqphull",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Freq.Phull",
   "main": "main.js",
   "scripts": {

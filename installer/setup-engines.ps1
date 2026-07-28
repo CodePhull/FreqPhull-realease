@@ -351,7 +351,7 @@ if (Test-EmbeddedRuntime) {
             Expand-Archive -Path $embedZip -DestinationPath $embedRoot -Force
             # The embeddable package ships with site-packages DISABLED via
             # the ._pth file ("import site" commented out). pip cannot work
-            # until it is enabled. This is the classic embeddable gotcha.
+            # until that line is enabled.
             $pth = Get-ChildItem -Path $embedRoot -Filter "python311._pth" | Select-Object -First 1
             if ($pth) {
                 $content = Get-Content $pth.FullName

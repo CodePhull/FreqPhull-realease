@@ -91,7 +91,7 @@ def write_mp3(path, bpm, key_str):
     try:
         tags = ID3(path)
     except ID3NoHeaderError:
-        # File has no ID3 frame at all — mutagen needs us to create one.
+        # File has no ID3 frame at all - mutagen needs us to create one.
         tags = ID3()
     if bpm is not None:
         tags['TBPM'] = TBPM(encoding=3, text=str(int(round(bpm))))

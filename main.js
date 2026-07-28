@@ -34,7 +34,7 @@ function openUpdaterWindow(initialState) {
     return updaterWindow;
   }
   // when initialState.installing is true we open this as a
-  // takeover screen — bigger, no minimize/close, always on top so the
+  // takeover screen - bigger, no minimize/close, always on top so the
   // user never accidentally focuses the main window during the quit.
   const isInstalling = !!(initialState && initialState.installing);
   updaterWindow = new BrowserWindow({
@@ -115,11 +115,11 @@ let logFile = null;
 let tray = null;
 let isQuitting = false;
 
-// ── Prevent multiple instances — one backend is enough ───────────────────────
+// ── Prevent multiple instances - one backend is enough ───────────────────────
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) { app.quit(); }
 app.on('second-instance', () => {
-  // Someone tried to open a second instance — show the existing window
+  // Someone tried to open a second instance - show the existing window
   if (mainWindow) {
     mainWindow.show();
     if (mainWindow.isMinimized()) mainWindow.restore();
@@ -210,9 +210,9 @@ app.whenReady().then(() => {
   });
 });
 
-// ── Don't quit when window closes — minimize to tray instead ─────────────────
+// ── Don't quit when window closes - minimize to tray instead ─────────────────
 app.on('window-all-closed', () => {
-  // Don't quit — backend keeps running for the Chrome extension
+  // Don't quit - backend keeps running for the Chrome extension
   if (isQuitting) {
     if (backendProcess) backendProcess.kill();
     app.quit();
@@ -335,7 +335,7 @@ function createWindow() {
     mainWindow.show();
     // Initialize the updater once the window is real and visible. We do this
     // here (rather than in whenReady) so the updater has a window reference
-    // to send IPC events to. setupUpdater is idempotent — if called twice
+    // to send IPC events to. setupUpdater is idempotent - if called twice
     // it's safe; the IPC handlers replace any previous ones. Background
     // checks fire on a setTimeout inside, so they don't race window-ready.
     try {
@@ -386,7 +386,7 @@ function startBackend() {
       // startup failures (port already taken, etc.). Show the user a
       // proper dialog instead of letting them stare at a blank app.
       if (msg.includes('__FREQPHULL_FATAL__')) {
-        // Just the first line — stdout chunks can contain trailing log
+        // Just the first line - stdout chunks can contain trailing log
         // lines that would otherwise be appended to the dialog message.
         const after = msg.split('__FREQPHULL_FATAL__')[1] || '';
         const firstLine = after.split(/[\r\n]/)[0] || '';
@@ -413,7 +413,7 @@ function startBackend() {
         setTimeout(() => app.exit(2), 500);
         return;
       }
-      // Require both the port and "ready" — defends against future
+      // Require both the port and "ready" - defends against future
       // log lines incidentally mentioning 47891.
       if (msg.includes('47891') && /ready/i.test(msg) && !backendReady) {
         log('Backend online!');
@@ -483,7 +483,7 @@ ipcMain.on('show-in-folder', (_, p) => {
   try { shell.showItemInFolder(p); }
   catch (e) {
     // Fallback: open the containing directory if showItemInFolder failed
-    // (very rare — happens when the path doesn't exist anymore).
+    // (very rare - happens when the path doesn't exist anymore).
     try { shell.openPath(require('path').dirname(p)); } catch {}
   }
 });

@@ -1,4 +1,4 @@
-@ -1,55 +1,3 @@
+@ -1,55 +0,0 @@
 # Dependencies
 node_modules/
 npm-debug.log*
@@ -42,8 +42,6 @@ logs/
 .env
 .env.local
 .env.*.local
-
-# Sentry — DSN goes in sentry.config.json (gitignored, build only)
 sentry.config.json
 
 # User data and temp
@@ -56,3 +54,6 @@ freqphull-data/
 yt-dlp.exe
 ffmpeg.exe
 ffprobe.exe
+
+# Sentry — DSN goes in sentry.config.json (gitignored, build only)
+sentry.config.json
