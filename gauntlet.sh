@@ -64,4 +64,22 @@ if f:
     print('✗ PASS 7 FAILED'); [print('   -',x) for x in f[:12]]; sys.exit(1)
 print(f'✓ PASS 7  french quality ({len(fr)} strings)')
 PY
-echo "════════ ALL 7 GREEN ════════"
+python3 - <<'PY'
+import re, json, os, sys
+s = open('server.js').read()
+fails = []
+# Python cannot read inside app.asar: every spawned .py must either be
+# resolved through pythonScriptOnDisk or copied to temp near its use.
+for m in re.finditer(r"getResourcePath\('([a-z_]+\.py)'\)", s):
+    name, block = m.group(1), s[m.start():m.start() + 1000]
+    if 'copyFileSync' not in block:
+        fails.append(f'{name} resolved without a temp copy')
+er = {e['from'] for e in json.load(open('package.json'))['build']['extraResources'] if isinstance(e, dict)}
+for f in os.listdir('.'):
+    if f.endswith('.py') and f not in er:
+        fails.append(f'{f} missing from extraResources')
+if fails:
+    print('✗ PASS 8 FAILED'); [print('   -', x) for x in fails]; sys.exit(1)
+print('✓ PASS 8  python scripts asar-safe')
+PY
+echo "════════ ALL 8 GREEN ════════"

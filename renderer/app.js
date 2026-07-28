@@ -1727,9 +1727,22 @@ async function loadAudioBuffer(arrayBuf, name, histId) {
   }
   setM('dur', Math.round(audioBuf.duration), '100%');
 
-  // Show analyzing state while Python runs
-  ['bpm','key'].forEach(id => { const el = document.getElementById(id); el.textContent = '…'; el.className = 'm-val dim'; });
-  document.getElementById('key-mode').textContent = 'analyzing…';
+  // Known values first. A history track carries BPM and key from its
+  // previous analysis, so show those straight away rather than a
+  // placeholder, then let the full pass refine everything.
+  const knownRow = histId ? (histData || []).find(h => h.id == histId) : null;
+  const haveKnown = !!(knownRow && knownRow.bpm);
+  if (haveKnown) {
+    const bpmEl = document.getElementById('bpm');
+    const keyEl = document.getElementById('key');
+    if (bpmEl) { bpmEl.textContent = Math.round(knownRow.bpm); bpmEl.className = 'm-val'; }
+    if (keyEl && knownRow.key_note) { keyEl.textContent = knownRow.key_note; keyEl.className = 'm-val'; }
+    const km = document.getElementById('key-mode');
+    if (km) km.textContent = (knownRow.key_mode || '') + ' · ' + (t('refreshingWord') || 'refreshing…');
+  } else {
+    ['bpm','key'].forEach(id => { const el = document.getElementById(id); el.textContent = '…'; el.className = 'm-val dim'; });
+    document.getElementById('key-mode').textContent = 'analyzing…';
+  }
   document.getElementById('chord-list').innerHTML = '<div style="font-size:13px;color:var(--hint)">Analyzing…</div>';
   document.getElementById('cam-grid').innerHTML = '<div style="font-size:13px;color:var(--hint)">…</div>';
 
@@ -6879,7 +6892,6 @@ async function toggleHardwareAcceleration(checked) {
 // It's published as a .zip on the Releases page (per the repo README).
 // "Open repo" goes to the Releases page so users can download the latest
 // version immediately.
-const EXT_REPO_URL = 'https://github.com/CodePhull/FreqPhull-realease/releases';
 const EXT_REPO_ROOT = 'https://github.com/CodePhull/FreqPhull-realease';
 
 // One-click extension download. Hits /extension/download which fetches
@@ -6939,22 +6951,11 @@ async function downloadExtensionZip(btn) {
       // when the release was published without the zip. Open the
       // releases page directly so the user can grab whatever is there
       // instead of being stuck behind a wall of red toasts.
-      if (r.status === 404 && j.fallback_url) {
-        if (window.api && window.api.openExternal) window.api.openExternal(j.fallback_url);
-        else window.open(j.fallback_url, '_blank');
-        showAppNotification(
-          t('extDownloadFallback') || 'Opening releases page — grab the latest zip there.',
-          'info', null, 5000
-        );
-        return;
-      }
+      // The extension ships inside the app, so a failure here means the
+      // install is damaged rather than that a download is missing.
       showAppNotification(
-        (t('extDownloadFailed') || 'Download failed') + ': ' + (j.error || 'unknown'),
-        'err', () => {
-          if (j.fallback_url && window.api && window.api.openExternal) {
-            window.api.openExternal(j.fallback_url);
-          }
-        }, 6000
+        (t('extDownloadFailed') || 'Could not copy the extension') + ': ' + (j.error || 'unknown'),
+        'err', null, 7000
       );
       return;
     }
@@ -6984,10 +6985,6 @@ async function downloadExtensionZip(btn) {
   }
 }
 
-function openExtensionPage() {
-  if (window.api && window.api.openExternal) window.api.openExternal(EXT_REPO_URL);
-  else window.open(EXT_REPO_URL, '_blank');
-}
 function openExtensionHowTo() {
   let modal = document.getElementById('ext-howto-modal');
   if (!modal) {
@@ -7012,7 +7009,6 @@ function openExtensionHowTo() {
             <div class="ext-howto-step-title">${t('extHowToStep1Title')}</div>
             <div class="ext-howto-step-desc">${t('extHowToStep1Desc')}</div>
             <button class="btn sm pri" onclick="downloadExtensionZip(this)">${t('extDownloadBtn')}</button>
-            <button class="btn xs" style="margin-left:8px" onclick="openExtensionPage()">${t('extHowToOpenManual')}</button>
           </div></li>
           <li><div class="ext-howto-step-num">2</div><div class="ext-howto-step-body">
             <div class="ext-howto-step-title">${t('extHowToStep2Title')}</div>
@@ -7036,7 +7032,7 @@ function openExtensionHowTo() {
       </div>
       <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">
         <button class="btn" onclick="document.getElementById('ext-howto-modal').style.display='none'">${t('spCancel')}</button>
-        <button class="btn pri" onclick="openExtensionPage()">${t('extHowToOpenRepo')}</button>
+        <button class="btn pri" onclick="downloadExtensionZip(this)">${t('extDownloadBtn')}</button>
       </div>
     </div>`;
 }
@@ -9835,6 +9831,7 @@ const T = {
     doctorNoPrints:'No tracks have audio fingerprints yet, so the doctor cannot compare anything. Run the fingerprint backfill first (a few minutes for large libraries), then scan again.',
     doctorBackfillBtn:'Start fingerprint backfill',
     doctorBackfillStarted:'Backfill running - re-open the doctor when it finishes',
+    refreshingWord:'refreshing…',
     doctorName:'Library doctor',
     doctorDesc:'Scan for corrupted downloads - tracks whose file contains a DIFFERENT track\'s audio (a bug fixed in 0.4.3 could cause this in bulk grabs). Offers one-click re-download of the real audio.',
     doctorBtn:'Scan library',
@@ -9931,15 +9928,14 @@ const T = {
     hwAccelRestartLater:'Restart later',
     // ── extension link + how-to ──
     extLinkName:'Browser extension',
-    extLinkDesc:'A Chrome extension that adds a Grab button to YouTube so you can pull beats straight into Freq.Phull. Updated independently from the main app via the same GitHub repo.',
-    extLinkOpen:'Open page',
+    extLinkDesc:'A Chrome extension that adds a Grab button to YouTube so you can pull beats straight into Freq.Phull. It ships inside the app - one click copies it to your Downloads folder.',
     extLinkHowTo:'How to install',
     extHowToTitle:'Install the browser extension',
     extHowToSub:'Chrome, Edge, Brave, Opera, Arc - any Chromium-based browser. 1 minute setup.',
-    extHowToStep1Title:'Download the extension folder',
-    extHowToStep1Desc:'Open the Releases page and download the latest freqpull-ext zip, then unzip it somewhere you will not move it from (Documents works fine).',
+    extHowToStep1Title:'Get the extension folder',
+    extHowToStep1Desc:'Click Get the extension. The folder is copied straight into your Downloads folder, ready to load - there is nothing to unzip. Leave it where it is so the app can keep it updated.',
     extHowToStep1Btn:'Open Releases page',
-    extDownloadBtn:'Download extension zip',
+    extDownloadBtn:'Get the extension',
     extDownloadProgress:'Downloading...',
     extBundledLbl:'In this app', extInstalledLbl:'Your copy',
     extAutoUpdated:'Extension updated',
@@ -9954,8 +9950,6 @@ const T = {
     extCopiedHint:'click to open the folder',
     extDownloadDone:'Extension downloaded',
     extDownloadFailed:'Download failed',
-    extHowToOpenManual:'Open releases page',
-    extDownloadFallback:'Opening releases page - grab the latest zip there.',
     clipboardDetected:'Clipboard:',
     paste:'Paste',
     extHowToStep2Title:'Open your extensions page',
@@ -9967,8 +9961,6 @@ const T = {
     extHowToStep5Title:'Pin and use',
     extHowToStep5Desc:'Click the puzzle-piece icon in your browser toolbar, then the pin next to Freq.Phull. The extension panel will open beside any YouTube video; press Grab to send it to the app.',
     extHowToTip:'Tip: keep Freq.Phull desktop running. The extension talks to it on 127.0.0.1:47891 - downloads land in your library automatically.',
-    extHowToOpenRepo:'Open repo',
-
     // ── Boot update check toasts (0.2.8) ──
     updCheckingBoot:'Checking for updates...',
     updUpToDate:"You're up to date",
@@ -10392,6 +10384,7 @@ const T = {
     doctorNoPrints:'Aucune piste n\'a encore d\'empreinte audio, le docteur ne peut donc rien comparer. Lancez d\'abord le remplissage des empreintes (quelques minutes pour les grandes bibliothèques), puis relancez le scan.',
     doctorBackfillBtn:'Lancer le remplissage des empreintes',
     doctorBackfillStarted:'Remplissage en cours - rouvrez le docteur une fois terminé',
+    refreshingWord:'actualisation…',
     doctorName:'Docteur de bibliothèque',
     doctorDesc:'Détecte les téléchargements corrompus - pistes dont le fichier contient l\'audio d\'une AUTRE piste (bug corrigé en 0.4.3 lors des téléchargements en masse). Propose un re-téléchargement en un clic.',
     doctorBtn:'Analyser la bibliothèque',
@@ -10489,15 +10482,14 @@ const T = {
     hwAccelRestartLater:'Redémarrer plus tard',
     // ── lien extension + tutoriel ──
     extLinkName:'Extension de navigateur',
-    extLinkDesc:'Une extension Chrome qui ajoute un bouton Grab sur YouTube pour envoyer les beats directement vers Freq.Phull. Mise à jour indépendamment de l\'app principale via le même dépôt GitHub.',
-    extLinkOpen:'Ouvrir la page',
+    extLinkDesc:'Une extension Chrome qui ajoute un bouton Grab sur YouTube pour envoyer les beats directement vers Freq.Phull. Elle est incluse dans l\'app - un clic la copie dans votre dossier Téléchargements.',
     extLinkHowTo:'Comment installer',
     extHowToTitle:'Installer l\'extension de navigateur',
     extHowToSub:'Chrome, Edge, Brave, Opera, Arc - tout navigateur base sur Chromium. Installation en 1 minute.',
-    extHowToStep1Title:'Téléchargez le dossier de l\'extension',
-    extHowToStep1Desc:'Ouvrez la page Releases et téléchargez le dernier zip freqpull-ext, puis décompressez-le quelque part ou vous ne le deplacerez pas (Documents convient).',
+    extHowToStep1Title:'Obtenez le dossier de l\'extension',
+    extHowToStep1Desc:'Cliquez sur Obtenir l\'extension. Le dossier est copié directement dans votre dossier Téléchargements, prêt à charger - rien à décompresser. Laissez-le en place pour que l\'app puisse le tenir à jour.',
     extHowToStep1Btn:'Ouvrir les Releases',
-    extDownloadBtn:'Télécharger l\'extension',
+    extDownloadBtn:'Obtenir l\'extension',
     extDownloadProgress:'Téléchargement...',
     extBundledLbl:'Dans cette app', extInstalledLbl:'Votre copie',
     extAutoUpdated:'Extension mise à jour',
@@ -10512,8 +10504,6 @@ const T = {
     extCopiedHint:'cliquez pour ouvrir le dossier',
     extDownloadDone:'Extension téléchargée',
     extDownloadFailed:'Échec du téléchargement',
-    extHowToOpenManual:'Ouvrir la page des releases',
-    extDownloadFallback:'Ouverture de la page des releases - récupérez le zip là-bas.',
     clipboardDetected:'Presse-papiers :',
     paste:'Coller',
     extHowToStep2Title:'Ouvrez votre page d\'extensions',
@@ -10525,8 +10515,6 @@ const T = {
     extHowToStep5Title:'Epinglez et utilisez',
     extHowToStep5Desc:'Cliquez sur l\'icône de pièce de puzzle dans la barre d\'outils du navigateur, puis sur l\'épingle à côté de Freq.Phull. Le panneau de l\'extension s\'ouvrira à côté de toute vidéo YouTube ; appuyez sur Grab pour l\'envoyer à l\'app.',
     extHowToTip:'Astuce : gardez Freq.Phull desktop ouvert. L\'extension communique avec sur 127.0.0.1:47891 - les téléchargements arrivent automatiquement dans votre bibliothèque.',
-    extHowToOpenRepo:'Ouvrir le dépôt',
-
     // ── Notifications de verification au demarrage (0.2.8) ──
     updCheckingBoot:'Vérification des mises à jour...',
     updUpToDate:'Vous êtes à jour',
@@ -11436,8 +11424,8 @@ function renderSettings() {
                 <div class="setting-desc">${t('extLinkDesc')}</div>
               </div>
               <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
-                <button class="btn sm" onclick="openExtensionPage()" title="GitHub"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></svg> ${t('extLinkOpen')}</button>
-                <button class="btn sm pri" onclick="openExtensionHowTo()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5z"/><path d="M4 19.5V22"/></svg> ${t('extLinkHowTo')}</button>
+                <button class="btn sm" onclick="openExtensionHowTo()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5z"/><path d="M4 19.5V22"/></svg> ${t('extLinkHowTo')}</button>
+                <button class="btn sm pri" onclick="downloadExtensionZip(this)"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> ${t('extDownloadBtn')}</button>
               </div>
             </div>
         <div class="setting-row">

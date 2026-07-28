@@ -4,6 +4,49 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
+## 0.6.6 (2026-07-28)
+
+Three bugs found in a packaged-build log.
+
+**Tags and fingerprints never worked in installed builds.**
+`write_tags.py` and `fingerprint.py` were resolved to a path inside
+app.asar. Node reads the archive transparently so the path looked
+valid, but the Python child process cannot open it, and every call
+died with "No such file or directory". BPM/key tags were never written
+to any file, and no download was ever fingerprinted - which is also why
+the Library doctor reported zero fingerprinted tracks. Both scripts now
+ship as real files, and every Python spawn resolves through a helper
+that guarantees an on-disk path, copying out of the archive when that
+is the only copy. Existing libraries can catch up with the fingerprint
+backfill offered by the Library doctor.
+
+A release check now fails the build if any Python script is spawned
+from an unresolved archive path or is missing from the packaged files,
+so this class of bug cannot ship again.
+
+**Engine verification crashed on every startup.**
+`discoverPython()` returns a command string, and the verification code
+treated it as an object, so it spawned `undefined` and threw
+"The file argument must be of type string" - visible in the log as
+"startup verify threw" and an unhandled rejection. Self-repair
+therefore never ran and Verify engines never worked. Fixed to use the
+same command/args contract as the rest of the file, with the spawn and
+the endpoint both guarded so a failure can no longer surface as an
+unhandled rejection.
+
+**The extension is now offered directly, with no repository links.**
+Settings > Extension leads with a Get the extension button that copies
+the bundled folder into Downloads, and the install guide does the same.
+Every link that sent people to the GitHub releases page has been
+removed, including the fallback that opened it when a download failed.
+Wording no longer mentions zips or unzipping, because neither is
+involved any more.
+
+**Opening a history track showed "analyzing..." for ten seconds.**
+The track's BPM and key were already in the database the whole time.
+They now appear immediately, marked as refreshing, while the full pass
+fills in loudness, sections and the rest.
+
 ## 0.6.5 (2026-07-28)
 
 The app now keeps the Chrome extension up to date.

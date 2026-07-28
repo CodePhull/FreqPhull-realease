@@ -29,14 +29,18 @@ let _repairRunning = false;
 
 function verifyEngines() {
   return new Promise((resolve) => {
-    const py = discoverPython();
-    if (!py) return resolve({ ok: false, reason: 'python-missing', tiers: {}, broken_packages: [] });
-    const scriptSrc = getResourcePath('verify_engines.py');
-    if (!scriptSrc) return resolve({ ok: false, reason: 'script-missing', tiers: {}, broken_packages: [] });
-    const scriptTmp = path.join(os.tmpdir(), 'freqphull_verify.py');
-    try { fs.copyFileSync(scriptSrc, scriptTmp); } catch {}
-    let stdout = '', stderr = '';
-    const p = spawn(py.cmd, [...(py.args || []), scriptTmp], { windowsHide: true });
+    // discoverPython() returns the command string; its arguments come
+    // from getPythonArgs(). Treating it as an object spawned undefined.
+    const pythonCmd = discoverPython();
+    if (!pythonCmd) return resolve({ ok: false, reason: 'python-missing', tiers: {}, broken_packages: [] });
+    const scriptTmp = pythonScriptOnDisk('verify_engines.py');
+    if (!scriptTmp) return resolve({ ok: false, reason: 'script-missing', tiers: {}, broken_packages: [] });
+    let stdout = '', stderr = '', p;
+    try {
+      p = spawn(pythonCmd, [...getPythonArgs(), scriptTmp], { windowsHide: true });
+    } catch (e) {
+      return resolve({ ok: false, reason: 'spawn-threw: ' + e.message, tiers: {}, broken_packages: [] });
+    }
     const killer = setTimeout(() => { try { p.kill(); } catch {} }, 45000);
     p.stdout.on('data', d => stdout += d);
     p.stderr.on('data', d => stderr += d);
@@ -519,6 +523,31 @@ function bin(name) {
 // Resolve a resource file (script, weights, etc.) across all the locations
 // where electron-builder might have placed it. Returns the first that exists,
 // or null if none. Pass relative path like 'stems.py' or 'installer/setup-engines.ps1'.
+// Python cannot read files inside app.asar: Node's fs sees the archive
+// transparently, but the child process gets a path that does not exist
+// on disk. Any .py we spawn must therefore live on the real filesystem.
+// This returns a genuine on-disk path, copying the script out of the
+// archive into temp when that is the only copy available.
+function pythonScriptOnDisk(name) {
+  const src = getResourcePath(name);
+  if (!src) return null;
+  if (!/[\\/]app\.asar[\\/]/.test(src)) return src;   // already a real file
+  try {
+    const dest = path.join(os.tmpdir(), 'freqphull_' + name);
+    // Refresh when missing or stale so app updates ship new script code.
+    let needsCopy = true;
+    try {
+      needsCopy = !fs.existsSync(dest) ||
+        fs.statSync(dest).size !== fs.statSync(src).size;
+    } catch {}
+    if (needsCopy) fs.copyFileSync(src, dest);
+    return dest;
+  } catch (e) {
+    slog('pythonScriptOnDisk(' + name + ') failed: ' + e.message);
+    return src;
+  }
+}
+
 function getResourcePath(rel) {
   const asarUnpacked = __dirname.replace(/[\\/]app\.asar([\\/]|$)/, (m, tail) => '/app.asar.unpacked' + tail);
   const candidates = [
@@ -622,7 +651,7 @@ function writeTagsToFile(historyId, { bpm, key_note, key_mode }) {
       return;
     }
 
-    const scriptPath = getResourcePath('write_tags.py');
+    const scriptPath = pythonScriptOnDisk('write_tags.py');
     if (!scriptPath) {
       slog('writeTagsToFile: write_tags.py not bundled — skipping');
       return;
@@ -681,7 +710,7 @@ function computeFingerprint(historyId, filePath) {
       slog('computeFingerprint: file missing for id ' + historyId);
       return;
     }
-    const scriptPath = getResourcePath('fingerprint.py');
+    const scriptPath = pythonScriptOnDisk('fingerprint.py');
     if (!scriptPath) {
       slog('computeFingerprint: fingerprint.py not bundled — skipping');
       return;
@@ -1978,7 +2007,7 @@ app.post('/history/fingerprint-backfill', (req, res) => {
         broadcastEvent('fingerprint-backfill', { state: 'progress', done, total });
         return processNext(i + 1);
       }
-      const scriptPath = getResourcePath('fingerprint.py');
+      const scriptPath = pythonScriptOnDisk('fingerprint.py');
       if (!scriptPath) {
         broadcastEvent('fingerprint-backfill', { state: 'error', message: 'fingerprint.py missing' });
         return;
@@ -3478,8 +3507,12 @@ app.post('/file-tags-pref', (req, res) => {
 });
 
 app.get('/engines/verify', async (_, res) => {
-  const v = await verifyEngines();
-  res.json(v);
+  try {
+    res.json(await verifyEngines());
+  } catch (e) {
+    slog('engines/verify failed: ' + e.message);
+    res.status(500).json({ ok: false, reason: e.message, tiers: {}, broken_packages: [] });
+  }
 });
 
 app.post('/engines/repair', async (req, res) => {

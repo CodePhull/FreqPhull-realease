@@ -1,6 +1,6 @@
 {
   "name": "freqphull",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "description": "Freq.Phull",
   "main": "main.js",
   "scripts": {
@@ -121,6 +121,22 @@
       {
         "from": "extension/",
         "to": "extension/"
+      },
+      {
+        "from": "write_tags.py",
+        "to": "write_tags.py"
+      },
+      {
+        "from": "fingerprint.py",
+        "to": "fingerprint.py"
+      },
+      {
+        "from": "verify_engines.py",
+        "to": "verify_engines.py"
+      },
+      {
+        "from": "mastering.py",
+        "to": "mastering.py"
       }
     ],
     "compression": "maximum",
