@@ -275,7 +275,13 @@ function onBackendReady() {
   // requestIdleCallback isn't always available on Electron's older engine,
   // so we fall back to setTimeout. The key is yielding the main thread.
   const idle = window.requestIdleCallback || ((cb) => setTimeout(cb, 50));
-  idle(() => repairHistory(true));
+  // The path repair scan walks every audio file under the stockpile -
+  // thousands of stat calls. requestIdleCallback can fire within the
+  // first idle gap, which lands while the splash is still animating and
+  // the first history render is in flight, so the disk and CPU cost
+  // arrives at the worst possible moment. It is pure housekeeping with
+  // no visible result, so it waits until the opening is over.
+  setTimeout(() => idle(() => repairHistory(true)), 3200);
   idle(() => checkEnginesStatus());
   idle(() => checkIntegrity());
 }
@@ -2529,11 +2535,14 @@ function startLiveSpectrum() {
   // lived in ~3 bins, which is what painted the staircase at the low end.
   // 16384 is the sweet spot: sub-bass resolves smoothly, and the extra
   // FFT cost is negligible next to the canvas paint.
-  if (analyserL.fftSize < 16384) {
-    try { analyserL.fftSize = 16384; } catch {}
-  }
-  if (analyserR && analyserR !== analyserL && analyserR.fftSize < 16384) {
-    try { analyserR.fftSize = 16384; } catch {}
+  // 16384 gives ~2.9Hz bins, which is what keeps the low end smooth.
+  // On a machine already short of cores that FFT runs every frame while
+  // audio decodes, so lite mode halves it - still 5.9Hz bins, finer than
+  // the 8192 the analyser shipped with for most of its life.
+  const FFT = window.__FP_LITE__ ? 8192 : 16384;
+  if (analyserL.fftSize !== FFT) { try { analyserL.fftSize = FFT; } catch {} }
+  if (analyserR && analyserR !== analyserL && analyserR.fftSize !== FFT) {
+    try { analyserR.fftSize = FFT; } catch {}
   }
 
   const NUM_BINS = _liveSpectrumNumBins;
@@ -5362,6 +5371,19 @@ async function doctorRedownload(suspectId, btn) {
 // Manual engine verification from Settings. Runs the granular import
 // check and reports per-tier health; offers a one-click repair when
 // something is broken.
+// Lite mode. Chosen automatically from core count and memory on first
+// run, and remembered once the user touches the switch either way.
+function setLiteMode(on) {
+  window.__FP_LITE__ = !!on;
+  document.documentElement.classList.toggle('lite', !!on);
+  try { localStorage.setItem('freqphull.lite', on ? '1' : '0'); } catch {}
+  showAppNotification(on ? t('liteOn') : t('liteOff'), 'done', null, 4000);
+}
+function _hydrateLiteToggle() {
+  const el = document.getElementById('lite-toggle');
+  if (el) el.checked = !!window.__FP_LITE__;
+}
+
 async function runEngineVerify(btn) {
   const orig = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = t('verifyRunning'); }
@@ -6460,7 +6482,15 @@ async function loadFromHistory(id, opts){
     }
     await loadAudioBuffer(result.data,row.title||filePath.split(/[/\\]/).pop(),id);
     if(row.notes)document.getElementById('notes-box').value=row.notes;
-    if(row.transcript)document.getElementById('transcript-out').value=row.transcript;
+    // Transcripts are large and most tracks do not have one, so they are
+    // no longer carried in the history list. Fetch this track's on open.
+    try {
+      const full = await (await fetch(API + '/history/' + id + '/full')).json();
+      if (full && full.transcript) {
+        document.getElementById('transcript-out').value = full.transcript;
+        row.transcript = full.transcript;   // cache on the row for export
+      }
+    } catch {}
   }catch(e){showAppNotification('Could not load: '+e.message.slice(0,50),'err');}
 }
 async function deleteHistory(id){
@@ -9902,6 +9932,10 @@ const T = {
     selfHealStart:'Engine self-repair started',
     selfHealDone:'Engines repaired automatically - everything works again',
     selfHealFailed:'Automatic engine repair failed - open Settings > AI engines to run full setup',
+    liteName:'Lite mode',
+    liteDesc:'Drops the most expensive visual effects - background blur behind panels, and the largest shadows - and halves the spectrum analyser\'s resolution. Layout, colours and animations are unchanged. Turned on automatically on machines with four cores or less.',
+    liteOn:'Lite mode on - effects reduced',
+    liteOff:'Lite mode off - full effects',
     verifyName:'Verify engines',
     verifyDesc:'Deep-checks every AI component (analysis, stems, transcription) and pinpoints exactly what is broken. Repairs are one click.',
     verifyBtn:'Verify now',
@@ -10463,6 +10497,10 @@ const T = {
     selfHealStart:'Auto-réparation des moteurs démarrée',
     selfHealDone:'Moteurs réparés automatiquement - tout fonctionne à nouveau',
     selfHealFailed:'Échec de la réparation automatique - ouvrez Paramètres > Moteurs IA pour relancer la configuration complète',
+    liteName:'Mode léger',
+    liteDesc:'Retire les effets les plus coûteux - le flou derrière les panneaux et les ombres les plus larges - et divise par deux la résolution de l\'analyseur de spectre. La mise en page, les couleurs et les animations restent identiques. Activé automatiquement sur les machines de quatre cœurs ou moins.',
+    liteOn:'Mode léger activé - effets réduits',
+    liteOff:'Mode léger désactivé - effets complets',
     verifyName:'Vérifier les moteurs',
     verifyDesc:'Vérifie en profondeur chaque composant IA (analyse, pistes, transcription) et identifie précisément ce qui est casse. Reparation en un clic.',
     verifyBtn:'Vérifier maintenant',
@@ -11392,6 +11430,13 @@ function renderSettings() {
             </div>
         <div class="setting-row">
               <div class="setting-info">
+                <div class="setting-name">${t('liteName')}</div>
+                <div class="setting-desc">${t('liteDesc')}</div>
+              </div>
+              <label class="switch"><input type="checkbox" id="lite-toggle" onchange="setLiteMode(this.checked)"/><span class="slider"></span></label>
+            </div>
+        <div class="setting-row">
+              <div class="setting-info">
                 <div class="setting-name">${t('verifyName')}</div>
                 <div class="setting-desc">${t('verifyDesc')}</div>
               </div>
@@ -11619,6 +11664,7 @@ function renderSettings() {
   refreshEnginesDiagRow();
   _hydrateFileTagsPref();
   _refreshExtVersionLine();
+  _hydrateLiteToggle();
   if (window.api && window.api.updater) {
     window.api.updater.getStatus().then(s => {
       const el = document.getElementById('about-version-desc');

@@ -20,6 +20,10 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      # Surfaced here because the `secrets` context is not available in a
+      # step-level `if` - the condition below tests this instead.
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -35,9 +39,7 @@ jobs:
         continue-on-error: true   # build proceeds; setup can self-heal binaries
 
       - name: Write Sentry config
-        if: ${{ secrets.SENTRY_DSN != '' }}
-        env:
-          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        if: ${{ env.SENTRY_DSN != '' }}
         shell: pwsh
         run: |
           @{ dsn = $env:SENTRY_DSN } | ConvertTo-Json | Set-Content -Path sentry.config.json -Encoding utf8

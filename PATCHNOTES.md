@@ -4,6 +4,54 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
+## 0.7.1 (2026-07-28)
+
+**Release workflow fixed.** The Sentry step tested `secrets.SENTRY_DSN`
+directly in its `if`, and the `secrets` context is not available there,
+so GitHub rejected the whole file before running anything. The secret is
+now surfaced as a job-level environment variable and the condition tests
+that instead. Tag v0.7.1 and the run will go through.
+
+**A lighter history payload.** The list endpoint selected every column,
+which meant whole transcripts and every cached analysis result travelled
+to the renderer on each refresh - including at boot, competing with
+first paint. On a library the size of a couple of thousand tracks that
+is about 3.3MB serialised, parsed and held in memory; the list now
+carries only what it renders, around 1.15MB, a 65% reduction. Transcript
+and cached analysis are fetched per track, when a track is opened, via
+the new `GET /history/:id/full`.
+
+**A smoother launch.**
+
+- The opening screen animated `filter: drop-shadow`, which repaints on
+  the main thread every frame - and boot is when that thread is busiest,
+  so those were exactly the frames being dropped. The glow is now its
+  own layer animating opacity, and the mark animates transform only.
+  Both run on the compositor, off the main thread.
+- The library path scan fired on the first idle gap, landing while the
+  splash was still animating and the first history render was in flight.
+  It is background housekeeping with no visible result, so it now waits
+  until the opening is over.
+
+**Updater window rebuilt to match the app.** It had drifted into its own
+palette - a blue accent against the app's green, and shades a few steps
+lighter - so it read as a different product appearing over the main
+window. It now uses the app's exact tokens and its single accent, shows
+the real Hood Knights mark instead of lettering, and the install
+take-over pulses on the same 100 BPM grid as the opening screen. Its
+progress shine animated `left`, re-running layout every frame; it now
+uses a transform.
+
+**Lite mode, for low-end machines.** Enabled automatically where there
+are four cores or less, or four gigabytes of memory or less, and
+available as a switch in Settings. It removes cost rather than
+character: backdrop blur behind panels (our overlays already sit at 96%
+opacity, so the blur was close to invisible while forcing the compositor
+to re-filter everything beneath it on every frame), the largest shadows,
+and the splash's decorative rings. The spectrum analyser drops to a 8192
+point FFT - still finer than it shipped with for most of its life.
+Layout, colour, type and animation are untouched.
+
 ## 0.7.0 (2026-07-28)
 
 **New opening screen**

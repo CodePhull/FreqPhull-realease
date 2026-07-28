@@ -1881,10 +1881,30 @@ app.post('/history/:id/user-notes', (req, res) => {
 // to insane sizes. At 50k rows the JSON is ~50 MB on localhost -
 // the renderer's rAF-coalesced render (v0.2.5) handles bursts fine,
 // but render time scales with row count so we keep an escape hatch.
+// Columns the history list actually renders from. SELECT * also shipped
+// transcript (whole transcripts, tens of KB each) and analysis_json (the
+// cached analysis, a few KB per track), so a library of a couple of
+// thousand tracks sent megabytes to the renderer on every refresh -
+// including during boot, where it competed with first paint. Both are
+// fetched per track, on demand, by the handful of places that need them.
+const HISTORY_LIST_COLUMNS =
+  'id, title, channel, youtube_url, file_path, format, duration, ' +
+  'bpm, key_note, key_mode, thumbnail, notes, user_notes, created_at, ' +
+  'is_favorite, stockpile_committed, audio_hash';
+
 app.get('/history', (req, res) => {
   const rawLimit = req.query && req.query.limit;
   const limit = rawLimit ? Math.max(1, Math.min(50000, parseInt(rawLimit, 10) || 50000)) : 50000;
-  res.json(dbAll('SELECT * FROM history ORDER BY created_at DESC LIMIT ' + limit));
+  res.json(dbAll('SELECT ' + HISTORY_LIST_COLUMNS +
+    ' FROM history ORDER BY created_at DESC LIMIT ' + limit));
+});
+
+// Full row for one track, including the heavy text columns. Used when a
+// track is opened and by export, never by the list.
+app.get('/history/:id/full', (req, res) => {
+  const row = dbAll('SELECT * FROM history WHERE id=?', [req.params.id])[0];
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  res.json(row);
 });
 
 // ── Duplicate detection via perceptual audio hash ───────────────────────

@@ -5,9 +5,13 @@
 <title>Freq.Phull Updater</title>
 <style>
   :root {
-    --bg:#0a0a0a; --bg2:#141414; --bg3:#1c1c1c; --bg4:#252525;
-    --white:#fff; --off:#e8e8e8; --muted:#9a9a9a; --hint:#666;
-    --border:#222; --border2:#2c2c2c; --accent:#7ed982;
+    /* Exactly the app's tokens - the updater had drifted a few shades
+       lighter, which is enough to read as a different product when it
+       appears over the main window. */
+    --bg:#080808; --bg2:#101010; --bg3:#181818; --bg4:#202020;
+    --white:#ffffff; --off:#e8e8e8; --muted:#aaaaaa; --hint:#666666;
+    --border:#1e1e1e; --border2:#2a2a2a; --accent:#7ed982;
+    --e-out:cubic-bezier(.32,.72,0,1);
     --ease-out-quart: cubic-bezier(.165,.84,.44,1);
     --ease-spring:    cubic-bezier(.34,1.56,.64,1);
   }
@@ -34,7 +38,7 @@
     flex-shrink:0;
   }
   .topbar-logo {
-    width:22px; height:22px; background:var(--white); color:var(--bg);
+    width:22px; height:22px; object-fit:contain;
     border-radius:5px; display:flex; align-items:center; justify-content:center;
     font-family:'Bebas Neue','Oswald','Impact',sans-serif;
     font-size:14px; font-weight:700; letter-spacing:.5px;
@@ -104,7 +108,7 @@
     background:currentColor;
   }
   .status-badge.ok { color:var(--accent); border-color:rgba(126,217,130,.3); }
-  .status-badge.update { color:#6ab0ff; border-color:rgba(106,176,255,.3); }
+  .status-badge.update { color:var(--accent); border-color:rgba(126,217,130,.30); }
 
   /* Version cards */
   .versions {
@@ -126,7 +130,7 @@
     font-size:24px; letter-spacing:2px; line-height:1;
   }
   .vcard.new { border-color:rgba(106,176,255,.25); }
-  .vcard.new .vcard-num { color:#6ab0ff; }
+  .vcard.new .vcard-num { color:var(--accent); }
   .varrow {
     color:var(--muted);
     display:flex; align-items:center;
@@ -169,7 +173,7 @@
     overflow:hidden; margin-top:6px;
   }
   .progress-fill {
-    height:100%; background:linear-gradient(90deg,#6ab0ff,#7ed982);
+    height:100%; background:var(--accent);
     width:0%; transition:width 300ms ease;
   }
   .progress-text {
@@ -222,20 +226,35 @@
   body.installing .footer { display:none !important; }
   body.installing .topbar { border-bottom-color:transparent; background:transparent; }
 
+  /* Same beat grid as the app's opening screen - 100 BPM, kick envelope,
+     transform only. Animating box-shadow repainted the whole element on
+     every frame, which is the last thing a slow machine needs while it
+     is unpacking an installer. */
   .install-mark {
-    width:72px; height:72px; margin:0 auto 12px;
-    display:none; align-items:center; justify-content:center;
-    font-family:'Bebas Neue','Oswald','Impact',sans-serif;
-    font-size:42px; letter-spacing:1px;
-    background:linear-gradient(180deg, var(--bg3) 0%, var(--bg2) 100%);
-    border:1px solid var(--border2); border-radius:14px;
-    color:var(--white);
-    animation: install-mark-pulse 1.6s ease-in-out infinite;
-    box-shadow:0 10px 28px rgba(0,0,0,.5), 0 1px 0 rgba(255,255,255,.04) inset;
+    --beat:600ms;
+    width:84px; height:84px; margin:0 auto 14px;
+    display:none; place-items:center;
+    position:relative;
+    filter:drop-shadow(0 0 14px rgba(126,217,130,.16));
+    will-change:transform;
+    animation: install-kick var(--beat) var(--e-out) infinite;
   }
-  @keyframes install-mark-pulse {
-    0%, 100% { transform:scale(1);    box-shadow:0 10px 28px rgba(0,0,0,.5), 0 0 0 rgba(255,255,255,0) inset; }
-    50%      { transform:scale(1.04); box-shadow:0 14px 36px rgba(0,0,0,.6), 0 0 0 2px rgba(255,255,255,.06) inset; }
+  .install-mark img { width:100%; height:100%; object-fit:contain; display:block; }
+  .install-mark::after {
+    content:''; position:absolute; inset:-34px; border-radius:50%;
+    background:radial-gradient(circle, rgba(126,217,130,.18) 0%, rgba(126,217,130,0) 62%);
+    pointer-events:none; will-change:opacity;
+    animation: install-glow var(--beat) var(--e-out) infinite;
+  }
+  @keyframes install-kick {
+    0%   { transform:scale(1.055) }
+    46%  { transform:scale(1) }
+    100% { transform:scale(1) }
+  }
+  @keyframes install-glow {
+    0%   { opacity:.85 }
+    46%  { opacity:.32 }
+    100% { opacity:.28 }
   }
   .install-progress {
     width:100%; max-width:360px; height:2px;
@@ -245,24 +264,29 @@
     display:none;
   }
   .install-progress::after {
-    content:""; position:absolute; top:0; left:-40%;
+    content:""; position:absolute; top:0; left:0;
     width:40%; height:100%;
-    background:linear-gradient(90deg, transparent 0%, rgba(255,255,255,.7) 50%, transparent 100%);
+    background:linear-gradient(90deg, transparent 0%, rgba(126,217,130,.65) 50%, transparent 100%);
+    will-change:transform;
     animation: install-progress-slide 1.4s ease-in-out infinite;
   }
+  /* transform, not `left` - moving with `left` re-runs layout every
+     frame, which is precisely the cost a slow machine cannot absorb
+     while an installer is unpacking. */
   @keyframes install-progress-slide {
-    0%   { left:-40%; }
-    100% { left:100%; }
+    0%   { transform:translateX(-100%); }
+    100% { transform:translateX(250%); }
   }
   .install-hint {
     font-size:10px; color:var(--muted); letter-spacing:1.5px;
     margin-top:14px; text-transform:uppercase; display:none;
   }
-  body.installing .install-mark,
+  body.installing .install-mark { display:grid; }
   body.installing .install-progress,
   body.installing .install-hint { display:flex; }
   @media (prefers-reduced-motion: reduce){
     .install-mark { animation:none; }
+    .install-mark::after { animation:none; opacity:.5; }
     .install-progress::after { animation:none; left:0; width:100%; background:rgba(255,255,255,.6); }
   }
 
@@ -305,7 +329,7 @@
 </head>
 <body>
   <div class="topbar">
-    <div class="topbar-logo">HK</div>
+    <img class="topbar-logo" src="../../assets/hk-logo.png" alt="" onerror="this.style.display='none'"/>
     <div class="topbar-title">FREQ.PHULL</div>
     <div class="topbar-sub" id="topbar-sub">Updater</div>
     <div class="topbar-spacer"></div>
@@ -323,7 +347,7 @@
       <button id="lang-fr">FR</button>
     </div>
 
-    <div class="install-mark" id="install-mark">HK</div>
+    <div class="install-mark" id="install-mark"><img src="../../assets/hk-logo.png" alt="" onerror="this.style.display='none'"/></div>
 
     <div class="hero-title" id="hero-title">SOFTWARE UPDATE</div>
     <div class="hero-sub" id="hero-sub">Checking for updates...</div>
