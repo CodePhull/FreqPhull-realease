@@ -4,6 +4,30 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
+## 0.7.0 (2026-07-28)
+
+**New opening screen**
+
+The boot splash now carries the real Hood Knights mark instead of a
+drawn approximation, and it pulses on a beat grid rather than an
+arbitrary sine wave. The logo moves on a kick envelope - sharp attack,
+slow release - at 100 BPM, a hairline accent ring fires on every beat,
+and a wider one lands on the bar line, so the loop reads as 4/4 rather
+than an undifferentiated throb. A single `--bs-beat` value drives the
+whole animation, so the tempo is one number to change.
+
+- The logo is inlined as data, so the splash paints on the first frame
+  with no file request behind it.
+- The status line is held back 600ms: a fast boot shows the mark alone,
+  and the message only appears if there is actually a wait. It carries
+  the same text as the loading screen behind it, so the two can never
+  disagree.
+- The splash holds for at least one bar (2.6s) before dissolving. Shown
+  from the first painted frame, it would otherwise appear and vanish
+  within a few frames on a fast boot, which reads as a glitch. The floor
+  governs the overlay only; everything behind it is already live.
+- Honours `prefers-reduced-motion`: still mark, no rings.
+
 ## 0.6.9 (2026-07-28)
 
 Idle CPU. The app used a few percent of a core while sitting there doing

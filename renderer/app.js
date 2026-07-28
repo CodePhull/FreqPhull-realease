@@ -102,6 +102,35 @@ function diagLog(msg, cls) {
 function setStatus(msg) {
   const el = document.getElementById('load-status');
   if (el) el.textContent = msg;
+  // The boot splash carries the same message, so the two never disagree.
+  const bs = document.getElementById('boot-status');
+  if (bs) bs.textContent = msg;
+}
+
+// The splash is shown from the first painted frame, so on a fast boot it
+// would otherwise appear and vanish within a few frames - a flicker that
+// reads as a glitch. Hold it for at least one bar (2.6s at 100 BPM),
+// then dissolve. Everything behind it is already interactive; the floor
+// only governs the overlay.
+const BOOT_SPLASH_FLOOR_MS = 2600;
+const _bootSplashShownAt = Date.now();
+let _bootSplashDismissed = false;
+
+function dismissBootSplash() {
+  if (_bootSplashDismissed) return;
+  _bootSplashDismissed = true;
+  const go = () => {
+    const sp = document.getElementById('boot-splash');
+    if (!sp) return;
+    const bs = document.getElementById('boot-status');
+    if (bs) bs.textContent = 'Ready';
+    sp.classList.add('done');
+    // Remove after the fade so its animations stop costing frames.
+    setTimeout(() => { try { sp.remove(); } catch {} }, 420);
+  };
+  const waited = Date.now() - _bootSplashShownAt;
+  if (waited >= BOOT_SPLASH_FLOOR_MS) go();
+  else setTimeout(go, BOOT_SPLASH_FLOOR_MS - waited);
 }
 
 function updateStatus(msg) {
@@ -180,7 +209,7 @@ window.addEventListener('DOMContentLoaded', () => {
   setTimeout(() => {
     if (!document.body.classList.contains('app-ready')) {
       document.body.classList.add('app-ready');
-      (function(){ const sp = document.getElementById('boot-splash'); if (sp && !sp.classList.contains('done')) { sp.classList.add('done'); setTimeout(() => sp.remove(), 450); } })();
+      dismissBootSplash();
     }
   }, 2500);
 
@@ -235,7 +264,7 @@ function onBackendReady() {
     // body opacity transitions to 1.
     requestAnimationFrame(() => requestAnimationFrame(() => {
       document.body.classList.add('app-ready');
-      (function(){ const sp = document.getElementById('boot-splash'); if (sp && !sp.classList.contains('done')) { sp.classList.add('done'); setTimeout(() => sp.remove(), 450); } })();
+      dismissBootSplash();
     }));
   });
   // Subscribe to live server events so history refreshes itself when a
