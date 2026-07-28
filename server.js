@@ -3250,7 +3250,159 @@ app.get('/prefs', (req, res) => {
 // the GitHub release and stream it to the user's Downloads folder.
 // Saves users from having to clone or download the whole repo just to
 // pick up the extension.
+// The extension ships inside the app, so the normal path needs no
+// network at all: copy the folder straight into Downloads, ready for
+// Chrome's "Load unpacked" (which wants a folder, not a zip). Passing
+// {source:'github'} forces the old behaviour of fetching the latest
+// release asset, for users who want a newer extension than the one
+// bundled with their app build.
+function bundledExtensionDir() {
+  const candidates = [
+    getResourcePath('extension'),
+    process.resourcesPath ? path.join(process.resourcesPath, 'extension') : null,
+    path.join(__dirname, 'extension'),
+  ].filter(Boolean);
+  for (const c of candidates) {
+    try { if (fs.existsSync(path.join(c, 'manifest.json'))) return c; } catch {}
+  }
+  return null;
+}
+
+app.get('/extension/info', (_, res) => {
+  const dir = bundledExtensionDir();
+  let version = null;
+  if (dir) {
+    try { version = JSON.parse(readUtf8(path.join(dir, 'manifest.json'))).version; } catch {}
+  }
+  res.json({ bundled: !!dir, version });
+});
+
+// Where the user's unpacked copy lives. Chrome derives an unpacked
+// extension's ID from its folder path, so this name must never change
+// between versions: keeping the path stable is what lets the app update
+// the extension in place without the user re-adding it in Chrome.
+const EXT_FOLDER_NAME = 'Freq.Phull Extension';
+
+function extensionVersionAt(dir) {
+  try { return JSON.parse(readUtf8(path.join(dir, 'manifest.json'))).version || null; }
+  catch { return null; }
+}
+
+// Remembered install path, so later versions know what to keep in sync.
+function readExtInstallPath() {
+  try {
+    const p = path.join(os.homedir(), 'AppData', 'Roaming', 'freqphull', 'settings.json');
+    if (!fs.existsSync(p)) return null;
+    const v = JSON.parse(readUtf8(p)).extension_path;
+    return v && fs.existsSync(v) ? v : null;
+  } catch { return null; }
+}
+function writeExtInstallPath(dest) {
+  try {
+    const dir = path.join(os.homedir(), 'AppData', 'Roaming', 'freqphull');
+    const p = path.join(dir, 'settings.json');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    let cur = {};
+    try { if (fs.existsSync(p)) cur = JSON.parse(readUtf8(p)); } catch {}
+    cur.extension_path = dest;
+    fs.writeFileSync(p, JSON.stringify(cur, null, 2));
+  } catch (e) { slog('could not remember extension path: ' + e.message); }
+}
+
+// Copy bundled -> dest, replacing the contents but keeping the folder
+// itself (same path = same Chrome extension ID = no re-install).
+function syncExtensionTo(dest, bundled) {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(dest)) {
+    // Only clear files we own; never touch anything the user put there.
+    if (['manifest.json', 'background.js', 'content.js', 'content.css',
+         'panel.html', 'panel.js', 'panel.css', 'icons', 'README.md'].includes(entry)) {
+      fs.rmSync(path.join(dest, entry), { recursive: true, force: true });
+    }
+  }
+  fs.cpSync(bundled, dest, { recursive: true });
+}
+
+// Startup: if the user has an unpacked copy and this build carries a
+// newer extension, refresh it in place. Chrome cannot hot-swap an
+// unpacked extension while running, so the files are staged now and
+// Chrome picks them up on its next start. Runs once, well after boot,
+// and stays silent unless something actually changed.
+setTimeout(() => {
+  try {
+    const bundled = bundledExtensionDir();
+    const installed = readExtInstallPath();
+    if (!bundled || !installed) return;
+    const bv = extensionVersionAt(bundled), iv = extensionVersionAt(installed);
+    if (!bv || !iv || bv === iv) return;
+    syncExtensionTo(installed, bundled);
+    slog('extension auto-synced ' + iv + ' -> ' + bv + ' at ' + installed);
+    broadcastEvent('extension-updated', { from: iv, to: bv, path: installed });
+  } catch (e) {
+    slog('extension auto-sync failed: ' + e.message);
+  }
+}, 20000);
+
+app.get('/extension/status', (_, res) => {
+  const bundled = bundledExtensionDir();
+  const installed = readExtInstallPath();
+  const bundledVersion = bundled ? extensionVersionAt(bundled) : null;
+  const installedVersion = installed ? extensionVersionAt(installed) : null;
+  res.json({
+    bundled: !!bundled,
+    bundled_version: bundledVersion,
+    installed: !!installed,
+    installed_path: installed,
+    installed_version: installedVersion,
+    update_available: !!(bundledVersion && installedVersion && bundledVersion !== installedVersion),
+  });
+});
+
+// Refresh the user's unpacked copy in place. Chrome applies it on its
+// next restart (or an immediate Reload on chrome://extensions).
+app.post('/extension/update', (_, res) => {
+  const bundled = bundledExtensionDir();
+  const installed = readExtInstallPath();
+  if (!bundled) return res.status(404).json({ error: 'No bundled extension in this build' });
+  if (!installed) return res.status(404).json({ error: 'No installed copy to update' });
+  try {
+    syncExtensionTo(installed, bundled);
+    const version = extensionVersionAt(installed);
+    slog('extension synced in place at ' + installed + ' (v' + version + ')');
+    res.json({ ok: true, version, path: installed });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/extension/download', async (req, res) => {
+  const wantGithub = req.body && req.body.source === 'github';
+  const bundled = wantGithub ? null : bundledExtensionDir();
+  if (bundled) {
+    try {
+      let downloadsDir = path.join(os.homedir(), 'Downloads');
+      if (!fs.existsSync(downloadsDir)) downloadsDir = os.tmpdir();
+      const version = extensionVersionAt(bundled) || 'unknown';
+      // Reuse the remembered folder when we have one, so repeat clicks
+      // refresh the existing install instead of scattering copies.
+      let dest = readExtInstallPath() || path.join(downloadsDir, EXT_FOLDER_NAME);
+      if (fs.existsSync(dest) && !extensionVersionAt(dest)) {
+        // Something else owns that name - pick a free one rather than
+        // writing into a stranger's folder.
+        let n = 2;
+        while (fs.existsSync(dest)) {
+          dest = path.join(downloadsDir, EXT_FOLDER_NAME + ' (' + n + ')');
+          if (++n > 50) break;
+        }
+      }
+      syncExtensionTo(dest, bundled);
+      writeExtInstallPath(dest);
+      slog('extension installed to ' + dest + ' (v' + version + ')');
+      return res.json({ ok: true, method: 'bundled', unpacked: true, version, path: dest, filename: path.basename(dest) });
+    } catch (e) {
+      slog('bundled extension copy failed, falling back to GitHub: ' + e.message);
+    }
+  }
   const repoOwner = 'CodePhull';
   const repoName = 'FreqPhull-realease';
   const apiUrl = 'https://api.github.com/repos/' + repoOwner + '/' + repoName + '/releases/latest';
@@ -4788,6 +4940,14 @@ app.get('/analyze', async (req, res) => {
   if (wantSections) slog('analyze: beat-switch deep mode on');
   slog('analyze: spawning ' + pythonCmd + ' ' + scriptTmp);
   const proc = spawn(pythonCmd, [...getPythonArgs(), ...pyArgs], { windowsHide: true, env: process.env });
+  // Hard timeout: a hung child used to leave the UI on "Running analysis
+  // engine..." forever with no error event. 180s covers slow machines
+  // and long WAVs; past that, kill and surface it.
+  let _analyzeTimedOut = false;
+  const _analyzeKiller = setTimeout(() => {
+    _analyzeTimedOut = true;
+    try { proc.kill(); } catch {}
+  }, 180000);
 
   let stdout = '', stderr = '';
   proc.stdout.on('data', d => { stdout += d.toString(); });
@@ -4797,6 +4957,14 @@ app.get('/analyze', async (req, res) => {
   });
 
   proc.on('close', code => {
+    clearTimeout(_analyzeKiller);
+    if (_analyzeTimedOut) {
+      report('analyze.timeout', new Error('analyze.py exceeded 180s'), {
+        stderrTail: (stderr || '').slice(-600) || '(empty)',
+      });
+      sse('error', { message: 'Analysis timed out after 3 minutes and was stopped.', hint: 'Run Settings > Verify engines to check the Python runtime. Very long files can also hit this.' });
+      return res.end();
+    }
     try { fs.unlinkSync(wavTmp); } catch {}
     slog('analyze.py exit=' + code + ' stdout_len=' + stdout.length + ' stderr_len=' + stderr.length);
     if (stdout.length > 0) slog('stdout preview: ' + stdout.slice(0, 200));

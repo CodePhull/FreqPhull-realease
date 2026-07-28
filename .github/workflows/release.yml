@@ -48,6 +48,21 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --win --x64 --publish always
 
+      - name: Package Chrome extension
+        shell: pwsh
+        run: |
+          $v = (Get-Content extension/manifest.json | ConvertFrom-Json).version
+          $out = "dist/freqpull-ext-v$($v -replace '\.','').zip"
+          Compress-Archive -Path extension -DestinationPath $out -Force
+          Write-Host "built $out"
+          echo "EXT_ZIP=$out" >> $env:GITHUB_ENV
+
+      - name: Attach extension to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: gh release upload $env:GITHUB_REF_NAME $env:EXT_ZIP --clobber
+
       - name: List artifacts
         shell: pwsh
         run: Get-ChildItem dist | Format-Table Name, Length

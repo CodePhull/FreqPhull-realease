@@ -1936,6 +1936,22 @@ async function runPythonAnalysis(filePath, histId, deep) {
   if (deep) params.set('deep', '1'); // beat-switch deep mode
   const es = new EventSource(API + '/analyze?' + params);
 
+  // Client watchdog on top of the server's 180s kill: if neither done
+  // nor error arrives, stop waiting, say so, and fall back to the JS
+  // estimator so the user still gets BPM/key.
+  let _analysisSettled = false;
+  const _analysisWatchdog = setTimeout(() => {
+    if (_analysisSettled) return;
+    try { es.close(); } catch {}
+    diagLog('Analysis did not respond within 200s - falling back to JS estimate. Run Settings > Verify engines.', 'err');
+    showAppNotification(t('analysisStuck') || 'Analysis is not responding - check Settings > Verify engines', 'err', () => {
+      if (typeof switchTab === 'function') switchTab('settings');
+    }, 9000);
+    Promise.all([detectBPM(audioBuf), Promise.resolve(detectKey(audioBuf))]).then(([bpmR, keyR]) => {
+      applyAnalysisResult({ bpm: Math.round(bpmR.bpm), key: keyR.key, mode: keyR.mode, confidence: keyR.confidence }, histId);
+    }).catch(() => {});
+  }, 200000);
+
   es.addEventListener('status', e => {
     const msg = JSON.parse(e.data).message;
     diagLog(msg, 'info');
@@ -1944,6 +1960,8 @@ async function runPythonAnalysis(filePath, histId, deep) {
   });
 
   es.addEventListener('done', e => {
+    _analysisSettled = true;
+    clearTimeout(_analysisWatchdog);
     es.close();
     const result = JSON.parse(e.data);
     diagLog('Python analysis done: ' + result.bpm + ' BPM, ' + result.key + ' ' + result.mode + ' (engine: ' + result.engine + ')', 'ok');
@@ -1951,6 +1969,8 @@ async function runPythonAnalysis(filePath, histId, deep) {
   });
 
   es.addEventListener('error', e => {
+    _analysisSettled = true;
+    clearTimeout(_analysisWatchdog);
     es.close();
     let errMsg = 'Python analysis failed';
     try {
@@ -4125,7 +4145,19 @@ function subscribeToServerEvents() {
         }, 100);
       }, 0);
       refreshEnginesDiagRow();
-  _hydrateFileTagsPref();
+    });
+    es.addEventListener('extension-updated', (ev) => {
+      // Files are already refreshed on disk; Chrome applies them when it
+      // next starts, so the message asks for that rather than implying
+      // the update is already live.
+      try {
+        const d = JSON.parse(ev.data || '{}');
+        showAppNotification(
+          (t('extAutoUpdated') || 'Extension updated') + ' ' + d.from + ' → ' + d.to + '. ' +
+          (t('extRestartChrome') || 'Restart Chrome to apply.'),
+          'done', () => { fetch(API + '/open-folder?path=' + encodeURIComponent(d.path)); }, 10000
+        );
+      } catch {}
     });
     es.addEventListener('engines-repair', (ev) => {
       // Self-healing lifecycle. Quiet by design: a pill-style toast at
@@ -5080,10 +5112,11 @@ function openCreateSmartFolderDialog() {
   modal = document.createElement('div');
   modal.id = 'smart-folder-modal';
   modal.className = 'setup-modal';
+  modal.style.display = 'flex';
   const KEYS = ['', 'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   modal.innerHTML = `
-    <div class="setup-modal-box" style="max-width:420px">
-      <div class="setup-modal-title"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> ${t('smartTitle')}</div>
+    <div class="setup-card" style="max-width:420px;padding:24px">
+      <div style="font-size:16px;font-weight:700;margin-bottom:12px"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> ${t('smartTitle')}</div>
       <div style="font-size:12px;color:var(--hint);margin-bottom:14px">${t('smartSub')}</div>
       <div class="card-lbl">${t('smartName')}</div>
       <input type="text" id="smart-name" style="width:100%;height:38px;padding:0 12px;margin-bottom:12px" placeholder="${t('smartNamePh')}"/>
@@ -5145,9 +5178,10 @@ async function openLibraryDoctor() {
   modal = document.createElement('div');
   modal.id = 'doctor-modal';
   modal.className = 'setup-modal';
+  modal.style.display = 'flex';
   modal.innerHTML = `
-    <div class="setup-modal-box" style="max-width:640px;max-height:80vh;display:flex;flex-direction:column">
-      <div class="setup-modal-title">${t('doctorTitle')}</div>
+    <div class="setup-card" style="max-width:640px;max-height:80vh;display:flex;flex-direction:column;padding:24px">
+      <div style="font-size:16px;font-weight:700;margin-bottom:12px">${t('doctorTitle')}</div>
       <div id="doctor-body" style="overflow-y:auto;flex:1;font-size:12.5px;color:var(--off)">${t('doctorScanning')}</div>
       <div class="row" style="justify-content:flex-end;margin-top:14px">
         <button class="btn sm" onclick="document.getElementById('doctor-modal').remove()">${t('closeWord') || 'Close'}</button>
@@ -5159,7 +5193,16 @@ async function openLibraryDoctor() {
     const r = await fetch(API + '/history/doctor');
     const j = await r.json();
     if (!j.groups || !j.groups.length) {
-      body.innerHTML = `<div style="padding:20px;text-align:center;color:var(--hint)">${t('doctorClean').replace('{n}', j.scanned || 0)}</div>`;
+      if (!j.scanned) {
+        // Nothing had a fingerprint - the scan cannot see anything yet.
+        body.innerHTML = `
+          <div style="padding:20px;text-align:center;color:var(--hint)">
+            <div style="margin-bottom:12px">${t('doctorNoPrints')}</div>
+            <button class="btn sm pri" onclick="fetch(API + '/history/fingerprint-backfill', {method:'POST'}); this.disabled = true; this.textContent = t('doctorBackfillStarted');">${t('doctorBackfillBtn')}</button>
+          </div>`;
+        return;
+      }
+      body.innerHTML = `<div style="padding:20px;text-align:center;color:var(--hint)">${t('doctorClean').replace('{n}', j.scanned)}</div>`;
       return;
     }
     body.innerHTML = j.groups.map(g => `
@@ -6842,6 +6885,49 @@ const EXT_REPO_ROOT = 'https://github.com/CodePhull/FreqPhull-realease';
 // One-click extension download. Hits /extension/download which fetches
 // the latest freqpull-ext-vX.X.X.zip from GitHub releases, streams it
 // to the user's Downloads folder, then reveals it in the file explorer.
+// Settings action: report bundled vs installed extension versions and
+// refresh the installed copy when this build carries a newer one.
+async function _refreshExtVersionLine() {
+  const el = document.getElementById('ext-version-line');
+  if (!el) return;
+  try {
+    const st = await (await fetch(API + '/extension/status')).json();
+    if (!st.bundled) { el.textContent = ''; return; }
+    const parts = [(t('extBundledLbl') || 'In this app') + ': v' + st.bundled_version];
+    if (st.installed) parts.push((t('extInstalledLbl') || 'Your copy') + ': v' + st.installed_version);
+    el.textContent = parts.join('  -  ');
+  } catch { el.textContent = ''; }
+}
+
+async function checkExtensionUpdate(btn) {
+  const original = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = t('extChecking') || 'Checking...'; }
+  try {
+    const r = await fetch(API + '/extension/status');
+    const st = await r.json();
+    if (!st.installed) {
+      showAppNotification(t('extNotInstalled') || 'No installed copy yet - use Get the extension first', 'info', null, 6000);
+      return;
+    }
+    if (!st.update_available) {
+      showAppNotification((t('extUpToDate') || 'Extension is up to date') + ' (v' + st.installed_version + ')', 'done', null, 5000);
+      return;
+    }
+    const up = await fetch(API + '/extension/update', { method: 'POST' });
+    const j = await up.json();
+    if (!up.ok) throw new Error(j.error || 'update failed');
+    showAppNotification(
+      (t('extAutoUpdated') || 'Extension updated') + ' ' + st.installed_version + ' → ' + j.version + '. ' +
+      (t('extRestartChrome') || 'Restart Chrome to apply.'),
+      'done', () => { fetch(API + '/open-folder?path=' + encodeURIComponent(j.path)); }, 10000
+    );
+  } catch (e) {
+    showAppNotification((t('extDownloadFailed') || 'Failed') + ': ' + e.message, 'err', null, 6000);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = original; }
+  }
+}
+
 async function downloadExtensionZip(btn) {
   const original = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = t('extDownloadProgress') || 'Downloading...'; }
@@ -6872,13 +6958,22 @@ async function downloadExtensionZip(btn) {
       );
       return;
     }
-    showAppNotification(
-      (t('extDownloadDone') || 'Extension downloaded') + ': ' + j.filename + ' (' + j.version + ')',
-      'done', () => {
-        // Open the containing folder so the user can find the zip
-        fetch(API + '/open-folder?path=' + encodeURIComponent(j.path.replace(/[\\/][^\\/]+$/, '')));
-      }, 8000
-    );
+    if (j.unpacked) {
+      // Bundled path: the folder is ready for Chrome's "Load unpacked",
+      // so there is no zip for the user to extract first.
+      showAppNotification(
+        (t('extCopiedDone') || 'Extension ready in Downloads') + ': ' + j.filename +
+        ' (v' + j.version + ') - ' + (t('extCopiedHint') || 'click to open the folder'),
+        'done', () => { fetch(API + '/open-folder?path=' + encodeURIComponent(j.path)); }, 10000
+      );
+    } else {
+      showAppNotification(
+        (t('extDownloadDone') || 'Extension downloaded') + ': ' + j.filename + ' (' + j.version + ')',
+        'done', () => {
+          fetch(API + '/open-folder?path=' + encodeURIComponent(j.path.replace(/[\\/][^\\/]+$/, '')));
+        }, 8000
+      );
+    }
   } catch (e) {
     showAppNotification(
       (t('extDownloadFailed') || 'Download failed') + ': ' + e.message,
@@ -9736,6 +9831,10 @@ const T = {
     plQueued:'tracks queued',
     plQueuedNotif:'Playlist queued',
     plSkipped:'already in queue',
+    analysisStuck:'Analysis is not responding - check Settings > Verify engines',
+    doctorNoPrints:'No tracks have audio fingerprints yet, so the doctor cannot compare anything. Run the fingerprint backfill first (a few minutes for large libraries), then scan again.',
+    doctorBackfillBtn:'Start fingerprint backfill',
+    doctorBackfillStarted:'Backfill running - re-open the doctor when it finishes',
     doctorName:'Library doctor',
     doctorDesc:'Scan for corrupted downloads - tracks whose file contains a DIFFERENT track\'s audio (a bug fixed in 0.4.3 could cause this in bulk grabs). Offers one-click re-download of the real audio.',
     doctorBtn:'Scan library',
@@ -9755,6 +9854,7 @@ const T = {
     autoRenameName:'Auto-rename with BPM/key',
     autoRenameDesc:'After analysis, rename files to "Title [140BPM Cm].mp3". Off by default - skips files already stamped and files currently in use.',
     scrubHint:'Click to seek',
+    smartBtn:'Smart', smartBtnTitle:'Rules-based folder that fills itself',
     smartTitle:'New smart folder',
     smartSub:'Rules-based folder that auto-populates. New downloads matching the rules appear automatically.',
     smartName:'Folder name',
@@ -9841,6 +9941,17 @@ const T = {
     extHowToStep1Btn:'Open Releases page',
     extDownloadBtn:'Download extension zip',
     extDownloadProgress:'Downloading...',
+    extBundledLbl:'In this app', extInstalledLbl:'Your copy',
+    extAutoUpdated:'Extension updated',
+    extRestartChrome:'Restart Chrome to apply.',
+    extChecking:'Checking...',
+    extNotInstalled:'No installed copy yet - use Get the extension first',
+    extUpToDate:'Extension is up to date',
+    extUpdateName:'Keep the extension updated',
+    extUpdateDesc:'The app refreshes your unpacked extension folder in place when it ships a newer version. Chrome applies it the next time it starts, so nothing has to be re-added.',
+    extUpdateBtn:'Check now',
+    extCopiedDone:'Extension ready in Downloads',
+    extCopiedHint:'click to open the folder',
     extDownloadDone:'Extension downloaded',
     extDownloadFailed:'Download failed',
     extHowToOpenManual:'Open releases page',
@@ -10243,77 +10354,82 @@ const T = {
   },
   fr: {
     // ── disjoncteur moteur Python ──
-    enginesMissing:"Moteur Python introuvable. Cliquez pour le configurer — l'analyse automatique BPM/cle est en pause.",
-    enginesDepsMissing:"Dependances du moteur manquantes. Cliquez pour relancer la configuration - l'analyse est en pause.",
+    enginesMissing:"Moteur Python introuvable. Cliquez pour le configurer — l'analyse automatique BPM/clé est en pause.",
+    enginesDepsMissing:"Dépendances du moteur manquantes. Cliquez pour relancer la configuration - l'analyse est en pause.",
     enginesDiagTitle:'Moteurs indisponibles',
-    enginesDiagTitleDeps:'Dependances du moteur manquantes',
-    enginesDiagDescGeneric:"L'analyse en arriere-plan est en pause. Lancez la configuration pour installer Python et les paquets requis.",
-    enginesDiagDescDeps:"Python est installe mais un paquet requis n'a pas pu etre installe. Relancez la configuration pour reessayer.",
+    enginesDiagTitleDeps:'Dépendances du moteur manquantes',
+    enginesDiagDescGeneric:"L'analyse en arrière-plan est en pause. Lancez la configuration pour installer Python et les paquets requis.",
+    enginesDiagDescDeps:"Python est installé mais un paquet requis n'a pas pu être installé. Relancez la configuration pour réessayer.",
     enginesDiagRetry:'Relancer la configuration',
     settingsSec_privacy:'Confidentialite',
     settingsSec_privacyDesc:'Rapports d\'erreurs',
     crashReportName:'Rapports d\'erreurs',
-    crashReportDesc:'Des rapports anonymes sont envoyes automatiquement pour nous aider a corriger les bugs. Les chemins de fichiers, noms d\'utilisateur et URL YouTube sont anonymises avant transmission. Aucun audio, aucun contenu de bibliotheque, aucune donnee personnelle ne quitte jamais votre machine.',
-    crashReportStatus:'Actif. Rapports limites aux erreurs et a la version de l\'application.',
+    crashReportDesc:'Des rapports anonymes sont envoyés automatiquement pour nous aider à corriger les bugs. Les chemins de fichiers, noms d\'utilisateur et URL YouTube sont anonymisés avant transmission. Aucun audio, aucun contenu de bibliothèque, aucune donnée personnelle ne quitte jamais votre machine.',
+    crashReportStatus:'Actif. Rapports limités aux erreurs et à la version de l\'application.',
     crashReportDiagBtn:'Diagnostic',
-    crashReportTestBtn:'Envoyer un evenement test',
+    crashReportTestBtn:'Envoyer un événement test',
     crashReportTestSending:'Envoi...',
-    crashReportTestSent:'Evenement test envoye',
-    crashReportTestQueued:'Evenement test en attente - verifiez Sentry dans 1-2 min',
-    crashReportTestFailed:'Echec de l\'envoi',
-    crashReportDiagLoading:'Verification...',
+    crashReportTestSent:'Événement test envoyé',
+    crashReportTestQueued:'Événement test en attente - vérifiez Sentry dans 1-2 min',
+    crashReportTestFailed:'Échec de l\'envoi',
+    crashReportDiagLoading:'Vérification...',
     dlPhaseConverting:'Conversion…',
-    selfHealStart:'Auto-reparation des moteurs demarree',
-    selfHealDone:'Moteurs repares automatiquement - tout fonctionne a nouveau',
-    selfHealFailed:'Echec de la reparation automatique - ouvrez Parametres > Moteurs IA pour relancer la configuration complete',
-    verifyName:'Verifier les moteurs',
-    verifyDesc:'Verifie en profondeur chaque composant IA (analyse, pistes, transcription) et identifie precisement ce qui est casse. Reparation en un clic.',
-    verifyBtn:'Verifier maintenant',
-    verifyRunning:'Verification...',
-    verifyAllOk:'Tous les moteurs sont operationnels',
-    verifyBroken:'Paquets casses detectes',
-    verifyClickRepair:'cliquez pour reparer automatiquement',
+    selfHealStart:'Auto-réparation des moteurs démarrée',
+    selfHealDone:'Moteurs réparés automatiquement - tout fonctionne à nouveau',
+    selfHealFailed:'Échec de la réparation automatique - ouvrez Paramètres > Moteurs IA pour relancer la configuration complète',
+    verifyName:'Vérifier les moteurs',
+    verifyDesc:'Vérifie en profondeur chaque composant IA (analyse, pistes, transcription) et identifie précisément ce qui est casse. Reparation en un clic.',
+    verifyBtn:'Vérifier maintenant',
+    verifyRunning:'Vérification...',
+    verifyAllOk:'Tous les moteurs sont opérationnels',
+    verifyBroken:'Paquets cassés détectés',
+    verifyClickRepair:'cliquez pour réparer automatiquement',
     verifyBrokenGeneric:'Les moteurs ne fonctionnent pas',
     plQueued:'pistes en file',
-    plQueuedNotif:'Playlist ajoutee a la file',
-    plSkipped:'deja en file',
-    doctorName:'Docteur de bibliotheque',
-    doctorDesc:'Detecte les telechargements corrompus - pistes dont le fichier contient l\'audio d\'une AUTRE piste (bug corrige en 0.4.3 lors des telechargements en masse). Propose un re-telechargement en un clic.',
-    doctorBtn:'Analyser la bibliotheque',
-    doctorTitle:'Docteur de bibliotheque',
-    doctorScanning:'Analyse de votre bibliotheque en cours...',
-    doctorClean:'Tout est bon - {n} pistes analysees, aucune discordance titre/audio trouvee.',
-    doctorOriginal:'L\'audio appartient a',
-    doctorSuspects:'Ces entrees partagent le meme audio sous un autre nom',
-    doctorSameAudio:'Meme audio, titre different - probablement corrompu',
-    doctorRedl:'Re-telecharger',
-    doctorNoUrl:'Aucune URL source enregistree',
-    doctorFixed:'Repare',
-    doctorFixedNotif:'Audio correct telecharge - entree corrompue supprimee',
-    doctorRedlFailed:'Echec du re-telechargement - reessayez ou recuperez-le manuellement',
-    fileTagsName:'Ecrire BPM/tonalite dans les tags',
-    fileTagsDesc:'Apres analyse, inscrit le BPM et la tonalite dans les metadonnees du fichier pour FL Studio, Rekordbox, Mixed In Key et autres. Active par defaut.',
-    autoRenameName:'Renommage auto avec BPM/tonalite',
-    autoRenameDesc:'Apres analyse, renomme les fichiers en "Titre [140BPM Cm].mp3". Desactive par defaut - ignore les fichiers deja marques et ceux en cours d\'utilisation.',
+    plQueuedNotif:'Playlist ajoutée à la file',
+    plSkipped:'déjà en file',
+    analysisStuck:'L\'analyse ne répond pas - vérifiez Paramètres > Vérifier les moteurs',
+    doctorNoPrints:'Aucune piste n\'a encore d\'empreinte audio, le docteur ne peut donc rien comparer. Lancez d\'abord le remplissage des empreintes (quelques minutes pour les grandes bibliothèques), puis relancez le scan.',
+    doctorBackfillBtn:'Lancer le remplissage des empreintes',
+    doctorBackfillStarted:'Remplissage en cours - rouvrez le docteur une fois terminé',
+    doctorName:'Docteur de bibliothèque',
+    doctorDesc:'Détecte les téléchargements corrompus - pistes dont le fichier contient l\'audio d\'une AUTRE piste (bug corrigé en 0.4.3 lors des téléchargements en masse). Propose un re-téléchargement en un clic.',
+    doctorBtn:'Analyser la bibliothèque',
+    doctorTitle:'Docteur de bibliothèque',
+    doctorScanning:'Analyse de votre bibliothèque en cours...',
+    doctorClean:'Tout est bon - {n} pistes analysées, aucune discordance titre/audio trouvee.',
+    doctorOriginal:'L\'audio appartient à',
+    doctorSuspects:'Ces entrées partagent le même audio sous un autre nom',
+    doctorSameAudio:'Meme audio, titre différent - probablement corrompu',
+    doctorRedl:'Re-télécharger',
+    doctorNoUrl:'Aucune URL source enregistrée',
+    doctorFixed:'Réparé',
+    doctorFixedNotif:'Audio correct téléchargé - entrée corrompue supprimée',
+    doctorRedlFailed:'Échec du re-téléchargement - réessayez ou récupérez-le manuellement',
+    fileTagsName:'Écrire BPM/tonalité dans les tags',
+    fileTagsDesc:'Après analyse, inscrit le BPM et la tonalité dans les métadonnées du fichier pour FL Studio, Rekordbox, Mixed In Key et autres. Activé par défaut.',
+    autoRenameName:'Renommage auto avec BPM/tonalité',
+    autoRenameDesc:'Après analyse, renomme les fichiers en "Titre [140BPM Cm].mp3". Désactivé par défaut - ignore les fichiers déjà marqués et ceux en cours d\'utilisation.',
     scrubHint:'Cliquez pour naviguer',
+    smartBtn:'Intelligent', smartBtnTitle:'Dossier basé sur des règles qui se remplit tout seul',
     smartTitle:'Nouveau dossier intelligent',
-    smartSub:'Dossier base sur des regles, auto-alimente. Les nouveaux telechargements correspondants apparaissent automatiquement.',
+    smartSub:'Dossier basé sur des règles, auto-alimenté. Les nouveaux téléchargements correspondants apparaissent automatiquement.',
     smartName:'Nom du dossier',
     smartNamePh:'ex. Trap sombre 130-150',
     smartBpmMin:'BPM min',
     smartBpmMax:'BPM max',
-    smartKey:'Tonalite',
+    smartKey:'Tonalité',
     smartMode:'Mode',
     smartAny:'Tous',
     smartMinor:'Mineur',
     smartMajor:'Majeur',
-    smartCreate:'Creer le dossier intelligent',
-    smartCreated:'Dossier intelligent cree - il restera a jour automatiquement',
+    smartCreate:'Créer le dossier intelligent',
+    smartCreated:'Dossier intelligent créé - il restera à jour automatiquement',
     smartNeedName:'Donnez un nom au dossier',
-    smartNeedRule:'Definissez au moins une regle (plage BPM, tonalite ou mode)',
+    smartNeedRule:'Définissez au moins une règle (plage BPM, tonalité ou mode)',
     closeWord:'Fermer',
     ctxOpenAnalyze:'Ouvrir dans Analyse',
-    ctxSendStems:'Envoyer au separateur de pistes',
+    ctxSendStems:'Envoyer au séparateur de pistes',
     ctxSendTranscribe:'Envoyer a la transcription',
     ctxFavorite:'Ajouter aux favoris',
     ctxUnfavorite:'Retirer des favoris',
@@ -10321,38 +10437,38 @@ const T = {
     ctxCopyUrl:'Copier l\'URL source',
     ctxShowFolder:'Ouvrir le dossier',
     ctxRemove:'Retirer de l\'historique',
-    noSourceUrl:'Aucune URL enregistree pour cette piste',
-    transReady:'Pret',
+    noSourceUrl:'Aucune URL enregistrée pour cette piste',
+    transReady:'Prêt',
     transStartBtn:'Demarrer la transcription',
     spTagged:'Etiquete',
-    transPhaseLoading:'Chargement du modele {model}...',
+    transPhaseLoading:'Chargement du modèle {model}...',
     transPhaseListening:'Detection des segments de parole...',
     transPhaseDecoding:'Decodage par exploration (5 candidats)...',
-    transPhaseAligning:'Alignement precis des mots...',
-    transPhaseAlmost:'Presque termine - finalisation...',
+    transPhaseAligning:'Alignement précis des mots...',
+    transPhaseAlmost:'Presque terminé - finalisation...',
     transEstShort:'un instant',
     transEstMin:'~{n} min',
-    transComplete:'Transcription terminee en {time}',
-    transStartHint:'Transcription - {est} (modele: {model})',
-    enginesReady:"Moteur Python pret. L'analyse en arriere-plan a repris.",
+    transComplete:'Transcription terminée en {time}',
+    transStartHint:'Transcription - {est} (modèle : {model})',
+    enginesReady:"Moteur Python prêt. L'analyse en arrière-plan a repris.",
 
     // ── Sections de parametres ──
-    settingsSec_general:'General',
-    settingsSec_generalDesc:'Langue et emplacement de la bibliotheque',
+    settingsSec_general:'Général',
+    settingsSec_generalDesc:'Langue et emplacement de la bibliothèque',
     settingsSec_library:'Bibliotheque',
     settingsSec_libraryDesc:'Organisation et etiquetage des pistes',
     settingsSec_maintenance:'Maintenance',
-    settingsSec_maintenanceDesc:'Nettoyage du stockage et reparation',
+    settingsSec_maintenanceDesc:'Nettoyage du stockage et réparation',
     settingsSec_performance:'Performance',
     settingsSec_performanceDesc:'CPU / GPU et rendu',
     settingsSec_engines:'Moteurs IA',
     settingsSec_enginesDesc:'Installation Python, Demucs, Whisper',
-    settingsSec_updates:'Mises a jour',
-    settingsSec_updatesDesc:"Verification de l'app et de yt-dlp",
+    settingsSec_updates:'Mises à jour',
+    settingsSec_updatesDesc:"Vérification de l'app et de yt-dlp",
     settingsSec_extension:'Extension de navigateur',
     settingsSec_extensionDesc:'Compagnon Chrome / Edge / Brave',
     settingsSec_diagnostics:'Diagnostics',
-    settingsSec_diagnosticsDesc:'Verifications de chemins et journaux',
+    settingsSec_diagnosticsDesc:'Vérifications de chemins et journaux',
     settingsSec_about:'A propos',
     settingsSec_aboutDesc:'Version et credits',
 
@@ -10362,54 +10478,65 @@ const T = {
     // ── bouton fenetre de mise a jour ──
 
     // ── acceleration materielle ──
-    hwAccelName:'Acceleration materielle',
-    hwAccelDesc:"Utilise le GPU pour le rendu, les animations et les canvas de l'analyseur. Recommande ACTIVE pour la plupart des utilisateurs. Desactivez uniquement si vous voyez des artefacts graphiques, des flashs blancs, ou si le ventilateur de votre ordinateur s'emballe juste en faisant defiler la page - certains GPU integres gerent mal Electron. Un redemarrage de l'application est requis.",
-    hwAccelUnavailable:"Le toggle d'acceleration materielle est indisponible sur cette version",
-    hwAccelOnNotif:'Acceleration materielle : ACTIVEE',
-    hwAccelOffNotif:'Acceleration materielle : DESACTIVEE',
-    hwAccelRestartTitle:'Redemarrage requis',
-    hwAccelRestartBody:'Ce parametre ne prendra effet qu\'apres avoir redemarre Freq.Phull. Redemarrer maintenant ?',
-    hwAccelRestartNow:'Redemarrer maintenant',
-    hwAccelRestartLater:'Redemarrer plus tard',
+    hwAccelName:'Acceleration matérielle',
+    hwAccelDesc:"Utilise le GPU pour le rendu, les animations et les canvas de l'analyseur. Recommandé ACTIVÉ pour la plupart des utilisateurs. Désactivez uniquement si vous voyez des artefacts graphiques, des flashs blancs, ou si le ventilateur de votre ordinateur s'emballe juste en faisant défiler la page - certains GPU intégrés gèrent mal Electron. Un redémarrage de l'application est requis.",
+    hwAccelUnavailable:"Le toggle d'accélération matérielle est indisponible sur cette version",
+    hwAccelOnNotif:'Accélération matérielle : ACTIVÉE',
+    hwAccelOffNotif:'Accélération matérielle : DÉSACTIVÉE',
+    hwAccelRestartTitle:'Redémarrage requis',
+    hwAccelRestartBody:'Ce paramètre ne prendra effet qu\'après avoir redémarré Freq.Phull. Redémarrer maintenant ?',
+    hwAccelRestartNow:'Redémarrer maintenant',
+    hwAccelRestartLater:'Redémarrer plus tard',
     // ── lien extension + tutoriel ──
     extLinkName:'Extension de navigateur',
-    extLinkDesc:'Une extension Chrome qui ajoute un bouton Grab sur YouTube pour envoyer les beats directement vers Freq.Phull. Mise a jour independamment de l\'app principale via le meme depot GitHub.',
+    extLinkDesc:'Une extension Chrome qui ajoute un bouton Grab sur YouTube pour envoyer les beats directement vers Freq.Phull. Mise à jour indépendamment de l\'app principale via le même dépôt GitHub.',
     extLinkOpen:'Ouvrir la page',
     extLinkHowTo:'Comment installer',
     extHowToTitle:'Installer l\'extension de navigateur',
     extHowToSub:'Chrome, Edge, Brave, Opera, Arc - tout navigateur base sur Chromium. Installation en 1 minute.',
-    extHowToStep1Title:'Telechargez le dossier de l\'extension',
-    extHowToStep1Desc:'Ouvrez la page Releases et telechargez le dernier zip freqpull-ext, puis decompressez-le quelque part ou vous ne le deplacerez pas (Documents convient).',
+    extHowToStep1Title:'Téléchargez le dossier de l\'extension',
+    extHowToStep1Desc:'Ouvrez la page Releases et téléchargez le dernier zip freqpull-ext, puis décompressez-le quelque part ou vous ne le deplacerez pas (Documents convient).',
     extHowToStep1Btn:'Ouvrir les Releases',
-    extDownloadBtn:'Telecharger l\'extension',
-    extDownloadProgress:'Telechargement...',
-    extDownloadDone:'Extension telechargee',
-    extDownloadFailed:'Echec du telechargement',
+    extDownloadBtn:'Télécharger l\'extension',
+    extDownloadProgress:'Téléchargement...',
+    extBundledLbl:'Dans cette app', extInstalledLbl:'Votre copie',
+    extAutoUpdated:'Extension mise à jour',
+    extRestartChrome:'Redémarrez Chrome pour appliquer.',
+    extChecking:'Vérification...',
+    extNotInstalled:'Aucune copie installée - utilisez d\'abord Obtenir l\'extension',
+    extUpToDate:'L\'extension est à jour',
+    extUpdateName:'Garder l\'extension à jour',
+    extUpdateDesc:'L\'app actualise sur place votre dossier d\'extension décompressé lorsqu\'elle contient une version plus récente. Chrome l\'applique à son prochain démarrage, rien n\'est à réinstaller.',
+    extUpdateBtn:'Vérifier maintenant',
+    extCopiedDone:'Extension prête dans Téléchargements',
+    extCopiedHint:'cliquez pour ouvrir le dossier',
+    extDownloadDone:'Extension téléchargée',
+    extDownloadFailed:'Échec du téléchargement',
     extHowToOpenManual:'Ouvrir la page des releases',
-    extDownloadFallback:'Ouverture de la page des releases - recuperez le zip la-bas.',
+    extDownloadFallback:'Ouverture de la page des releases - récupérez le zip là-bas.',
     clipboardDetected:'Presse-papiers :',
     paste:'Coller',
     extHowToStep2Title:'Ouvrez votre page d\'extensions',
-    extHowToStep2Desc:'Collez ceci dans la barre d\'adresse de votre navigateur et appuyez sur Entree :',
-    extHowToStep3Title:'Activez le Mode developpeur',
-    extHowToStep3Desc:'Bascule en haut a droite de la page des extensions. Permet d\'installer des extensions locales ; a faire une seule fois.',
+    extHowToStep2Desc:'Collez ceci dans la barre d\'adresse de votre navigateur et appuyez sur Entrée :',
+    extHowToStep3Title:'Activez le Mode développeur',
+    extHowToStep3Desc:'Bascule en haut à droite de la page des extensions. Permet d\'installer des extensions locales ; a faire une seule fois.',
     extHowToStep4Title:'Cliquez sur "Charger l\'extension non empaquetee"',
-    extHowToStep4Desc:'Le bouton apparait une fois le Mode developpeur active. Selectionnez le dossier decompresse a l\'etape 1 (celui qui contient manifest.json).',
+    extHowToStep4Desc:'Le bouton apparaît une fois le Mode développeur activé. Sélectionnez le dossier décompressé à l\'étape 1 (celui qui contient manifest.json).',
     extHowToStep5Title:'Epinglez et utilisez',
-    extHowToStep5Desc:'Cliquez sur l\'icone de piece de puzzle dans la barre d\'outils du navigateur, puis sur l\'epingle a cote de Freq.Phull. Le panneau de l\'extension s\'ouvrira a cote de toute video YouTube ; appuyez sur Grab pour l\'envoyer a l\'app.',
-    extHowToTip:'Astuce : gardez Freq.Phull desktop ouvert. L\'extension communique avec sur 127.0.0.1:47891 - les telechargements arrivent automatiquement dans votre bibliotheque.',
-    extHowToOpenRepo:'Ouvrir le depot',
+    extHowToStep5Desc:'Cliquez sur l\'icône de pièce de puzzle dans la barre d\'outils du navigateur, puis sur l\'épingle à côté de Freq.Phull. Le panneau de l\'extension s\'ouvrira à côté de toute vidéo YouTube ; appuyez sur Grab pour l\'envoyer à l\'app.',
+    extHowToTip:'Astuce : gardez Freq.Phull desktop ouvert. L\'extension communique avec sur 127.0.0.1:47891 - les téléchargements arrivent automatiquement dans votre bibliothèque.',
+    extHowToOpenRepo:'Ouvrir le dépôt',
 
     // ── Notifications de verification au demarrage (0.2.8) ──
-    updCheckingBoot:'Verification des mises a jour...',
-    updUpToDate:'Vous etes a jour',
+    updCheckingBoot:'Vérification des mises à jour...',
+    updUpToDate:'Vous êtes à jour',
 
     // ── Reparation des metadonnees (0.2.7) ──
     storRepairThumbs:'Reparer les miniatures manquantes',
-    storRepairScanning:'Recherche des entrees avec miniatures ou duree manquantes...',
-    storRepairNone:'Toutes les entrees ont des metadonnees completes. Rien a reparer.',
-    storRepairConfirm:'{n} entrees ont des metadonnees manquantes.\n\n{twin} peuvent etre corrigees instantanement en copiant depuis une entree jumelle (YouTube original).\n{probe} seront analysees avec ffmpeg (plus lent, ~50ms chacune).\n\nContinuer ?',
-    storRepairDone:'{n} entrees reparees ({twin} par jumelage, {probe} via ffprobe)',
+    storRepairScanning:'Recherche des entrées avec miniatures ou durée manquantes...',
+    storRepairNone:'Toutes les entrées ont des métadonnées complètes. Rien a réparer.',
+    storRepairConfirm:'{n} entrées ont des métadonnées manquantes.\n\n{twin} peuvent être corrigées instantanément en copiant depuis une entrée jumelle (YouTube original).\n{probe} seront analysées avec ffmpeg (plus lent, ~50ms chacune).\n\nContinuer ?',
+    storRepairDone:'{n} entrées réparées ({twin} par jumelage, {probe} via ffprobe)',
 
     // ── Verrouillage de defilement (0.2.6) ──
     scrollLockOn:'Suivi de la piste en lecture dans Historique',
@@ -10900,6 +11027,9 @@ function applyLang() {
   if (spRootHint) spRootHint.innerHTML = t('spDestHint');
   $set('sp-folders-title', 'spStyleFolders');
   $set('sp-new-lbl', 'spNewFolderBtn');
+  $set('sp-smart-lbl', 'smartBtn');
+  const spSmartBtn = document.getElementById('btn-sp-smart');
+  if (spSmartBtn) spSmartBtn.title = t('smartBtnTitle');
   $set('sp-untagged-title', 'spUntagged');
   $set('sp-modal-title', 'spNewFolder');
   $set('sp-modal-name-lbl', 'spFolderName');
@@ -11310,6 +11440,14 @@ function renderSettings() {
                 <button class="btn sm pri" onclick="openExtensionHowTo()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5z"/><path d="M4 19.5V22"/></svg> ${t('extLinkHowTo')}</button>
               </div>
             </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('extUpdateName')}</div>
+                <div class="setting-desc">${t('extUpdateDesc')}</div>
+                <div class="setting-desc" id="ext-version-line" style="margin-top:4px;opacity:.8"></div>
+              </div>
+              <button class="btn sm" onclick="checkExtensionUpdate(this)"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6M3.5 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.65 4.36A9 9 0 0 0 20.5 15"/></svg> ${t('extUpdateBtn')}</button>
+            </div>
       </div></div>
     </div>
     <div class="settings-section" data-section="diagnostics">
@@ -11382,6 +11520,8 @@ function renderSettings() {
   syncHardwareAccelToggle();
   _applySettingsSectionState();
   refreshEnginesDiagRow();
+  _hydrateFileTagsPref();
+  _refreshExtVersionLine();
   if (window.api && window.api.updater) {
     window.api.updater.getStatus().then(s => {
       const el = document.getElementById('about-version-desc');

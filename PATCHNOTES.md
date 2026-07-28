@@ -4,6 +4,91 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
+## 0.6.5 (2026-07-28)
+
+The app now keeps the Chrome extension up to date.
+
+Chrome only auto-updates extensions installed from the Web Store, and
+it cannot hot-swap an unpacked extension while it is running. What it
+does do is re-read an unpacked folder on startup, so the app keeps that
+folder in sync and Chrome applies the change the next time it opens.
+
+- The unpacked copy now installs to a fixed folder name. Chrome derives
+  an unpacked extension's ID from its path, so a versioned folder name
+  would have produced a new ID on every update and forced the user to
+  add the extension again. The path is remembered in settings.
+- Twenty seconds after launch, if the installed copy is older than the
+  one bundled in the app, its files are refreshed in place and a
+  notification reports the version change and asks for a Chrome
+  restart. Silent when there is nothing to do.
+- Settings > Extension shows both versions (bundled and installed) and
+  has a Check now button that syncs on demand.
+- Only files the extension owns are replaced; anything else the user
+  left in that folder is untouched.
+- New endpoints: GET /extension/status, POST /extension/update.
+
+## 0.6.4 (2026-07-28)
+
+The Chrome extension now ships inside the app.
+
+- The extension source lives in the desktop repo (`extension/`) and is
+  bundled into the build, so "Get the extension" no longer depends on a
+  GitHub release having the right asset attached. It copies the folder
+  straight into Downloads, works offline, and always matches the app
+  version. Chrome's Load unpacked wants a folder rather than a zip, so
+  this also removes the manual unzip step.
+- `POST /extension/download` accepts `{source:'github'}` to force the
+  old behaviour of fetching the newest release asset, and still falls
+  back to it automatically if the bundled copy is missing.
+- `GET /extension/info` reports whether a copy is bundled and which
+  version.
+- The release workflow now zips the extension and attaches it to the
+  GitHub release automatically, so the standalone download exists for
+  people who are not running the desktop app yet.
+- The bundled folder is excluded from the asar archive: extraResources
+  puts a real folder on disk, and recursive copies out of a virtual
+  asar path are not reliable.
+
+## 0.6.3 (2026-07-28)
+
+French localisation audit.
+
+- Restored accents across 109 French strings. Everything added since
+  0.4.1 had been written in bare ASCII ("Evenement envoye", "Verifier
+  les moteurs"), which read as broken French next to the app's original
+  properly accented text.
+- Fixed one grammar error the accent pass itself introduced:
+  "Desactivez" (imperative) had become "Désactivéz" instead of
+  "Désactivez".
+- The Stockpile smart-folder button label and tooltip were hardcoded
+  English and never passed through the translation layer. Now localised
+  like every other control.
+- Release checks now include a French quality gate: accent-less French
+  vocabulary, invalid verb endings, untranslated values identical to
+  English, and mismatched {placeholders} all fail the build.
+
+## 0.6.2 (2026-07-27)
+
+Field-testing fixes from the 0.6.1 build.
+
+- Library doctor and smart-folder dialogs were invisible: the markup
+  used a modal box class that does not exist in the stylesheet, and the
+  overlay never received the inline display that activates its
+  backdrop. Both now use the app's real setup-card structure.
+- The file-tags and auto-rename toggles reset to off when leaving and
+  reopening Settings. Saving worked; the hydration call had been
+  attached inside an unrelated event handler instead of the settings
+  renderer, so the checkboxes re-rendered blank. Hydration now runs on
+  every settings render.
+- Analysis could sit on "Running analysis engine..." indefinitely if
+  the Python child hung. The server now kills the child after 180s and
+  emits a proper error (with a Sentry report, category analyze.timeout),
+  and the renderer has its own 200s watchdog that falls back to the JS
+  BPM/key estimator and points at Verify engines.
+- Library doctor with zero fingerprinted tracks now explains that
+  nothing can be compared yet and offers a one-click fingerprint
+  backfill, instead of reporting a meaningless "all clear - 0 tracks".
+
 ## 0.6.1 (2026-07-25)
 
 **Real waveform in the analyzer timeline**

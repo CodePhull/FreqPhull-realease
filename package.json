@@ -1,6 +1,6 @@
 {
   "name": "freqphull",
-  "version": "0.6.1",
+  "version": "0.6.5",
   "description": "Freq.Phull",
   "main": "main.js",
   "scripts": {
@@ -65,6 +65,7 @@
       "!**/*.md",
       "!**/*.map",
       "!dist/**",
+      "!extension/**",
       "sentry.config.json"
     ],
     "asar": true,
@@ -116,6 +117,10 @@
       {
         "from": "analyze.py",
         "to": "analyze.py"
+      },
+      {
+        "from": "extension/",
+        "to": "extension/"
       }
     ],
     "compression": "maximum",
