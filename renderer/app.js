@@ -1889,17 +1889,25 @@ function scrubTimelineSeek(ev, durS) {
 // Live playhead. One rAF loop, self-terminating when the timeline
 // leaves the DOM (re-analysis, tab switch tears down the markup).
 let _playheadRAF = null;
+let _playheadIdleTimer = null;
+function _stopPlayheadLoop() {
+  if (_playheadRAF) { cancelAnimationFrame(_playheadRAF); _playheadRAF = null; }
+  if (_playheadIdleTimer) { clearTimeout(_playheadIdleTimer); _playheadIdleTimer = null; }
+}
+
 function _startPlayheadLoop(durS) {
-  if (_playheadRAF) cancelAnimationFrame(_playheadRAF);
-  const tick = () => {
+  _stopPlayheadLoop();
+  const step = () => {
     const ph = document.getElementById('bs-playhead');
-    if (!ph) { _playheadRAF = null; return; }   // markup gone — stop
-    let cur = null;
+    if (!ph) { _stopPlayheadLoop(); return; }   // markup gone - stop
+    let cur = null, moving = false;
     try {
       if (typeof loaded !== 'undefined' && Array.isArray(loaded) && loaded.length && loaded[0].audio) {
         cur = loaded[0].audio.currentTime;
+        moving = !loaded[0].audio.paused;
       } else if (typeof globalPlayer !== 'undefined' && globalPlayer && globalPlayer.audio && !globalPlayer.audio.paused) {
         cur = globalPlayer.audio.currentTime;
+        moving = true;
       }
     } catch {}
     if (cur != null && durS > 0) {
@@ -1908,9 +1916,19 @@ function _startPlayheadLoop(durS) {
     } else {
       ph.style.opacity = '0';
     }
-    _playheadRAF = requestAnimationFrame(tick);
+    // A paused playhead cannot move, so polling it at the display
+    // refresh rate burns CPU to redraw the same pixel. The window is
+    // created with backgroundThrottling disabled, so this kept running
+    // at full speed even while minimised. Poll slowly while paused or
+    // hidden, and go back to animation frames the moment playback
+    // resumes.
+    if (moving && !document.hidden) {
+      _playheadRAF = requestAnimationFrame(step);
+    } else {
+      _playheadIdleTimer = setTimeout(step, document.hidden ? 1000 : 250);
+    }
   };
-  _playheadRAF = requestAnimationFrame(tick);
+  _playheadRAF = requestAnimationFrame(step);
 }
 
 // Forced beat-switch pass (?deep=1 → lower novelty threshold). Used when
@@ -3115,6 +3133,7 @@ function stopAudio() {
 // across tabs.
 let analyzeMirrorActive = false;
 let analyzeMirrorRaf = null;
+let _analyzeMirrorIdle = null;
 // Analyzer playlist context. When the user plays a history row, we capture
 // the visible history list as a playlist on the ANALYZER (the actual audio
 // source in mirror mode). Mini player prev/next then walks this list and
@@ -3259,13 +3278,23 @@ function showAnalyzeMirror() {
         if (mThumb) mThumb.style.left = pct + '%';
       }
     }
-    analyzeMirrorRaf = requestAnimationFrame(tick);
+    // Nothing in here moves while playback is stopped, so re-arming at
+    // the display refresh rate just burns CPU. Fall back to a slow poll
+    // when paused or hidden and pick the animation back up on play.
+    if (playing && !document.hidden) {
+      analyzeMirrorRaf = requestAnimationFrame(tick);
+    } else {
+      analyzeMirrorRaf = null;
+      _analyzeMirrorIdle = setTimeout(tick, document.hidden ? 1000 : 250);
+    }
   };
+  if (_analyzeMirrorIdle) { clearTimeout(_analyzeMirrorIdle); _analyzeMirrorIdle = null; }
   analyzeMirrorRaf = requestAnimationFrame(tick);
 }
 
 function hideAnalyzeMirror() {
   analyzeMirrorActive = false;
+  if (_analyzeMirrorIdle) { clearTimeout(_analyzeMirrorIdle); _analyzeMirrorIdle = null; }
   if (analyzeMirrorRaf) { cancelAnimationFrame(analyzeMirrorRaf); analyzeMirrorRaf = null; }
   const player = document.getElementById('sp-fv-mini-player');
   if (player) {
@@ -4158,6 +4187,13 @@ function subscribeToServerEvents() {
         }, 100);
       }, 0);
       refreshEnginesDiagRow();
+    });
+    es.addEventListener('id-titles-fixed', (ev) => {
+      try {
+        const d = JSON.parse(ev.data || '{}');
+        showAppNotification(t('idTitleDone').replace('{n}', d.fixed), 'done', null, 6000);
+        loadHistory();
+      } catch {}
     });
     es.addEventListener('extension-updated', (ev) => {
       // Files are already refreshed on disk; Chrome applies them when it
@@ -5181,6 +5217,27 @@ async function createSmartFolder(btn) {
   } catch (e) {
     showAppNotification(e.message, 'err');
     if (btn) btn.disabled = false;
+  }
+}
+
+async function fixIdTitles(btn) {
+  const orig = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = t('idTitleWorking'); }
+  try {
+    const r = await fetch(API + '/history/fix-id-titles', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'failed');
+    if (!j.queued) {
+      showAppNotification(t('idTitleNone'), 'done', null, 4000);
+    } else {
+      showAppNotification(t('idTitleStarted').replace('{n}', j.queued), 'info', null, 6000);
+    }
+  } catch (e) {
+    showAppNotification(t('idTitleFailed') + ': ' + e.message, 'err', null, 6000);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = orig; }
   }
 }
 
@@ -9832,6 +9889,14 @@ const T = {
     doctorBackfillBtn:'Start fingerprint backfill',
     doctorBackfillStarted:'Backfill running - re-open the doctor when it finishes',
     refreshingWord:'refreshing…',
+    idTitleName:'Fix entries named after video IDs',
+    idTitleDesc:'Some tracks were saved with the YouTube video ID as their title instead of the real name. The audio is fine - this fetches the proper title from the source and renames the file to match. Nothing is downloaded again.',
+    idTitleBtn:'Fix names',
+    idTitleWorking:'Working...',
+    idTitleNone:'No entries need renaming',
+    idTitleStarted:'Fetching titles for {n} tracks...',
+    idTitleDone:'Renamed {n} tracks',
+    idTitleFailed:'Could not fix names',
     doctorName:'Library doctor',
     doctorDesc:'Scan for corrupted downloads - tracks whose file contains a DIFFERENT track\'s audio (a bug fixed in 0.4.3 could cause this in bulk grabs). Offers one-click re-download of the real audio.',
     doctorBtn:'Scan library',
@@ -10385,6 +10450,14 @@ const T = {
     doctorBackfillBtn:'Lancer le remplissage des empreintes',
     doctorBackfillStarted:'Remplissage en cours - rouvrez le docteur une fois terminé',
     refreshingWord:'actualisation…',
+    idTitleName:'Corriger les entrées nommées avec un ID de vidéo',
+    idTitleDesc:'Certaines pistes ont été enregistrées avec l\'ID de la vidéo YouTube au lieu du vrai nom. L\'audio est intact - le vrai titre est récupéré depuis la source et le fichier est renommé. Rien n\'est retéléchargé.',
+    idTitleBtn:'Corriger les noms',
+    idTitleWorking:'En cours...',
+    idTitleNone:'Aucune entrée à renommer',
+    idTitleStarted:'Récupération des titres pour {n} pistes...',
+    idTitleDone:'{n} pistes renommées',
+    idTitleFailed:'Impossible de corriger les noms',
     doctorName:'Docteur de bibliothèque',
     doctorDesc:'Détecte les téléchargements corrompus - pistes dont le fichier contient l\'audio d\'une AUTRE piste (bug corrigé en 0.4.3 lors des téléchargements en masse). Propose un re-téléchargement en un clic.',
     doctorBtn:'Analyser la bibliothèque',
@@ -11294,6 +11367,13 @@ function renderSettings() {
                 <div class="setting-desc">${t('verifyDesc')}</div>
               </div>
               <button class="btn sm" onclick="runEngineVerify(this)"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg> ${t('verifyBtn')}</button>
+            </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('idTitleName')}</div>
+                <div class="setting-desc">${t('idTitleDesc')}</div>
+              </div>
+              <button class="btn sm" onclick="fixIdTitles(this)"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3M9 20h6M12 4v16"/></svg> ${t('idTitleBtn')}</button>
             </div>
         <div class="setting-row">
               <div class="setting-info">
@@ -12920,6 +13000,7 @@ function playTrack(track, context) {
   // Also exit mirror mode silently - we're taking over with the global player
   if (typeof analyzeMirrorActive !== 'undefined' && analyzeMirrorActive) {
     analyzeMirrorActive = false;
+  if (_analyzeMirrorIdle) { clearTimeout(_analyzeMirrorIdle); _analyzeMirrorIdle = null; }
     if (typeof analyzeMirrorRaf !== 'undefined' && analyzeMirrorRaf) {
       cancelAnimationFrame(analyzeMirrorRaf);
       analyzeMirrorRaf = null;

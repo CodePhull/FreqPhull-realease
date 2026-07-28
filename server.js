@@ -858,9 +858,25 @@ function validatePythonCmd(pyCmd, args) {
 }
 
 function discoverPython() {
-  // Re-check at most every 60s if cached (so re-installs are picked up).
-  if (_cachedPythonCmd && Date.now() - _cachedPythonCheckedAt < 60000) {
-    return _cachedPythonCmd;
+  // Answering "where is Python" costs several child processes, so the
+  // result is cached. A one-minute expiry meant anything polling the
+  // app re-probed every minute forever, which showed up as periodic CPU
+  // on an otherwise idle machine. The cache now lasts ten minutes, and
+  // an interpreter that is still on disk simply renews it rather than
+  // being re-probed. Anything that changes the runtime (setup, repair,
+  // breaker reset) calls clearPythonCache(), so a long expiry never
+  // hides a real change.
+  if (_cachedPythonCmd) {
+    const age = Date.now() - _cachedPythonCheckedAt;
+    if (age < 600000) return _cachedPythonCmd;
+    try {
+      // Bare command names ("python") have no path to check; only a
+      // resolved executable can be revalidated this cheaply.
+      if (/[\\/]/.test(_cachedPythonCmd) && fs.existsSync(_cachedPythonCmd)) {
+        _cachedPythonCheckedAt = Date.now();
+        return _cachedPythonCmd;
+      }
+    } catch {}
   }
 
   const tryCmds = []; // ordered list of candidates
@@ -868,9 +884,19 @@ function discoverPython() {
   // 0. Our private embedded runtime - when present, it always wins.
   // Nothing the user installs or uninstalls can touch it.
   try {
-    const embedExe = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
-      'freqphull', 'engines', 'python', 'python.exe');
-    if (fs.existsSync(embedExe)) tryCmds.push({ cmd: embedExe, args: [], source: 'embedded' });
+    const embedRoot = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
+      'freqphull', 'engines', 'python');
+    const embedExe = path.join(embedRoot, 'python.exe');
+    // Only prefer the embedded runtime once it actually carries the
+    // analysis stack. A freshly provisioned, still-empty runtime would
+    // otherwise outrank a working system Python and take every engine
+    // down with it.
+    const hasCore = fs.existsSync(path.join(embedRoot, 'Lib', 'site-packages', 'numpy'));
+    if (fs.existsSync(embedExe) && hasCore) {
+      tryCmds.push({ cmd: embedExe, args: [], source: 'embedded' });
+    } else if (fs.existsSync(embedExe)) {
+      slog('discoverPython: embedded runtime present but has no numpy - not preferring it');
+    }
   } catch {}
 
   // 1. Marker file from our setup script
@@ -938,8 +964,12 @@ function discoverPython() {
   for (const c of tryCmds) {
     const v = validatePythonCmd(c.cmd, c.args);
     if (v) {
-      slog('discoverPython: using ' + c.cmd + (c.args.length ? ' ' + c.args.join(' ') : '') +
-           ' (' + c.source + ', Python ' + v.major + '.' + v.minor + ')');
+      // Only worth a log line when the answer actually changed; an idle
+      // app was otherwise writing this every minute.
+      if (_cachedPythonCmd !== c.cmd) {
+        slog('discoverPython: using ' + c.cmd + (c.args.length ? ' ' + c.args.join(' ') : '') +
+             ' (' + c.source + ', Python ' + v.major + '.' + v.minor + ')');
+      }
       _cachedPythonCmd = c.cmd;
       _cachedPythonArgs = c.args;
       _cachedPythonCheckedAt = Date.now();
@@ -1190,8 +1220,13 @@ function sweepOldTempFiles(maxAgeHours = 24) {
 
 
 // ── Routes ────────────────────────────────────────────────────────────────────
+let _healthHits = 0;
 app.get('/health', (_, res) => {
-  slog('Health check hit');
+  // Polled continuously by the app and the extension. Logging every hit
+  // wrote thousands of lines a day and kept the log file busy for no
+  // diagnostic value, so only every hundredth is recorded - enough to
+  // confirm the endpoint is alive when reading a log.
+  if ((++_healthHits % 100) === 1) slog('Health check hit (#' + _healthHits + ')');
   res.json({
     status: 'ok',
     db: !!db,
@@ -1869,6 +1904,64 @@ app.get('/history', (req, res) => {
 function _normTitle(t) {
   return String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
+// Repair entries whose title is a bare YouTube video ID. These come
+// from files the folder watcher adopted before their download finished
+// (fixed in 0.6.8) - the audio is fine, only the name is wrong. The
+// real title is fetched from the source URL and the file renamed to
+// match, so no audio has to be downloaded again.
+app.post('/history/fix-id-titles', async (req, res) => {
+  const limit = Math.min(parseInt((req.body && req.body.limit) || '200', 10), 1000);
+  let rows;
+  try {
+    rows = dbAll(`
+      SELECT id, title, youtube_url, file_path FROM history
+      WHERE youtube_url IS NOT NULL AND youtube_url != ''
+      ORDER BY created_at DESC LIMIT 2000
+    `).filter(r => /^[A-Za-z0-9_-]{11}$/.test(String(r.title || '').trim())).slice(0, limit);
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+  res.json({ ok: true, queued: rows.length });
+  if (!rows.length) return;
+
+  const ytdlp = bin('yt-dlp');
+  let fixed = 0;
+  for (const row of rows) {
+    try {
+      const meta = JSON.parse(await run(ytdlp, ['--dump-json', '--no-playlist', '--no-warnings', row.youtube_url]));
+      const title = (meta.title || '').trim();
+      if (!title || title === row.title) continue;
+      dbRun('UPDATE history SET title=?, channel=COALESCE(NULLIF(channel,\'\'),?) WHERE id=?',
+        [title, meta.channel || meta.uploader || '', row.id]);
+      // Rename the file to match, collision-safe, keeping the extension.
+      try {
+        if (row.file_path && fs.existsSync(row.file_path)) {
+          const dir = path.dirname(row.file_path);
+          const ext = path.extname(row.file_path);
+          const stem = String(title).replace(/[<>:"/\\|?*\x00-\x1f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 150);
+          let target = path.join(dir, stem + ext);
+          let n = 2;
+          while (fs.existsSync(target) && target !== row.file_path) {
+            target = path.join(dir, stem + ' (' + n + ')' + ext);
+            if (++n > 50) break;
+          }
+          if (target !== row.file_path) {
+            markIntentionalMove && markIntentionalMove(target);
+            fs.renameSync(row.file_path, target);
+            dbRun('UPDATE history SET file_path=? WHERE id=?', [target, row.id]);
+          }
+        }
+      } catch (e) { slog('fix-id-titles rename failed id=' + row.id + ': ' + e.message); }
+      fixed++;
+      broadcastEvent('history-changed', { reason: 'retitled', historyId: row.id });
+    } catch (e) {
+      slog('fix-id-titles: id=' + row.id + ' failed: ' + e.message);
+    }
+  }
+  slog('fix-id-titles: retitled ' + fixed + '/' + rows.length);
+  broadcastEvent('id-titles-fixed', { fixed, total: rows.length });
+});
+
 app.get('/history/doctor', (req, res) => {
   const threshold = Math.min(Math.max(parseInt(req.query.threshold || '25', 10), 1), 128);
   try {
@@ -4186,6 +4279,18 @@ function restartStockpileWatcher() {
 }
 
 async function adoptWatchedFile(full) {
+  // In-progress download? Staging directories live inside the output
+  // folder so the finished file can be renamed onto the same volume,
+  // and when that output folder sits inside the watched stockpile the
+  // watcher sees the half-written file first. Adopting it steals the
+  // file from the download that is still running: the history row gets
+  // named after the video ID, the file is moved away, and the real
+  // download then fails to find its own output. Never adopt from a
+  // staging directory - the download registers the track itself.
+  if (/[\\/]\.fp-dl-[^\\/]*[\\/]/.test(full)) {
+    slog('watch-folder: ignoring in-progress download file ' + path.basename(full));
+    return;
+  }
   // Was this file moved here by US (commitTrackToPrimary, repair, etc.)?
   // The watcher would otherwise race the DB UPDATE that remaps the
   // existing history row, creating a phantom duplicate.
@@ -5386,9 +5491,24 @@ function walkAudio(rootDir, maxDepth = 3) {
   return out;
 }
 
+// The scan walks every audio file under the stockpile root - on a large
+// library that is thousands of stat calls. Several UI paths can ask for
+// it at once (startup, tab open, post-download refresh), so an identical
+// non-review scan that just ran is served from its own result instead of
+// walking the disk again.
+let _repairScanCache = null;   // { key, at, result }
+const REPAIR_SCAN_TTL_MS = 20000;
+
 app.post('/repair-history', (req, res) => {
   const stockpile = (req.body.stockpile || '').trim();
   const reviewMode = !!req.body.review; // if true, return candidates instead of auto-applying
+  if (!reviewMode && _repairScanCache &&
+      _repairScanCache.key === stockpile &&
+      Date.now() - _repairScanCache.at < REPAIR_SCAN_TTL_MS) {
+    slog('repair-history: reusing scan from ' +
+         Math.round((Date.now() - _repairScanCache.at) / 1000) + 's ago');
+    return res.json(_repairScanCache.result);
+  }
   slog('repair-history: starting scan, stockpile=' + stockpile + ' review=' + reviewMode);
 
   const allRows = dbAll('SELECT id, file_path, title FROM history WHERE file_path IS NOT NULL');
@@ -5545,7 +5665,7 @@ app.post('/repair-history', (req, res) => {
   slog('repair-history: done. ok=' + ok + ' broken=' + broken +
        ' repaired=' + repaired + ' needs-review=' + reviewItems.length);
 
-  res.json({
+  const payload = {
     ok: true,
     total: allRows.length,
     alreadyOk: ok,
@@ -5554,7 +5674,16 @@ app.post('/repair-history', (req, res) => {
     needsReview: reviewItems.length,
     reviewItems,
     indexed: indexedFiles.length,
-  });
+  };
+  // Only a clean, nothing-to-do scan is reusable. If anything was
+  // repaired the library changed underneath us and the next caller
+  // deserves a fresh walk.
+  if (!reviewMode && repaired === 0 && broken === 0) {
+    _repairScanCache = { key: stockpile, at: Date.now(), result: payload };
+  } else {
+    _repairScanCache = null;
+  }
+  res.json(payload);
 });
 
 // User picks a specific candidate from the review list to apply

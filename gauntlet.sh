@@ -103,4 +103,29 @@ if fails:
     print('✗ PASS 9 FAILED'); [print('   -', f) for f in fails]; sys.exit(1)
 print('✓ PASS 9  helper-script dependencies installed + verified')
 PY
-echo "════════ ALL 9 GREEN ════════"
+python3 - <<'PY'
+import re, sys
+# Animation loops that re-arm themselves must stop when there is nothing
+# to animate. A loop running at display refresh rate while paused shows
+# up as constant background CPU, and the window disables background
+# throttling so it does not even stop when minimised.
+src = open('renderer/app.js').read()
+fails = []
+for name, guard in [
+    ('_playheadRAF',     'moving && !document.hidden'),
+    ('_liveSpectrumRaf', '!playing || !analyserL'),
+    ('analyzeMirrorRaf', 'playing && !document.hidden'),
+]:
+    if guard not in src:
+        fails.append(f'{name}: idle guard missing ({guard})')
+# module-level handles must be declared before first use (TDZ)
+for handle in ['_analyzeMirrorIdle', '_playheadIdleTimer']:
+    decl = src.find('let ' + handle)
+    first = src.find(handle)
+    if decl < 0 or first < decl:
+        fails.append(f'{handle}: used before declaration')
+if fails:
+    print('✗ PASS 10 FAILED'); [print('   -', f) for f in fails]; sys.exit(1)
+print('✓ PASS 10  animation loops idle when paused')
+PY
+echo "════════ ALL 10 GREEN ════════"

@@ -4,6 +4,73 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
+## 0.6.9 (2026-07-28)
+
+Idle CPU. The app used a few percent of a core while sitting there doing
+nothing, which came down to loops that never stopped and a cache that
+expired too eagerly.
+
+- Two animation loops re-armed themselves at the display refresh rate
+  even while playback was stopped: the timeline playhead and the mini
+  player's seek bar. Neither can move while paused, so both were
+  redrawing the same pixels sixty times a second. They now poll slowly
+  while paused and return to animation frames the moment playback
+  resumes. Because the window is created with background throttling
+  disabled, this was burning CPU even while minimised - both loops now
+  back off further when the window is hidden.
+- Locating the Python interpreter costs several child processes and the
+  answer was only cached for a minute, so anything polling the app
+  re-probed every minute forever. The cache now lasts ten minutes and an
+  interpreter still present on disk simply renews it. Setup, repair and
+  breaker resets already clear the cache, so nothing stale can hide.
+- The health endpoint is polled continuously by both the app and the
+  extension and logged every single hit - thousands of lines a day and a
+  permanently busy log file. Now logged once per hundred.
+- A release check fails the build if any self-rearming animation loop
+  loses its idle guard, or if one of their timer handles is used before
+  it is declared. Fixing this section produced exactly that
+  use-before-declaration fault, which would have crashed the renderer on
+  load.
+
+## 0.6.8 (2026-07-28)
+
+A cascade failure caught in a real download session, plus its cleanup.
+
+**The folder watcher was stealing downloads in progress.**
+Downloads stage into a hidden `.fp-dl-*` directory inside the output
+folder so the finished file can be renamed onto the same volume. When
+that output folder sits inside the watched stockpile - downloading
+straight into a category folder - the watcher saw the half-written file,
+adopted it as a new track named after the video ID, and moved it out.
+The download that was still running then could not find its own output,
+so it failed and retried, producing duplicate entries, duplicate files
+and fingerprint and tag errors reading "file not found". The watcher now
+ignores staging directories entirely; the download registers its own
+track when it finishes.
+
+**Repairing one package could take out every engine.**
+Repair mode runs through the same script as full setup, and the embedded
+runtime provisioning came first. Repairing a single missing package on a
+machine without the embedded runtime therefore provisioned a brand new,
+empty Python and installed only that one package into it. Because the
+embedded runtime is preferred over system Python, every engine then
+failed with "No module named numpy". This is the
+`selfheal.repair-ineffective` report. Two fixes: repair mode never
+provisions a runtime, it repairs whatever is already in use; and the
+embedded runtime is only preferred once it actually contains the
+analysis stack.
+
+**Cleanup for libraries already affected.**
+Settings gains "Fix entries named after video IDs": it fetches the real
+title from each affected track's source URL and renames the file to
+match. The audio was never wrong, so nothing is downloaded again.
+
+**Optimisation.** The library path scan walks every audio file under the
+stockpile root - thousands of stat calls on a large library - and several
+UI paths could request it simultaneously, which is why it ran twice
+within half a second at startup. A clean scan is now reused for 20
+seconds; anything that repairs a path invalidates it immediately.
+
 ## 0.6.7 (2026-07-28)
 
 Follow-up to 0.6.6: the scripts are found now, but two of them were

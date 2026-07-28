@@ -339,6 +339,12 @@ if (Test-EmbeddedRuntime) {
     $pythonVersionStr = ("$(& $embedExe --version 2>&1)").Trim()
     Log "Embedded runtime present and healthy: $embedExe ($pythonVersionStr)"
     EmitStatus "python_found" 5 "Private Python runtime ready" $pythonVersionStr
+} elseif ($Repair) {
+    # Repair fixes the runtime already in use. Provisioning a new one
+    # here would leave an empty Python holding only the packages being
+    # repaired, which outranks the working interpreter and takes every
+    # engine down with it.
+    Log "Repair mode: no embedded runtime present, falling back to system Python"
 } else {
     EmitStatus "provisioning_runtime" 4 "Setting up private Python runtime..." "~11MB - one time"
     $embedZip = Join-Path $env:TEMP "freqphull-py-embed.zip"
