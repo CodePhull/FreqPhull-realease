@@ -1,0 +1,12 @@
+#fp-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 36px; padding: 0 16px; margin-left: 8px;
+  background: #111; border: 1px solid rgba(255,255,255,.15);
+  border-radius: 18px; color: #e0e0e0;
+  font-family: 'Roboto', Arial, sans-serif;
+  font-size: 13px; font-weight: 500;
+  cursor: pointer; white-space: nowrap; flex-shrink: 0; transition: all .15s;
+}
+#fp-btn:hover { background: #1a1a1a; border-color: rgba(255,255,255,.25); color: #fff; }
+#fp-btn:active { transform: scale(.96); }
+#fp-btn .fp-i { width: 18px; height: 18px; border-radius: 3px; }
