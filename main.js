@@ -117,7 +117,13 @@ let isQuitting = false;
 
 // ── Prevent multiple instances - one backend is enough ───────────────────────
 const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) { app.quit(); }
+if (!gotLock) {
+  // app.quit() is asynchronous: it asks for a graceful shutdown and lets
+  // the rest of this file keep running, which spawned a second backend
+  // that then failed to bind the port - the port-in-use crash. exit()
+  // stops here and now.
+  app.exit(0);
+}
 app.on('second-instance', () => {
   // Someone tried to open a second instance - show the existing window
   if (mainWindow) {
@@ -185,7 +191,35 @@ process.on('unhandledRejection', (e) => {
 const launchMinimized = process.argv.includes('--background') || process.argv.includes('--tray');
 
 // ── App startup ───────────────────────────────────────────────────────────────
+// Was this launch the first one after an update? The version we last
+// ran with is recorded beside the app's own data, so a change means the
+// user restarted into a new build and has earned a note about what
+// changed. Nothing is shown on a first ever install - there is no
+// "what's new" when everything is new.
+function consumeUpdateFlag() {
+  try {
+    const stampPath = path.join(app.getPath('userData'), 'last-version.json');
+    const current = app.getVersion();
+    let previous = null;
+    try {
+      if (fs.existsSync(stampPath)) previous = JSON.parse(fs.readFileSync(stampPath, 'utf8')).version;
+    } catch {}
+    if (previous !== current) {
+      fs.writeFileSync(stampPath, JSON.stringify({ version: current, at: new Date().toISOString() }));
+    }
+    return !!previous && previous !== current;
+  } catch { return false; }
+}
+
 app.whenReady().then(() => {
+  if (!gotLock) return;   // a second instance never starts anything
+  // Held back so it lands after the main window has painted rather than
+  // competing with boot, and only once the app is genuinely usable.
+  if (consumeUpdateFlag()) {
+    setTimeout(() => {
+      try { openUpdaterWindow({ phase: 'complete' }); } catch (e) { log('update-complete window failed: ' + e.message); }
+    }, 4000);
+  }
   setupLog();
   log('App ready (minimized=' + launchMinimized + ')');
 

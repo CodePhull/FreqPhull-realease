@@ -10,7 +10,9 @@
        appears over the main window. */
     --bg:#080808; --bg2:#101010; --bg3:#181818; --bg4:#202020;
     --white:#ffffff; --off:#e8e8e8; --muted:#aaaaaa; --hint:#666666;
-    --border:#1e1e1e; --border2:#2a2a2a; --accent:#7ed982;
+    --border:#1e1e1e; --border2:#2a2a2a;
+    /* Matches the app: white is the accent, not a colour. */
+    --accent:#ffffff; --accent-dim:#c8c8c8;
     --e-out:cubic-bezier(.32,.72,0,1);
     --ease-out-quart: cubic-bezier(.165,.84,.44,1);
     --ease-spring:    cubic-bezier(.34,1.56,.64,1);
@@ -107,8 +109,8 @@
     content:""; width:6px; height:6px; border-radius:50%;
     background:currentColor;
   }
-  .status-badge.ok { color:var(--accent); border-color:rgba(126,217,130,.3); }
-  .status-badge.update { color:var(--accent); border-color:rgba(126,217,130,.30); }
+  .status-badge.ok { color:var(--accent); border-color:rgba(255,255,255,0.24); }
+  .status-badge.update { color:var(--accent); border-color:rgba(255,255,255,0.24); }
 
   /* Version cards */
   .versions {
@@ -235,14 +237,14 @@
     width:84px; height:84px; margin:0 auto 14px;
     display:none; place-items:center;
     position:relative;
-    filter:drop-shadow(0 0 14px rgba(126,217,130,.16));
+    filter:drop-shadow(0 0 14px rgba(255,255,255,0.13));
     will-change:transform;
     animation: install-kick var(--beat) var(--e-out) infinite;
   }
   .install-mark img { width:100%; height:100%; object-fit:contain; display:block; }
   .install-mark::after {
     content:''; position:absolute; inset:-34px; border-radius:50%;
-    background:radial-gradient(circle, rgba(126,217,130,.18) 0%, rgba(126,217,130,0) 62%);
+    background:radial-gradient(circle, rgba(255,255,255,0.14) 0%, rgba(255,255,255,0) 62%);
     pointer-events:none; will-change:opacity;
     animation: install-glow var(--beat) var(--e-out) infinite;
   }
@@ -266,7 +268,7 @@
   .install-progress::after {
     content:""; position:absolute; top:0; left:0;
     width:40%; height:100%;
-    background:linear-gradient(90deg, transparent 0%, rgba(126,217,130,.65) 50%, transparent 100%);
+    background:linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.52) 50%, transparent 100%);
     will-change:transform;
     animation: install-progress-slide 1.4s ease-in-out infinite;
   }
@@ -277,10 +279,34 @@
     0%   { transform:translateX(-100%); }
     100% { transform:translateX(250%); }
   }
+  /* A determinate fill sits on top of the sweeping shimmer. Until the
+     first progress event arrives the fill is zero-width and only the
+     shimmer shows, which is the honest reading: something is happening
+     but nothing measurable yet. */
+  .install-fill {
+    position:absolute; left:0; top:0; height:100%; width:0%;
+    background:var(--accent); border-radius:inherit;
+    transition:width 220ms var(--e-out);
+  }
+  body.determinate .install-progress::after { display:none; }
+  .install-pct {
+    display:none; margin-top:10px;
+    font-size:12px; color:var(--muted);
+    font-variant-numeric:tabular-nums; letter-spacing:.04em;
+  }
+  body.installing .install-pct { display:block; }
+  .install-restart {
+    display:none; margin-top:22px; min-width:190px;
+  }
+  body.installing .install-restart.on { display:inline-flex; }
   .install-hint {
     font-size:10px; color:var(--muted); letter-spacing:1.5px;
     margin-top:14px; text-transform:uppercase; display:none;
   }
+  /* After a restart the version numbers are noise - the user knows it
+     updated; what they want is what they got. */
+  body.complete #versions { display:none; }
+  body.complete .install-mark { display:grid; margin-bottom:18px; }
   body.installing .install-mark { display:grid; }
   body.installing .install-progress,
   body.installing .install-hint { display:flex; }
@@ -312,8 +338,8 @@
   .ready-line{
     margin:14px auto 0; max-width:340px; text-align:center;
     font-size:12px; color:var(--accent); line-height:1.5;
-    padding:10px 14px; border:1px solid rgba(126,217,130,.25);
-    border-radius:6px; background:rgba(126,217,130,.05);
+    padding:10px 14px; border:1px solid rgba(255,255,255,0.2);
+    border-radius:6px; background:rgba(255,255,255,0.04);
   }
   .error-block{
     margin:14px auto 0; max-width:340px;
@@ -352,8 +378,12 @@
     <div class="hero-title" id="hero-title">SOFTWARE UPDATE</div>
     <div class="hero-sub" id="hero-sub">Checking for updates...</div>
 
-    <div class="install-progress" id="install-progress-takeover"></div>
+    <div class="install-progress" id="install-progress-takeover">
+      <div class="install-fill" id="install-fill"></div>
+    </div>
+    <div class="install-pct" id="install-pct"></div>
     <div class="install-hint" id="install-hint">PLEASE DO NOT CLOSE THIS WINDOW</div>
+    <button class="btn primary install-restart" id="btn-restart">RESTART NOW</button>
 
     <div class="versions" id="versions">
       <div class="vcard">
@@ -396,6 +426,28 @@
   </div>
 
 <script>
+  // ══════════════════════════════════════════════════════════════════
+  //  WHAT'S NEW  -  edit this for every release, nothing else
+  // ══════════════════════════════════════════════════════════════════
+  //  Shown on the first launch after an update. Keep it to three or
+  //  four lines: what the user can now do, in their words, not the
+  //  internal reason. Both languages, same order. Leave either list
+  //  empty and the page simply shows the confirmation without a list.
+  const WHATS_NEW = {
+    en: [
+      'Downloads can no longer duplicate themselves',
+      'New opening screen',
+      'Faster on low-end laptops - see Settings for Lite mode',
+      'The extension now installs and updates from inside the app',
+    ],
+    fr: [
+      'Les téléchargements ne peuvent plus se dupliquer',
+      'Nouvel écran d\'ouverture',
+      'Plus rapide sur les portables modestes - voir le mode léger dans les Paramètres',
+      'L\'extension s\'installe et se met à jour depuis l\'app',
+    ],
+  };
+
   const I = {
     en: {
       sub: 'Updater', heroTitleUpd: 'SOFTWARE UPDATE', heroTitleOk: 'UP TO DATE',
@@ -414,6 +466,18 @@
       heroSubInstalling: 'Updating Freq.Phull to version {v}. This will only take a moment...',
       installHint: 'PLEASE DO NOT CLOSE THIS WINDOW',
       checking: 'Checking for updates...',
+      heroTitleDownloading: 'GETTING THE UPDATE',
+      heroSubDownloading: 'Downloading in the background. You can leave this open.',
+      heroTitleDownloaded: 'READY TO RESTART',
+      heroSubDownloaded: 'The update is downloaded. Restart to finish installing.',
+      heroSubInstallingPlain: 'Unpacking the update. This only takes a moment.',
+      restartBtn: 'RESTART NOW',
+      heroTitleDone: 'UPDATE COMPLETE',
+      heroSubDone: "Freq.Phull is up to date. Here's what changed.",
+      heroSubDonePlain: 'Freq.Phull is up to date and ready to go.',
+      badgeDone: 'UPDATED',
+      whatsNewDone: "WHAT'S NEW",
+      startBtn: "LET'S GO",
       badgeError: 'UPDATE FAILED',
       heroTitleError: 'UPDATE FAILED',
       heroSubError: 'Something went wrong. Try again or check Settings > Updates.',
@@ -437,6 +501,18 @@
       heroSubInstalling: 'Mise a jour de Freq.Phull vers la version {v}. Cela ne prendra qu\'un instant...',
       installHint: 'NE FERMEZ PAS CETTE FENETRE',
       checking: 'Verification des mises a jour...',
+      heroTitleDownloading: 'RECUPERATION DE LA MISE A JOUR',
+      heroSubDownloading: 'Telechargement en cours. Vous pouvez laisser cette fenetre ouverte.',
+      heroTitleDownloaded: 'PRET A REDEMARRER',
+      heroSubDownloaded: 'La mise a jour est telechargee. Redemarrez pour terminer l\'installation.',
+      heroSubInstallingPlain: 'Decompression de la mise a jour. Ce sera bref.',
+      restartBtn: 'REDEMARRER',
+      heroTitleDone: 'MISE A JOUR TERMINEE',
+      heroSubDone: 'Freq.Phull est a jour. Voici ce qui a change.',
+      heroSubDonePlain: 'Freq.Phull est a jour et pret a l\'emploi.',
+      badgeDone: 'A JOUR',
+      whatsNewDone: 'NOUVEAUTES',
+      startBtn: 'C\'EST PARTI',
       badgeError: 'ECHEC',
       heroTitleError: 'ECHEC DE LA MISE A JOUR',
       heroSubError: 'Une erreur est survenue. Reessayez ou verifiez Parametres > Mises a jour.',
@@ -473,14 +549,83 @@
 
   function render() {
     const T = I[lang];
-    if (state.phase === 'installing') {
+    // The take-over carries the whole job: downloading, then unpacking,
+    // then the invitation to restart. By the time someone has asked for
+    // the update there is no decision left to present, so the window
+    // stops being a dialogue and becomes a progress screen.
+    if (state.phase === 'downloading' || state.phase === 'installing' ||
+        state.phase === 'downloaded' || state.phase === 'ready') {
       document.body.classList.add('installing');
-      $('hero-title').textContent = T.heroTitleInstalling;
-      $('hero-sub').textContent = T.heroSubInstalling.replace('{v}', state.update || '');
+      const restart = $('btn-restart');
+      const pct = $('install-pct');
+
+      if (state.phase === 'downloaded' || state.phase === 'ready') {
+        // Finished, waiting on the user. Nothing is running, so the bar
+        // sits full and the hint that told them not to close is gone.
+        document.body.classList.add('determinate');
+        $('install-fill').style.width = '100%';
+        $('hero-title').textContent = T.heroTitleDownloaded;
+        $('hero-sub').textContent = T.heroSubDownloaded;
+        $('install-hint').textContent = '';
+        pct.textContent = '';
+        restart.textContent = T.restartBtn;
+        restart.classList.add('on');
+        return;
+      }
+
+      restart.classList.remove('on');
       $('install-hint').textContent = T.installHint;
+
+      if (state.phase === 'installing') {
+        // Unpacking: no percentage exists, so the shimmer alone is the
+        // honest signal.
+        document.body.classList.remove('determinate');
+        $('install-fill').style.width = '0%';
+        $('hero-title').textContent = T.heroTitleInstalling;
+        $('hero-sub').textContent = T.heroSubInstallingPlain;
+        pct.textContent = '';
+        return;
+      }
+
+      const p = Math.max(0, Math.min(100, Number(state.progress) || 0));
+      document.body.classList.toggle('determinate', p > 0);
+      $('install-fill').style.width = p + '%';
+      $('hero-title').textContent = T.heroTitleDownloading;
+      $('hero-sub').textContent = T.heroSubDownloading;
+      pct.textContent = p > 0
+        ? Math.round(p) + '%' + (state.speed ? '  ·  ' + Number(state.speed).toFixed(1) + ' MB/s' : '')
+        : T.checking;
       return;
     }
+    document.body.classList.remove('determinate');
     document.body.classList.remove('installing');
+
+    if (state.phase === 'complete') {
+      document.body.classList.add('complete');
+      const list = (WHATS_NEW[lang] || WHATS_NEW.en || []).filter(Boolean);
+      $('hero-title').textContent = T.heroTitleDone;
+      $('hero-sub').textContent = list.length ? T.heroSubDone : T.heroSubDonePlain;
+      const badge = $('status-badge');
+      badge.textContent = T.badgeDone;
+      badge.className = 'status-badge ok';
+      $('lbl-whats-new').textContent = T.whatsNewDone;
+      const wn = $('whats-new');
+      if (list.length) {
+        wn.style.display = 'block';
+        $('notes').innerHTML = list.map(n => '<li>' + n.replace(/</g, '&lt;') + '</li>').join('');
+      } else {
+        wn.style.display = 'none';
+      }
+      $('progress-wrap').style.display = 'none';
+      $('btn-install').style.display = 'none';
+      $('ready-line').style.display = 'none';
+      $('error-block').style.display = 'none';
+      const close = $('btn-close-2');
+      close.textContent = T.startBtn;
+      close.className = 'btn primary';
+      return;
+    }
+    document.body.classList.remove('complete');
 
     $('ver-installed').textContent = state.installed;
     $('ver-update').textContent = state.update;
@@ -562,6 +707,14 @@
   $('btn-close-2').onclick = () => window.updaterAPI && window.updaterAPI.close();
   $('btn-min').onclick = () => window.updaterAPI && window.updaterAPI.minimize();
   $('btn-install').onclick = () => window.updaterAPI && window.updaterAPI.install();
+  $('btn-restart').onclick = () => {
+    // Same handoff as the old install button: quit, unpack, relaunch.
+    const b = $('btn-restart');
+    b.disabled = true;
+    state.phase = 'installing';
+    render();
+    if (window.updaterAPI) window.updaterAPI.install();
+  };
   $('btn-retry').onclick = () => {
     state.phase = 'checking';
     delete state.errorMessage;

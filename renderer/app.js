@@ -1005,6 +1005,18 @@ async function processDlQueue() {
   });
 
   es.addEventListener('error', e => {
+    // The server refuses a second download of the same track into the
+    // same folder. That is the guard doing its job, not a failure, so
+    // the item is dropped quietly instead of being retried.
+    try {
+      const d = JSON.parse(e.data || '{}');
+      if (d.code === 'duplicate') {
+        item.status = 'done'; item.progress = 100;
+        updateDlQueueUI();
+        es.close();
+        return;
+      }
+    } catch {}
     es.close();
     // Parse {message, hint, code} from the server-side classifier.
     let msg = 'Download failed', hint = '', code = '';
@@ -4931,7 +4943,7 @@ function renderAutoOrganize(data) {
 
   const rowsHTML = suggestions.map((s, i) => {
     const confPct = Math.round(s.confidence * 100);
-    const confColor = confPct >= 70 ? '#7ed982' : (confPct >= 50 ? '#f59e0b' : '#999');
+    const confColor = confPct >= 70 ? '#e8e8e8' : (confPct >= 50 ? '#f59e0b' : '#999');
     const meta = [
       s.bpm ? `${Math.round(s.bpm)} BPM` : '',
       s.key_note ? `${s.key_note} ${s.key_mode || ''}` : '',
@@ -5119,7 +5131,7 @@ function renderDuplicateFinder(data) {
         tr.created_at ? tr.created_at.slice(0, 10) : '',
       ].filter(Boolean).join(' · ');
       const tagLabel = ti === 0
-        ? '<span style="color:#7ed982;font-size:10px;font-weight:600">' + keepLbl + '</span>'
+        ? '<span style="color:#e8e8e8;font-size:10px;font-weight:600">' + keepLbl + '</span>'
         : `<label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:10px;color:var(--hint)">
              <input type="checkbox" class="dup-cb-g${gi}" data-id="${tr.id}" checked style="cursor:pointer"/>
              ${delLbl}
@@ -5483,7 +5495,7 @@ async function openSimilarTracks(historyId) {
           <div style="font-size:12px;color:var(--white);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(rr.title || '(untitled)')}</div>
           <div style="font-size:10px;color:var(--hint)">${badges}${reasons ? ' · ' + reasons : ''}</div>
         </div>
-        <span style="font-size:12px;font-weight:600;color:${pct >= 70 ? '#7ed982' : 'var(--muted)'}">${pct}%</span>
+        <span style="font-size:12px;font-weight:600;color:${pct >= 70 ? '#e8e8e8' : 'var(--muted)'}">${pct}%</span>
         <button class="btn xs" onclick="playFromHistory(${rr.id})" title="${t('histFavorite') ? '' : ''}▶">▶</button>
         <button class="btn xs" onclick="document.getElementById('similar-modal').style.display='none';loadFromHistory(${rr.id})">${t('simOpen')}</button>
       </div>`;
@@ -6711,7 +6723,7 @@ function renderSepQueue() {
   const icon = { waiting: 'o', running: 'spin', done: 'ok', error: 'x' };
   list.innerHTML = sepQueue.map(q => `
     <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg);border-radius:6px;margin-bottom:4px;font-size:12px">
-      <span style="width:16px;text-align:center;color:${q.status === 'error' ? '#ff6b6b' : q.status === 'done' ? '#7ed982' : 'var(--hint)'}">${icon[q.status]}</span>
+      <span style="width:16px;text-align:center;color:${q.status === 'error' ? '#ff6b6b' : q.status === 'done' ? '#e8e8e8' : 'var(--hint)'}">${icon[q.status]}</span>
       <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--white)">${escapeHtml(q.name)}</span>
       ${q.status === 'waiting' ? `<button class="btn xs" onclick="removeFromSepQueue(${q.id})"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>` : ''}
     </div>`).join('');
@@ -11682,7 +11694,7 @@ function renderSettings() {
     if (!el) return;
     if (j.installed) {
       el.textContent = 'Installed' + (j.info && j.info.date ? ' · ' + j.info.date : '');
-      el.style.color = '#7ed982';
+      el.style.color = '#e8e8e8';
     } else if (j.info && j.info.python) {
       // Marker exists but invalid (stale/old format). Tell the user it needs re-setup.
       el.textContent = 'Setup is out-of-date — re-run setup to fix';
@@ -12372,7 +12384,7 @@ function showRepairReviewModal(items) {
                   <label for="cand-${i}-${ci}" style="flex:1;cursor:pointer;min-width:0">
                     <div style="font-size:12px;color:var(--white);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(c.name)}</div>
                     <div style="font-size:10px;color:var(--hint);margin-top:1px">
-                      <span style="color:${c.score >= 0.85 ? '#7ed982' : c.score >= 0.70 ? '#f59e0b' : '#999'}">${Math.round(c.score * 100)}% match</span>
+                      <span style="color:${c.score >= 0.85 ? '#e8e8e8' : c.score >= 0.70 ? '#f59e0b' : '#999'}">${Math.round(c.score * 100)}% match</span>
                       · ${c.stage}
                       · ${fmtSize(c.size)}
                       · ${fmtMtime(c.mtime)}
@@ -12424,7 +12436,7 @@ async function applyReviewMatch(rowIdx, historyId) {
       row.style.opacity = '0.4';
       row.style.pointerEvents = 'none';
       const status = document.createElement('div');
-      status.style.cssText = 'font-size:11px;color:#7ed982;margin-top:6px';
+      status.style.cssText = 'font-size:11px;color:#e8e8e8;margin-top:6px';
       status.textContent = 'Linked';
       row.appendChild(status);
     }
@@ -14477,7 +14489,7 @@ function renderMatchPreview(folderId, data) {
   if (!body || !data) return;
 
   const folderName = (data.folder && data.folder.name) || '?';
-  titleEl.innerHTML = `${t('spMatchesFor')} <strong style="color:#7ed982">${escapeHtml(folderName)}</strong>`;
+  titleEl.innerHTML = `${t('spMatchesFor')} <strong style="color:#e8e8e8">${escapeHtml(folderName)}</strong>`;
 
   if (!data.matches || !data.matches.length) {
     body.innerHTML = `
@@ -14507,7 +14519,7 @@ function renderMatchPreview(folderId, data) {
     const meta = [
       m.bpm ? `${Math.round(m.bpm)} BPM` : null,
       m.key_note ? `${m.key_note} ${m.key_mode || ''}` : null,
-      m.match_type === 'artist' ? `<span style="color:#7ed982">${t('spMatchArtist')} "${escapeHtml(m.matched_seed)}"</span>` : `<span style="color:#a0a0c0">${t('spMatchMood')}</span>`,
+      m.match_type === 'artist' ? `<span style="color:#e8e8e8">${t('spMatchArtist')} "${escapeHtml(m.matched_seed)}"</span>` : `<span style="color:#a0a0c0">${t('spMatchMood')}</span>`,
     ].filter(Boolean).join(' · ');
     return `
       <label class="sp-match-row">
@@ -14859,6 +14871,11 @@ async function onUpdateBannerPrimary() {
     // Progress events from main will drive the progress bar.
     _updateState = 'DOWNLOADING';
     _renderUpdateBanner();
+    // Hand the job to the branded window. Once the user has asked for
+    // the update there is nothing left to decide, so a banner tracking a
+    // percentage in the corner is the wrong shape - the update screen
+    // carries it from here through to the restart.
+    try { if (window.api.updater.openWindow) window.api.updater.openWindow(); } catch {}
     try {
       const result = await window.api.updater.download();
       if (!result || !result.ok) {

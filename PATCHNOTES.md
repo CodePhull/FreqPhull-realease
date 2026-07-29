@@ -4,7 +4,97 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
+## 0.7.5 (2026-07-29)
+
+**The accent is white.** Primary buttons were always white on dark, so
+the green sitting alongside them was a second accent competing with the
+app's own language rather than supporting it. It is gone: emphasis,
+hairlines, focus rings, progress fills and the updater all read in white
+or light grey now. Two new tokens, `--accent` and `--accent-dim`, mean
+the accent is one line to change rather than fifty scattered literals.
+
+Status colours went neutral with it. "Done", high confidence and strong
+matches were drawn in the same green, which made a decorative colour and
+a meaningful one indistinguishable. Problems stay red; everything that
+is fine is simply neutral, which is a clearer signal than a third hue.
+
+Two things deliberately kept their colour: the folder palette, where
+five distinct hues exist so tracks can be told apart at a glance, and
+the amber used for "worth a look" states between fine and broken.
+
+Glows were dimmed by a fifth on the way across - white reads brighter
+than green at the same opacity, so keeping the numbers literal would
+have made every halo hotter than it was before.
+
+## 0.7.4 (2026-07-29)
+
+**One screen carries the whole update.** Asking for an update used to
+scatter it across three places: a banner tracking a percentage in the
+corner, then a separate window, then a restart prompt. Once the user has
+asked for the update there is nothing left to decide, so the branded
+screen now opens on Install and stays: it shows the download filling a
+real progress bar with the percentage and speed, then - when the file is
+down - swaps the "do not close this window" warning for a Restart now
+button. Restarting brings back the completion page from 0.7.3, so the
+whole update reads as one continuous thing.
+
+The bar is honest about what it knows: until the first progress event
+arrives, and again while the installer is unpacking, no percentage
+exists, so only the shimmer runs. A real percentage switches it to a
+determinate fill.
+
+## 0.7.3 (2026-07-29)
+
+**The updater window now has a job after the restart.** By the time
+someone clicks restart the download is already done, so the old screen
+was showing them a decision they had made minutes earlier. It now
+appears on the first launch after an update instead, as a completion
+page: confirmation, then what changed. Version numbers are gone from
+it - the user knows the app updated, what they want is what they got.
+It waits four seconds so it lands after the main window has painted
+rather than competing with boot, and it never appears on a first
+install, because nothing is new when everything is new.
+
+Release notes live in one place: the `WHATS_NEW` block at the top of
+the script in `renderer/updater/updater.html`, English and French. Leave
+either list empty and the page shows the confirmation without it.
+
+## 0.7.2 (2026-07-28)
+
+**The same beat downloading over and over.**
+
+`/download` is a Server-Sent Events stream, and an EventSource
+reconnects by itself whenever the stream drops - which re-issues the
+identical request and starts the download again. With a second window
+or the extension queuing the same track as well, that is enough to fill
+History with one beat repeatedly. Rather than chase each trigger, the
+same track can no longer be downloaded into the same folder twice at
+once, or within thirty seconds of finishing. The queue treats that
+refusal as completion rather than an error, so nothing retries. A client
+that disconnects mid-download now also stops yt-dlp instead of leaving
+it running for a listener that has gone.
+
+**Two more sources of duplicate History rows.** The finished download
+lands in the output folder, and auto-rename moves the file again after
+analysis. Neither told the folder watcher that the app itself was
+responsible, so when the output folder sits inside the watched
+stockpile, both looked like newly discovered files and were adopted as
+separate tracks - the adopted copy then being analysed and renamed in
+turn. Both operations now mark their destination the same way the
+stockpile moves always have.
+
+**port-in-use fixed at the source.** The single-instance lock was in
+place, but `app.quit()` is asynchronous: it asks for a graceful
+shutdown and lets the rest of startup keep running, so a second launch
+still spawned a backend that then could not bind the port. It exits
+immediately now, and nothing starts if the lock was not obtained.
+
 ## 0.7.1 (2026-07-28)
+
+**Opening screen is white.** The mark, its halo and both transient
+rings now read in white rather than green. The beat ring sits at bone
+and the bar ring at pure white, so the 4/4 is carried by tone and travel
+distance instead of hue.
 
 **Release workflow fixed.** The Sentry step tested `secrets.SENTRY_DSN`
 directly in its `if`, and the `secrets` context is not available there,

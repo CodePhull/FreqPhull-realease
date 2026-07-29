@@ -143,6 +143,16 @@ setTimeout(async () => {
   } catch (e) { slog('startup verify threw: ' + e.message); }
 }, 15000);
 
+// In-flight and just-finished downloads, keyed by video id + format +
+// destination. See the duplicate guard in /download.
+const _activeDownloads = new Map();
+const _recentDownloads = new Map();
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, t] of _recentDownloads) if (now - t > 120000) _recentDownloads.delete(k);
+  for (const [k, t] of _activeDownloads) if (now - t > 3600000) _activeDownloads.delete(k);
+}, 60000).unref?.();
+
 // yt-dlp version, cached at first use - attached to ytdlp.* Sentry
 // events so "signature broken" reports immediately show whether the
 // user is on a stale binary (the usual cause).
@@ -624,6 +634,7 @@ function maybeAutoRename(historyId, { bpm, key_note, key_mode }) {
       target = path.join(dir, stem + ' [' + bits.join(' ') + '] (' + n + ')' + ext);
       if (++n > 50) return;
     }
+    markIntentionalMove(target);
     fs.renameSync(fp, target);
     dbRun('UPDATE history SET file_path=? WHERE id=?', [target, historyId]);
     slog('auto-rename: ' + path.basename(fp) + ' -> ' + path.basename(target));
@@ -1489,6 +1500,47 @@ app.get('/download', async (req, res) => {
   // A's audio. Isolating every download in its own subdir makes that
   // impossible; the staged file is moved up with a collision-safe
   // rename afterwards.
+  // Duplicate guard. /download is a Server-Sent Events stream, and an
+  // EventSource reconnects by itself whenever the stream drops - which
+  // re-issues this exact request and starts the same download again.
+  // Combined with a second window or the extension queuing the same
+  // track, that is enough to fill History with one beat over and over.
+  // Rather than chase every possible trigger, the same track cannot be
+  // downloaded twice into the same folder at once, or immediately after
+  // it just finished.
+  const _vid = (url.match(/[?&]v=([\w-]{6,})/) || url.match(/youtu\.be\/([\w-]{6,})/) || [])[1] || url;
+  const dlKey = _vid + '|' + fmt + '|' + String(outDir).toLowerCase();
+  if (_activeDownloads.has(dlKey)) {
+    slog('download: refusing duplicate, already in flight: ' + _vid);
+    sse('error', { message: 'This track is already downloading.', code: 'duplicate' });
+    return res.end();
+  }
+  const finishedAt = _recentDownloads.get(dlKey);
+  if (finishedAt && Date.now() - finishedAt < 30000) {
+    slog('download: refusing repeat within 30s: ' + _vid);
+    sse('error', { message: 'That track just finished downloading.', code: 'duplicate' });
+    return res.end();
+  }
+  _activeDownloads.set(dlKey, Date.now());
+  let _dlChild = null, _dlReleased = false;
+  const releaseDownload = (completed) => {
+    if (_dlReleased) return;
+    _dlReleased = true;
+    _activeDownloads.delete(dlKey);
+    if (completed) _recentDownloads.set(dlKey, Date.now());
+  };
+  // If the client goes away - closed window, or an EventSource dropping
+  // the stream - stop the work rather than leaving yt-dlp running for a
+  // listener that no longer exists.
+  req.on('close', () => {
+    if (!_dlReleased) {
+      slog('download: client disconnected, aborting ' + _vid);
+      try { if (_dlChild) _dlChild.kill(); } catch {}
+      try { cleanupStaging(); } catch {}
+      releaseDownload(false);
+    }
+  });
+
   // Sweep stale staging dirs from crashed/killed runs (older than 1h).
   try {
     const now = Date.now();
@@ -1587,6 +1639,7 @@ app.get('/download', async (req, res) => {
 
   // Wire up stdout/stderr/close listeners. Wrapped so retry can reuse them.
   function attachListeners(p) {
+    _dlChild = p;
     p.stdout.on('data', d => {
     const text = d.toString();
     text.split(/\r?\n/).forEach(line => {
@@ -1660,6 +1713,7 @@ app.get('/download', async (req, res) => {
         hint = null;
       }
       cleanupStaging();
+      releaseDownload(false);
       sse('error', { message: msg, hint, code: 'download_failed', raw: stderr.trim().slice(-500) });
       // Only report categories that suggest action: signature breaks
       // are interesting (means yt-dlp needs an update), 403s after
@@ -1698,6 +1752,7 @@ app.get('/download', async (req, res) => {
     }
     if (!stagedPath) {
       cleanupStaging();
+      releaseDownload(false);
       sse('error', { message: 'Output file not found after download' });
       return res.end();
     }
@@ -1710,6 +1765,7 @@ app.get('/download', async (req, res) => {
       if (audioCount > 1) {
         report('download.playlist-leak', new Error(audioCount + ' files in one staging dir'), { url: url.slice(0, 120) });
         cleanupStaging();
+        releaseDownload(false);
         sse('error', { message: 'This URL produced multiple files (playlist?). Paste the playlist URL in the Download tab to queue tracks individually.', code: 'playlist_url' });
         return res.end();
       }
@@ -1724,8 +1780,12 @@ app.get('/download', async (req, res) => {
     try {
       fullPath = promoteStagedFile(stagedPath, meta.title || '');
       filename = path.basename(fullPath);
+      // This download owns the file and is about to register it, so the
+      // watcher must not treat its arrival as a discovery.
+      markIntentionalMove(fullPath);
     } catch (e) {
       cleanupStaging();
+      releaseDownload(false);
       sse('error', { message: 'Could not move file into output folder: ' + e.message });
       return res.end();
     }
@@ -1745,6 +1805,7 @@ app.get('/download', async (req, res) => {
         setImmediate(() => computeFingerprint(historyId, fullPath));
       }
     }
+    releaseDownload(true);
     sse('done', { filename, fullPath, outDir, historyId });
     // Tell every connected renderer (this app, other windows, the Chrome
     // extension) that history gained a row, so their History tab can
