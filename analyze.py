@@ -322,6 +322,12 @@ def _bpm_v11_correct(samples, sr, candidate_bpm):
     for c, s, k, sn in sorted(scores_log, key=lambda x: -x[1])[:5]:
         sys.stderr.write(f'   {c:6.2f} BPM  score={s:.3f}  kick={k:.3f}  snare={sn:.3f}\n')
 
+    # The winning score is a real confidence measure - kick and snare
+    # agreement against the candidate grid. A drumless span scores around
+    # 0.5, a genuine beat two to three times that. Callers that need to
+    # know whether a tempo is trustworthy can ask; everyone else keeps
+    # receiving a plain number.
+    detect_bpm.last_score = float(best_score)
     return round(float(best_bpm), 2)
 
 
@@ -1094,6 +1100,13 @@ def _novelty_curve(feats, W=8):
     return nov
 
 
+# Below this the tempo detector has not really found a beat: kick and
+# snare agreement is at noise level. Drumless spans measure around 0.5,
+# real beats two to three times that, so the two populations sit either
+# side of it with room to spare.
+BPM_CONFIDENCE_FLOOR = 0.85
+
+
 def _bpm_really_differs(a, b):
     """>5% apart, half/double-time aware (140 vs 70 is the SAME beat)."""
     if not a or not b:
@@ -1181,6 +1194,12 @@ def detect_beat_switches(mono, sr, force=False):
         key = mode = None
         try:
             bpm = detect_bpm(seg, sr)
+            # A span with no drums still yields a number, and comparing
+            # that fabricated tempo against the real beat's is precisely
+            # what made intros and breakdowns register as switches. Keep
+            # it only where the detector was actually confident.
+            if getattr(detect_bpm, 'last_score', 0.0) < BPM_CONFIDENCE_FLOOR:
+                bpm = None
         except Exception:
             pass
         try:
@@ -1215,7 +1234,13 @@ def detect_beat_switches(mono, sr, force=False):
         na, nb = np.linalg.norm(ca), np.linalg.norm(cb)
         # Stricter cosine threshold for real re-harmonization
         if na > 1e-9 and nb > 1e-9 and float(np.dot(ca, cb) / (na * nb)) < 0.72:
-            if 'key' not in ch:
+            # Only real re-harmonization counts. When both sides resolve
+            # to the same key, a chroma difference is arrangement - a
+            # pad-only intro against the full beat, or a stripped bridge -
+            # rather than a new progression.
+            same_key = (a['key'] and b['key'] and a['key'] == b['key']
+                        and a['mode'] == b['mode'])
+            if 'key' not in ch and not same_key:
                 ch.append('harmony')
         # Spectral profile change - captures drum-pattern shifts that
         # leave the chroma unchanged but reorganize the timbral mix
@@ -1229,12 +1254,21 @@ def detect_beat_switches(mono, sr, force=False):
             ch.append('energy')
         return ch
 
-    # First pass: drop boundaries where fewer than 2 dimensions changed.
-    # These are fills, breaks, build-ups - not actual switches.
+    # A beat switch is a change of beat, so at least one musical
+    # dimension has to move: tempo, key, or the progression. Texture and
+    # energy describe the arrangement, and on their own they are the
+    # exact signature of the things that were being misread - an intro
+    # giving way to the drums, a breakdown, a bridge where the drums
+    # drop out. Loud-then-quiet with the same tempo and the same key is
+    # the same beat, played differently.
+    MUSICAL = {'bpm', 'key', 'harmony'}
+
+    # First pass: drop boundaries that fail either test - fewer than two
+    # dimensions changed at all, or nothing musical changed.
     i = 0
     while i < len(sections) - 1:
         ch = changes_between(sections[i], sections[i + 1])
-        if len(ch) < 2:
+        if len(ch) < 2 or not (set(ch) & MUSICAL):
             merged = analyze_span(sections[i]['start_s'], sections[i + 1]['end_s'])
             sections[i:i + 2] = [merged]
         else:

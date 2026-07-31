@@ -3803,6 +3803,206 @@ app.post('/client-error', (req, res) => {
   }
 });
 
+// Slow + reverb render.
+//
+// The preview in the window is Web Audio; this is the same settings
+// applied properly, for a file someone may put out. Three things that
+// separate a render worth distributing from a web toy:
+//
+//   Convolution, not echo. The first version used ffmpeg's aecho -
+//   discrete delayed copies, which sound metallic and flutter on
+//   transients. This convolves against a synthesised room response
+//   (lib/impulse.js) through afir, which is what a studio reverb does.
+//
+//   Resampling that does not cost treble. Changing speed the tape way
+//   means resampling, and the default engine is adequate rather than
+//   transparent. libsoxr at 28-bit precision is transparent.
+//
+//   Peak control without touching dynamics. Reverb and bass both add
+//   energy, so a render can clip. Rather than put a limiter across the
+//   mix and squash the transients, the peak is measured and exact
+//   makeup gain applied to land at -1 dBFS - the same result a
+//   mastering engineer would accept, with the dynamics intact.
+const { buildImpulse, writeImpulseWav } = require('./lib/impulse.js');
+
+function irPathFor(room, sampleRate) {
+  const p = path.join(os.tmpdir(), `freqphull_ir_${room}_${sampleRate}.wav`);
+  try {
+    if (!fs.existsSync(p) || fs.statSync(p).size < 1024) {
+      writeImpulseWav(p, buildImpulse(room, sampleRate));
+      slog('slowverb: generated impulse for room ' + room + ' at ' + sampleRate + 'Hz');
+    }
+  } catch (e) {
+    slog('slowverb: impulse generation failed: ' + e.message);
+    return null;
+  }
+  return p;
+}
+
+// Peak of a rendered file, in dBFS.
+//
+// volumedetect reports on stderr, and run() only surfaces stderr when a
+// command fails - so reading it the usual way returned nothing on every
+// successful measurement, which would have meant no gain correction and
+// renders left to clip. This reads both streams directly.
+function measurePeakDb(file) {
+  return new Promise((resolve) => {
+    let buf = '';
+    let proc;
+    try {
+      proc = spawn(bin('ffmpeg'), ['-hide_banner', '-i', file,
+        '-af', 'astats=measure_overall=Peak_level:measure_perchannel=none', '-f', 'null', '-'],
+        { windowsHide: true });
+    } catch { return resolve(null); }
+    const grab = d => { buf += d; };
+    proc.stdout.on('data', grab);
+    proc.stderr.on('data', grab);
+    proc.on('error', () => resolve(null));
+    proc.on('close', () => {
+      // astats, not volumedetect: the intermediate is 32-bit float and
+      // can legitimately sit above full scale after reverb, but
+      // volumedetect clamps its reading at 0 dB. Measuring with a meter
+      // that stops at the number you need to correct is how a render
+      // ends up clipped.
+      const m = buf.match(/Peak level dB:\s*(-?[\d.]+)/);
+      resolve(m ? parseFloat(m[1]) : null);
+    });
+  });
+}
+
+app.post('/slowverb/render', async (req, res) => {
+  const b = req.body || {};
+  const srcPath = String(b.path || '');
+  if (!srcPath || !fs.existsSync(srcPath)) return res.status(400).json({ error: 'Source file not found' });
+
+  const speed = Math.min(1.5, Math.max(0.5, Number(b.speed) || 1));
+  const reverb = Math.min(1, Math.max(0, Number(b.reverb) || 0));
+  const room = Math.min(5, Math.max(1, parseInt(b.room, 10) || 3));
+  const bass = Math.min(12, Math.max(-6, Number(b.bass) || 0));
+  const keepPitch = !!b.keepPitch;
+  const fmt = ['wav', 'mp3', 'flac'].includes(b.format) ? b.format : 'wav';
+  // 24-bit is the sensible default for anything heading to a distributor
+  // or a mastering engineer; 16 stays available for a listening copy.
+  const bits = b.bits === 16 ? 16 : 24;
+
+  // Work at the source's own rate. Forcing 44.1k would resample a 48k
+  // session for no reason, and resampling is the one thing this feature
+  // should do as little of as possible.
+  let srcRate = 44100;
+  try {
+    const probe = await run(bin('ffprobe'), ['-v', 'quiet', '-select_streams', 'a:0',
+      '-show_entries', 'stream=sample_rate', '-of', 'default=nw=1:nk=1', srcPath]);
+    const r = parseInt(String(probe).trim(), 10);
+    if (r >= 8000 && r <= 192000) srcRate = r;
+  } catch {}
+
+  const stage = [];
+  if (Math.abs(speed - 1) > 0.001) {
+    if (keepPitch) {
+      stage.push('atempo=' + speed.toFixed(6));
+    } else {
+      stage.push('asetrate=' + Math.round(srcRate * speed),
+                 'aresample=' + srcRate + ':resampler=soxr:precision=28');
+    }
+  }
+  if (Math.abs(bass) > 0.01) stage.push('bass=g=' + bass.toFixed(2) + ':f=120:w=0.7');
+
+  const tmpOut = path.join(os.tmpdir(), 'freqphull_sv_' + Date.now() + '.wav');
+  const args = ['-y', '-i', srcPath];
+  let filterArgs;
+  const irPath = reverb > 0.001 ? irPathFor(room, srcRate) : null;
+
+  if (irPath) {
+    // afir mixes dry and wet itself, so the balance is exact rather than
+    // two gains fighting each other. Dry eases back as wet comes up so
+    // the render does not simply get louder with more reverb.
+    args.push('-i', irPath);
+    const pre = stage.length ? stage.join(',') + ',' : '';
+    // The dry and wet paths are split and mixed explicitly rather than
+    // handed to afir's own dry/wet controls, which do not behave as a
+    // mix: asking for all dry and no wet produced silence. Doing it
+    // here makes the balance arithmetic that can be checked - at zero
+    // reverb the output is the input, exactly.
+    const dryG = (1 - reverb * 0.45).toFixed(3);
+    const wetG = (reverb * 0.80).toFixed(3);
+    filterArgs = ['-filter_complex',
+      `[0:a]${pre}aformat=channel_layouts=stereo,asplit=2[d][w];` +
+      `[w][1:a]afir=gtype=none:maxir=6[conv];` +
+      `[d]volume=${dryG}[dry];[conv]volume=${wetG}[wet];` +
+      `[dry][wet]amix=inputs=2:normalize=0[out]`,
+      '-map', '[out]'];
+  } else {
+    filterArgs = ['-af', (stage.length ? stage.join(',') : 'anull')];
+  }
+
+  const base = path.basename(srcPath, path.extname(srcPath)).slice(0, 120);
+  const tag = keepPitch ? 'edit' : (speed < 1 ? 'slowed' : speed > 1 ? 'sped up' : 'edit');
+  const outDir = path.dirname(srcPath);
+  let outPath = path.join(outDir, `${base} [${tag}].${fmt}`);
+  let n = 2;
+  while (fs.existsSync(outPath)) { outPath = path.join(outDir, `${base} [${tag}] (${n}).${fmt}`); if (++n > 60) break; }
+
+  try {
+    // Pass one: effects into a 32-bit float intermediate, so nothing is
+    // quantised before the level is known.
+    await run(bin('ffmpeg'), [...args, ...filterArgs, '-acodec', 'pcm_f32le', '-ar', String(srcRate), tmpOut]);
+    if (!fs.existsSync(tmpOut) || fs.statSync(tmpOut).size < 1024) throw new Error('no audio produced');
+
+    const peak = await measurePeakDb(tmpOut);
+    // Restore the level the track already had, capped at -1 dBFS.
+    //
+    // Always normalising to -1 would make a quiet mix louder than its
+    // artist made it; leaving it alone entirely lets reverb and bass
+    // push it into clipping. Matching the source's own peak keeps the
+    // render sounding like the track it came from, and the cap leaves
+    // headroom for a lossy encoder downstream, which can overshoot the
+    // sample peak it was handed.
+    const srcPeak = await measurePeakDb(srcPath);
+    const target = Math.min(srcPeak === null ? -1.0 : srcPeak, -1.0);
+    const gainDb = peak === null ? 0 : Math.max(-24, Math.min(12, target - peak));
+
+    const post = [];
+    if (Math.abs(gainDb) > 0.05) post.push('volume=' + gainDb.toFixed(2) + 'dB');
+    const codec = fmt === 'wav' ? (bits === 16 ? 'pcm_s16le' : 'pcm_s24le')
+                : fmt === 'flac' ? 'flac' : 'libmp3lame';
+    if (fmt !== 'mp3' && bits === 16) {
+      // Dither only where bit depth is actually being reduced. Applying
+      // it to 24-bit would add noise for nothing.
+      post.push('aresample=' + srcRate + ':out_sample_fmt=s16:dither_method=triangular_hp');
+    }
+    const pass2 = ['-y', '-i', tmpOut];
+    if (post.length) pass2.push('-af', post.join(','));
+    pass2.push('-acodec', codec);
+    if (fmt === 'mp3') pass2.push('-b:a', '320k');
+    if (fmt === 'flac') pass2.push('-sample_fmt', bits === 16 ? 's16' : 's32');
+    // Carry the source's tags across - a render that loses its metadata
+    // creates work for whoever files it later.
+    pass2.push('-map_metadata', '0');
+    if (fmt === 'mp3') pass2.push('-write_id3v2', '1');
+    pass2.push(outPath);
+
+    markIntentionalMove(outPath);
+    await run(bin('ffmpeg'), pass2);
+    if (!fs.existsSync(outPath) || fs.statSync(outPath).size < 1024) throw new Error('render produced no usable file');
+
+    const finalPeak = await measurePeakDb(outPath);
+    try { fs.unlinkSync(tmpOut); } catch {}
+    slog(`slowverb: ${path.basename(outPath)}  peak ${peak}dB -> ${finalPeak}dB  (${srcRate}Hz ${bits}-bit)`);
+    res.json({
+      ok: true, path: outPath, filename: path.basename(outPath),
+      sampleRate: srcRate, bits, peakDb: finalPeak, gainAppliedDb: Number(gainDb.toFixed(2)),
+      reverbEngine: irPath ? 'convolution' : 'none',
+    });
+  } catch (e) {
+    try { fs.unlinkSync(tmpOut); } catch {}
+    report('slowverb.render-failed', e, {
+      speed, reverb, room, bass, keepPitch, fmt, bits, srcRate,
+      stage: stage.join(','), _group: 'render-failed',
+    });
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/sentry-status', (_, res) => {
   // Re-resolve the DSN at request time so the user sees the same state
   // the sentry-init module sees. Extract host + project ID so the user

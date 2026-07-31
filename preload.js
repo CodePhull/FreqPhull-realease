@@ -45,7 +45,7 @@ contextBridge.exposeInMainWorld('api', {
     getPending:  () => ipcRenderer.invoke('updater:getPending'),
     // open the branded updater BrowserWindow (the screen with
     // version cards, EN/FR toggle, what's new, install button).
-    openWindow:  () => ipcRenderer.invoke('updater:openWindow'),
+    openWindow:  (initial) => ipcRenderer.invoke('updater:openWindow', initial),
     // Event subscriptions. Each returns an unsubscribe function so callers
     // can clean up if they ever need to (currently nobody does, the banner
     // lives forever).

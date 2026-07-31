@@ -4,6 +4,292 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
+## 0.7.13 (2026-07-31)
+
+Three fixes found while testing 0.7.12.
+
+**multer updated to 2.x.** It is the only dependency that both ships to
+users and had a deprecated major version behind it. The upgrade was
+verified rather than assumed: the app uses `multer({dest, limits})`,
+`upload.single()` and two properties of the resulting file, all of which
+behave identically on 2.x under an actual upload through Express.
+
+`npm run audit` now reports only the dependencies that reach a user.
+The larger number npm prints covers the build tool's own tree, which
+never leaves the machine that builds the app.
+
+**The restart button was drawing itself.** It carried a class name this
+window does not define, so the browser fell back to its own control: a
+white box in the system font, next to buttons that look nothing like it.
+The completion page had the same fault, and worse - assigning the class
+replaced the one the button already had, so it lost its styling
+entirely. Both now use the names the stylesheet actually defines, and
+the release check fails on any button whose class is never styled.
+
+**The what's new list was written but never displayed.** The code that
+fills it asked for an element by the wrong name. That returns nothing,
+and the next line throws, which abandoned the rest of the page - so the
+notes existed in the file, were correct, and never appeared. A release
+check now verifies that every element the updater reaches for actually
+exists, and that the notes reach the page at all.
+
+## 0.7.12 (2026-07-31)
+
+A large release. The headline is Slow + Reverb, a new page under
+Transcribe for slowing tracks down, speeding them up and putting them in
+a room, with renders good enough to distribute. Alongside it: the beat
+switch detector stops mistaking intros and bridges for switches, history
+scrolls properly on large libraries, settings are searchable, crash
+reports carry enough detail to diagnose from, and the accent throughout
+the app is now white rather than green.
+
+**What's new appears once, and can be reopened.** The page shown after
+an update now records the new version before deciding to display
+anything, and skips itself if that record cannot be written - previously
+a failed write meant it would greet the user on every launch from then
+on. Nothing is shown after a first install, since nothing is new when
+everything is.
+
+Settings > Updates gains a Show notes button that opens the same page on
+demand, so the notes are not lost the moment the window is closed. It
+reuses that window rather than duplicating the view, which keeps release
+notes written in one place and looking one way.
+
+**Volume control on the Slow + Reverb preview.** There was no way to set
+a listening level - the preview simply played at full output, which is
+uncomfortable when the point of the page is sitting with a track and
+moving sliders.
+
+It is a monitoring control and nothing more. The saved copy keeps the
+level worked out in 0.8.5, matched to the source's own peak; a preview
+slider feeding into the render would hand people a way to clip their own
+exports, which is the opposite of the point. The hint under the slider
+says so rather than leaving it to be discovered.
+
+Two details: the response is squared, because perceived loudness tracks
+roughly the square of amplitude and a linear slider feels top-heavy over
+its travel. And the level is remembered between sessions, while presets
+deliberately leave it alone - a preset describes the effect, not how
+loud you happen to be listening.
+
+**Exports were far too quiet.**
+
+The impulse response was normalised by its peak. Convolution sums the
+entire response for every output sample, so a three-second tail
+multiplied loudness - it raised a track by roughly twenty LUFS. The
+level correction afterwards then pulled the whole render down by about
+thirteen decibels to bring the peak back, and the direct sound went down
+with the tail. The meter said the file was correct; it sounded quiet and
+washed out. Responses are now normalised to unit energy, so convolving
+with one leaves loudness where it found it and the reverb control means
+what it says.
+
+`afir`'s own dry and wet controls do not behave as a mix. Asking for all
+dry and no wet produced silence, and so did the opposite. The two paths
+are now split and mixed explicitly, which makes the balance arithmetic
+that can be checked: at zero reverb the render is bit-identical in level
+to the source.
+
+The level target changed too. Normalising everything to -1 dBFS made
+quiet mixes louder than their artist made them. The render now matches
+the source's own peak, capped at -1 dBFS - so it sounds like the track
+it came from, with headroom left for a lossy encoder downstream.
+
+Verified by loudness rather than by peak, which is what the first attempt
+got wrong: the source measures -22.2 LUFS at -1.41 dB peak, and every
+preset now lands within about two LUFS of it with the peak matched to
+three decimal places - including the heaviest cathedral setting, which
+previously would have been thirteen decibels down.
+
+**Saving a copy works for files opened from disk.**
+
+The refusal was based on a browser assumption that does not hold here: on
+the web a chosen file has no path, so there would be nothing for the
+backend to render from. Electron hands the window the real location, so
+a file opened from disk can be rendered exactly like a library track.
+The restriction never needed to exist.
+
+The same path also removes the WAV-only limit added in 0.8.3. Knowing
+where the file is means it can go through the same conversion the
+library uses, so every format the app supports can be opened directly
+and previewed - not just WAV.
+
+**Black screen on load was a renderer crash.**
+
+A native crash report identified it exactly: `decodeAudioData` finishes,
+Blink checks whether the source buffer has been detached, and reads a
+null wrapper - EXCEPTION_ACCESS_VIOLATION, the whole window gone. That
+is why nothing appeared in the logs and no error was ever shown: the
+process that would have reported it had already died.
+
+This file warns three separate times never to call `decodeAudioData`
+because it fails in packaged Electron, and carries a hand-written WAV
+parser written for exactly that reason. Slow + Reverb used it anyway.
+It now uses the same parser as everything else, which is safe here
+because every track arrives as WAV through the existing conversion.
+
+Opening a file directly is limited to WAV, since that is what the safe
+parser reads. Nothing is really lost: the library path converts every
+format the app supports, and saving a copy already required a library
+track.
+
+A build check now fails on any call to `decodeAudioData`. The rule was
+written in comments three times and still got broken, so it is enforced
+rather than documented. Verified by reintroducing the call and watching
+the check catch it.
+
+**Black window when loading a track into Slow + Reverb.**
+
+Three changes, in order of how likely each is to have been the cause.
+
+Full-window dialogues no longer blur what is behind them. A fixed,
+full-window layer with `backdrop-filter` is a known way to end up with a
+solid black rectangle instead of a dialogue on some graphics drivers,
+which matches exactly what was reported: the window going black at the
+moment the track picker opens. The blur was buying nothing anyway - the
+overlay already sits at over 96% opacity, which is the same reasoning
+that removed it under lite mode. Both the dialogue and confirmation
+overlays are now plain.
+
+Slow + Reverb shares the audio context the rest of the app already
+uses instead of creating a second one. A page may only hold a handful,
+each claims the output device, and failing to obtain one threw at a
+point that left the picker covering the window with nothing drawn in it.
+
+The picker now closes before anything else happens, so whatever else
+goes wrong the user is looking at the page and a message rather than an
+empty overlay - and the failure is reported rather than swallowed, which
+it was not before.
+
+Also: the decoded audio is no longer copied before decoding. The copy
+was defensive but pointless, since decoding consumes the buffer, and it
+doubled peak memory on files that are already tens of megabytes.
+
+**Slow + Reverb renders are now release quality.**
+
+The first version used ffmpeg's `aecho` for reverb. That is an echo - a
+few discrete delayed copies - and it sounds like one: metallic, with
+audible repeats and flutter on transients. Fine behind a preview,
+unsuitable for anything going to a distributor.
+
+- **Convolution reverb.** The signal is convolved against a synthesised
+  room response: a direct path, early reflections whose spacing is what
+  tells the ear how big the room is, and a dense diffuse tail where
+  treble decays ahead of the body, because air and soft surfaces absorb
+  it first. The two channels are decorrelated so the tail spreads
+  instead of sitting in the middle. Responses are generated rather than
+  shipped, which keeps room size continuous and adds nothing to the
+  download, and they are deterministic, so re-rendering gives the same
+  file.
+- **Transparent resampling.** Changing speed the tape way means
+  resampling; the default engine is adequate rather than transparent.
+  This uses libsoxr at 28-bit precision.
+- **Peak control without touching dynamics.** Reverb and bass both add
+  energy, so a render can clip. Rather than put a limiter across the mix
+  and flatten the transients, the true peak is measured and exact makeup
+  gain applied to land at -1 dBFS - headroom a lossy encoder downstream
+  can overshoot into safely.
+- **24-bit by default**, with 16-bit, FLAC and MP3 320 available.
+  Dither is applied only where bit depth is actually reduced. Source
+  sample rate is preserved rather than everything being forced to 44.1k.
+  Tags carry across to the render.
+- The export reports what it produced - rate, depth, final peak - so the
+  numbers can be checked rather than taken on trust.
+
+Three faults were found by measuring rather than listening; each would
+otherwise have shipped silently. `volumedetect`
+clamps its reading at 0 dB, so a render that legitimately peaked at
++12.6 dB in the float intermediate measured as 0 and got the wrong
+correction; `astats` reports true peak and is used instead. The helper
+that read the meter only captured stderr on failure, so every successful
+measurement returned nothing and no correction was applied at all. And
+afir's own auto-gain, left at its default, buried every reverb render at
+-60 dB. After the fixes, every preset lands within 0.01 dB of -1.0 dBFS.
+
+**New: Slow + Reverb**, under Transcribe.
+
+Slow a track down, speed it up, put it in a room, lift the low end. The
+difference from the web tools that do this is that nothing renders while
+you are deciding: the preview is a live audio graph, so dragging the
+speed slider changes what you are hearing immediately, mid-playback. You
+find the setting by ear instead of exporting, listening, adjusting and
+exporting again. Rendering happens once, when you are happy.
+
+- Load straight from your library, because the track is already on disk -
+  no upload, no wait. Any format the app can open works, through the same
+  conversion the analyser uses.
+- Speed from 50% to 150%. By default pitch follows speed the way a tape
+  does, which is the sound people mean by slowed. A switch keeps the
+  original pitch if you want tempo alone.
+- Reverb with five room sizes, from a booth to a cathedral. The impulse
+  responses are generated rather than shipped, so room size is a slider
+  instead of a fixed set of files. The dry signal eases back as the wet
+  comes up, so adding reverb does not simply make everything louder.
+- Bass, lifting everything under 120Hz.
+- Six presets - slowed and reverb, chopped, nightcore, daycore,
+  cathedral, original - as starting points rather than destinations.
+- Saving a copy renders the file properly with ffmpeg at full quality,
+  rather than recording the preview, and lands beside the original.
+
+Verified with signals whose answers are known rather than by ear: a 440Hz
+tone lands at 374Hz slowed to 85% with pitch following, stays at 440Hz
+with pitch locked, and reaches 550Hz at 125%; the bass control measures a
+5dB lift where 6 was asked for at the shelf's centre; and reverb puts a
+decaying tail into silence where the dry signal has none. Every preset
+renders at the expected duration.
+
+**Beat switch detection no longer calls intros and bridges switches.**
+
+Two faults, one behind the other.
+
+A span with no drums still returns a tempo. The detector is given pads
+and returns a number anyway, and that fabricated tempo, compared against
+the real beat's, looked exactly like a tempo change - so an intro giving
+way to the drums registered as a switch, as did any bridge where the
+drums drop out. The tempo detector already computes a confidence score
+from kick and snare agreement, and the two cases separate cleanly:
+drumless spans score around 0.5, real beats two to three times that. A
+span that scores below the floor now reports no tempo rather than a
+guess. Nothing else changes - the tempo shown for a track is unaffected,
+because the gate applies only inside section comparison.
+
+The rule for what counts was also too loose. Any two changed dimensions
+qualified, and texture plus energy is two - which is precisely the
+signature of an intro, a drop, a breakdown or a bridge. At least one
+musical dimension must now move: tempo, key, or the progression. Loud
+then quiet at the same tempo in the same key is the same beat played
+differently. Chroma differences between spans that resolve to the same
+key are also no longer counted as re-harmonisation, since a pad-only
+intro against a full arrangement produces exactly that.
+
+Verified against three synthesised cases - an intro giving way to drums,
+a genuine switch changing both tempo and key, and a mid-track breakdown.
+Before: all three reported a switch. After: only the real one does.
+
+**Duplicate finder deletes across every group at once.** Clearing a
+library meant confirming once per group, and with dozens of groups that
+is the same click repeated. A toolbar above the list selects or clears
+every copy at once, shows how many are selected across all groups, and
+deletes them in a single pass with one confirmation. Select-all respects
+the existing safeguard: the oldest copy in each group stays.
+
+**Stockpile suggestions show artwork.** Those rows carried no thumbnail
+at all, which in a list where every title begins "[FREE] ... Type Beat"
+removes the one thing that tells them apart at a glance.
+
+**Crash reporting could have vanished on a clean checkout.**
+`@sentry/node` is required at runtime but was never declared as a
+dependency. It works on a machine where it was once installed by hand,
+and is absent everywhere else - including the release workflow, which
+runs a fresh install on a clean runner. Every build produced there would
+have shipped with crash reporting quietly switched off, reporting
+nothing, with no error to reveal it. Both Sentry packages are now
+declared, pinned to the major versions whose API the code actually uses.
+
+A release check now fails the build if any required package is missing
+from package.json, so a feature can no longer depend on something that
+only exists on one developer's machine.
+
 ## 0.7.11 (2026-07-30)
 
 Every animation in the app audited against four questions: does it force

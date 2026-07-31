@@ -284,4 +284,88 @@ if fails:
     print('✗ PASS 14 FAILED'); [print('   -', f) for f in fails]; sys.exit(1)
 print('✓ PASS 14  animations are compositor-only, seamless and defeatable')
 PY
-echo "════════ ALL 14 GREEN ════════"
+python3 - <<'PY'
+import json, re, sys, os
+# A package that is required but not declared works on the machine where
+# it was once installed by hand, and is silently missing everywhere else -
+# including a clean CI build. Crash reporting shipped that way.
+pkg = json.load(open('package.json'))
+declared = set(pkg.get('dependencies', {})) | set(pkg.get('devDependencies', {}))
+BUILTIN = {'fs','path','os','http','https','child_process','crypto','events','stream','util',
+           'url','zlib','net','readline','assert','buffer','timers','worker_threads','electron',
+           'string_decoder','tty','dns','querystring','module','process','v8','perf_hooks'}
+required, missing = set(), set()
+for f in ['server.js','main.js','sentry-init.js','preload.js','updater.js','updater-preload.js']:
+    if not os.path.exists(f): continue
+    for m in re.finditer(r"require\(\s*'([^']+)'", open(f).read()):
+        name = m.group(1)
+        if name.startswith('.') or name.startswith('node:'): continue
+        root = '/'.join(name.split('/')[:2]) if name.startswith('@') else name.split('/')[0]
+        if root in BUILTIN: continue
+        required.add(root)
+        if root not in declared: missing.add(root)
+if missing:
+    print('✗ PASS 15 FAILED')
+    for m in sorted(missing): print(f'   - {m} is required at runtime but not declared in package.json')
+    sys.exit(1)
+print(f'✓ PASS 15  all {len(required)} required packages are declared')
+PY
+python3 - <<'PY'
+import re, sys
+# decodeAudioData crashes the renderer in packaged Electron: the decode
+# completes, Blink checks whether the source buffer was detached, and
+# reads a null wrapper - EXCEPTION_ACCESS_VIOLATION, the window gone.
+# parseWAV exists so that path is never taken. This rule was written in
+# comments three times and still got broken, so it is a build check now.
+src = open('renderer/app.js').read()
+calls = []
+for m in re.finditer(r'\.decodeAudioData\s*\(', src):
+    line = src[:m.start()].count('\n') + 1
+    ctx = src[max(0, m.start()-200):m.start()]
+    # a mention inside a comment is fine; a call is not
+    last = ctx.rsplit('\n', 1)[-1].lstrip()
+    if not last.startswith('//') and not last.startswith('*'):
+        calls.append(line)
+if calls:
+    print('✗ PASS 16 FAILED')
+    print(f'   - decodeAudioData is called at line(s) {calls}; use parseWAV instead')
+    sys.exit(1)
+print('✓ PASS 16  no decodeAudioData calls (crashes packaged Electron)')
+PY
+python3 - <<'PY'
+import re, sys
+# An element reference that does not exist returns null, and the next
+# property access throws - taking the rest of the render with it. That is
+# how the what's new list came to be written, present, and never shown.
+fails = []
+for path in ['renderer/updater/updater.html']:
+    src = open(path).read()
+    ids = set(re.findall(r'id="([^"]+)"', src))
+    for ref in sorted(set(re.findall(r"\$\('([^']+)'\)", src))):
+        if ref not in ids:
+            fails.append(f'{path}: $(\'{ref}\') has no matching element')
+# The release notes must actually reach the page.
+u = open('renderer/updater/updater.html').read()
+if 'const WHATS_NEW' not in u:
+    fails.append('WHATS_NEW block is missing')
+else:
+    m = re.search(r"WHATS_NEW\[lang\]", u)
+    if not m: fails.append('WHATS_NEW is never read')
+    if 'whats-new-list' not in u: fails.append('the notes list is never populated')
+# A class the stylesheet never defines leaves the browser to draw its own
+# control: white box, system font, wrong size. It reviews as fine and
+# looks broken.
+defined = set(re.findall(r'\.([a-zA-Z][\w-]*)\s*[{,:]', u))
+for m in re.finditer(r'<button[^>]*class="([^"]+)"', u):
+    for c in m.group(1).split():
+        if c not in defined:
+            fails.append(f'button class "{c}" has no styling')
+for m in re.finditer(r"className\s*=\s*'([^']+)'", u):
+    for c in m.group(1).split():
+        if c not in defined:
+            fails.append(f'assigned class "{c}" has no styling')
+if fails:
+    print('✗ PASS 17 FAILED'); [print('   -', f) for f in fails]; sys.exit(1)
+print('✓ PASS 17  element references resolve, notes reach the page, buttons are styled')
+PY
+echo "════════ ALL 17 GREEN ════════"

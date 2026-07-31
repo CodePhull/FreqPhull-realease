@@ -1,6 +1,6 @@
 {
   "name": "freqphull",
-  "version": "0.7.11",
+  "version": "0.7.13",
   "description": "Freq.Phull",
   "main": "main.js",
   "scripts": {
@@ -9,14 +9,17 @@
     "build": "electron-builder --publish never --win --x64",
     "prebuild-portable": "node prebuild.js",
     "build-portable": "electron-builder --publish never --win portable --x64",
-    "check": "node prebuild.js"
+    "check": "node prebuild.js",
+    "audit": "npm audit --omit=dev"
   },
   "dependencies": {
-    "express": "^4.18.2",
+    "@sentry/electron": "^5.11.0",
+    "@sentry/node": "^7.120.0",
     "cors": "^2.8.5",
-    "sql.js": "^1.12.0",
-    "multer": "^1.4.5-lts.1",
-    "electron-updater": "^6.1.7"
+    "electron-updater": "^6.1.7",
+    "express": "^4.18.2",
+    "multer": "^2.0.0",
+    "sql.js": "^1.12.0"
   },
   "devDependencies": {
     "electron": "28.3.3",

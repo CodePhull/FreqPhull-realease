@@ -1,4 +1,4 @@
-/* Freq.Phull — Renderer */
+/* Freq.Phull - Renderer */
 const API = 'http://127.0.0.1:47891';
 let fmt='mp3',outDir=null,currentHistId=null,backendOnline=false;
 let lastFilePath = null; // track path for WAV fallback
@@ -132,6 +132,483 @@ window.addEventListener('unhandledrejection', (e) => {
   });
 });
 
+
+// ══════════════════════════════════════════════════════════════════
+//  SLOW + REVERB
+//  Every control is heard while you move it. The alternatives make you
+//  upload a file and wait for a render before you know whether 85% was
+//  the right number, which turns a feel decision into a guessing game.
+//  Here the graph is live: source -> bass shelf -> dry/wet into a
+//  convolver -> out. Moving a slider retunes a node, nothing re-renders.
+//  Saving a copy is a separate, deliberate step.
+// ══════════════════════════════════════════════════════════════════
+const SV_PRESETS = [
+  { id: 'slowed',   name: 'Slowed + reverb', speed: 85,  reverb: 45, room: 4, bass: 3,  keepPitch: false },
+  { id: 'deep',     name: 'Chopped',         speed: 75,  reverb: 35, room: 3, bass: 6,  keepPitch: false },
+  { id: 'night',    name: 'Nightcore',       speed: 125, reverb: 12, room: 2, bass: 0,  keepPitch: false },
+  { id: 'daycore',  name: 'Daycore',         speed: 88,  reverb: 28, room: 3, bass: 2,  keepPitch: false },
+  { id: 'wide',     name: 'Cathedral',       speed: 92,  reverb: 78, room: 5, bass: 1,  keepPitch: false },
+  { id: 'clean',    name: 'Original',        speed: 100, reverb: 0,  room: 3, bass: 0,  keepPitch: false },
+];
+
+const svState = {
+  buffer: null, name: '', path: null, historyId: null,
+  ctx: null, src: null, bassNode: null, dryGain: null, wetGain: null,
+  convolver: null, outGain: null,
+  playing: false, startedAt: 0, offset: 0, raf: null,
+  speed: 100, reverb: 0, room: 3, bass: 0, keepPitch: false,
+  // Monitoring level. Deliberately not part of the render: the saved
+  // file matches the source's own peak, and letting a preview slider
+  // feed into that would hand people a way to clip their own exports.
+  volume: 85,
+  format: 'wav24',
+};
+
+// Impulse responses are generated rather than shipped: a decaying noise
+// burst is a convincing room, costs nothing to store, and lets room size
+// be a slider instead of a fixed set of files.
+function svBuildImpulse(ctx, seconds, decay) {
+  const rate = ctx.sampleRate;
+  const len = Math.max(1, Math.floor(rate * seconds));
+  const imp = ctx.createBuffer(2, len, rate);
+  for (let c = 0; c < 2; c++) {
+    const d = imp.getChannelData(c);
+    for (let i = 0; i < len; i++) {
+      // Slight per-channel difference is what makes the tail feel wide
+      // rather than centred.
+      const n = Math.random() * 2 - 1;
+      d[i] = n * Math.pow(1 - i / len, decay) * (c === 0 ? 1 : 0.92);
+    }
+  }
+  return imp;
+}
+
+const SV_ROOMS = [
+  { label: 'Booth',     secs: 0.6, decay: 3.2 },
+  { label: 'Room',      secs: 1.2, decay: 2.8 },
+  { label: 'Medium',    secs: 2.2, decay: 2.4 },
+  { label: 'Hall',      secs: 3.6, decay: 2.0 },
+  { label: 'Cathedral', secs: 5.5, decay: 1.7 },
+];
+
+function svEnsureCtx() {
+  if (svState.ctx) return svState.ctx;
+  // Share the context the rest of the app already uses. Creating a
+  // second one is a needless risk - a page may only hold a handful,
+  // each one claims the output device, and failing to get one throws
+  // at a point that left the picker covering the window with nothing
+  // drawn in it.
+  if (typeof audioCtx !== 'undefined' && audioCtx) {
+    svState.ctx = audioCtx;
+    return svState.ctx;
+  }
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) throw new Error('Audio is not available in this window');
+  audioCtx = new Ctx();
+  svState.ctx = audioCtx;
+  return svState.ctx;
+}
+
+function svBuildGraph() {
+  const ctx = svEnsureCtx();
+  const st = svState;
+  st.bassNode = ctx.createBiquadFilter();
+  st.bassNode.type = 'lowshelf';
+  st.bassNode.frequency.value = 120;
+  st.convolver = ctx.createConvolver();
+  st.dryGain = ctx.createGain();
+  st.wetGain = ctx.createGain();
+  st.outGain = ctx.createGain();
+  st.bassNode.connect(st.dryGain).connect(st.outGain);
+  st.bassNode.connect(st.convolver).connect(st.wetGain).connect(st.outGain);
+  st.outGain.connect(ctx.destination);
+  svApplyParams();
+}
+
+function svApplyParams() {
+  const st = svState;
+  if (!st.ctx) return;
+  const now = st.ctx.currentTime;
+  if (st.bassNode) st.bassNode.gain.setTargetAtTime(st.bass, now, 0.02);
+  if (st.convolver) {
+    const room = SV_ROOMS[Math.max(0, Math.min(4, st.room - 1))];
+    if (st.convolver._room !== st.room) {
+      st.convolver.buffer = svBuildImpulse(st.ctx, room.secs, room.decay);
+      st.convolver._room = st.room;
+    }
+  }
+  if (st.outGain) {
+    // Perceived loudness tracks roughly the square of amplitude, so a
+    // linear slider feels top-heavy. Squaring gives even control across
+    // the travel.
+    const v = Math.max(0, Math.min(1, st.volume / 100));
+    st.outGain.gain.setTargetAtTime(v * v, now, 0.03);
+  }
+  const wet = st.reverb / 100;
+  if (st.wetGain) st.wetGain.gain.setTargetAtTime(wet * 0.9, now, 0.03);
+  // Pulling the dry back as the wet comes up keeps the level steady
+  // instead of getting louder the more reverb you add.
+  if (st.dryGain) st.dryGain.gain.setTargetAtTime(1 - wet * 0.45, now, 0.03);
+  if (st.src) {
+    const rate = st.speed / 100;
+    st.src.playbackRate.setTargetAtTime(rate, now, 0.05);
+    if ('detune' in st.src) {
+      // Cancel the pitch shift that comes with the rate change, in cents.
+      st.src.detune.setTargetAtTime(st.keepPitch ? -1200 * Math.log2(rate) : 0, now, 0.05);
+    }
+  }
+}
+
+function svSet(key, value) {
+  const st = svState;
+  if (key === 'keepPitch') st.keepPitch = !!value;
+  else st[key] = parseFloat(value);
+  if (key === 'volume') { try { localStorage.setItem('freqphull.svVolume', String(st.volume)); } catch {} }
+  svRefreshLabels();
+  svApplyParams();
+  svMarkPresetActive();
+}
+
+function svRefreshLabels() {
+  const st = svState;
+  const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+  set('sv-speed-val', st.speed + '%');
+  set('sv-reverb-val', st.reverb + '%');
+  set('sv-room-val', SV_ROOMS[Math.max(0, Math.min(4, st.room - 1))].label);
+  set('sv-bass-val', (st.bass > 0 ? '+' : '') + st.bass + ' dB');
+  set('sv-volume-val', Math.round(st.volume) + '%');
+  const hint = document.getElementById('sv-speed-hint');
+  if (hint) hint.textContent = st.keepPitch ? t('svHintKeep') : t('svHintTape');
+  const vh = document.getElementById('sv-volume-hint');
+  if (vh) vh.textContent = t('svVolumeHint');
+}
+
+function svApplyPreset(id) {
+  const p = SV_PRESETS.find(x => x.id === id);
+  if (!p) return;
+  // Presets describe the effect, not the listening level, so volume is
+  // left exactly where the user put it.
+  Object.assign(svState, { speed: p.speed, reverb: p.reverb, room: p.room, bass: p.bass, keepPitch: p.keepPitch });
+  for (const [ctl, val] of [['sv-speed', p.speed], ['sv-reverb', p.reverb], ['sv-room', p.room], ['sv-bass', p.bass]]) {
+    const el = document.getElementById(ctl); if (el) el.value = val;
+  }
+  const kp = document.getElementById('sv-keep-pitch'); if (kp) kp.checked = p.keepPitch;
+  svRefreshLabels();
+  svApplyParams();
+  svMarkPresetActive(id);
+}
+
+function svMarkPresetActive(id) {
+  document.querySelectorAll('.sv-preset').forEach(b => b.classList.toggle('on', !!id && b.dataset.id === id));
+}
+
+function svRestoreVolume() {
+  try {
+    const v = parseFloat(localStorage.getItem('freqphull.svVolume'));
+    if (Number.isFinite(v) && v >= 0 && v <= 100) svState.volume = v;
+  } catch {}
+  const el = document.getElementById('sv-volume');
+  if (el) el.value = svState.volume;
+}
+
+function svRenderPresets() {
+  const wrap = document.getElementById('sv-presets');
+  if (!wrap) return;
+  wrap.innerHTML = SV_PRESETS.map(p =>
+    `<button class="sv-preset" data-id="${p.id}" onclick="svApplyPreset('${p.id}')">${escapeHtml(p.name)}</button>`
+  ).join('');
+}
+
+function svReset() { svApplyPreset('clean'); }
+
+// 24-bit is the default because it is what a distributor or a mastering
+// engineer expects to receive; the rest are there for listening copies.
+function svSetFormat(id) {
+  svState.format = id;
+  document.querySelectorAll('.sv-fmt').forEach(b => b.classList.toggle('on', b.dataset.fmt === id));
+}
+
+function svFormatArgs() {
+  switch (svState.format) {
+    case 'wav16':  return { format: 'wav',  bits: 16 };
+    case 'flac24': return { format: 'flac', bits: 24 };
+    case 'mp3':    return { format: 'mp3',  bits: 16 };
+    default:       return { format: 'wav',  bits: 24 };
+  }
+}
+
+// ── Loading ─────────────────────────────────────────────────────────
+async function svLoadFile(file) {
+  if (!file) return;
+  try {
+    svSetStatus(t('svDecoding'), 'info');
+    // In a browser a chosen file has no path, which is why saving used
+    // to be refused here. Electron does give the real one, so a file
+    // opened from disk can be rendered exactly like a library track -
+    // and can also be converted for preview, which means any format
+    // works rather than only WAV.
+    const diskPath = (file.path && typeof file.path === 'string') ? file.path : null;
+    const isWav = /\.wav$/i.test(file.name || '');
+    let buf;
+    if (isWav) {
+      buf = await file.arrayBuffer();
+    } else if (diskPath) {
+      const r = await fetch(API + '/convert-wav?path=' + encodeURIComponent(diskPath));
+      if (!r.ok) throw new Error('could not convert that file');
+      buf = await r.arrayBuffer();
+    } else {
+      throw new Error('Not a valid WAV file');
+    }
+    await svDecode(buf, file.name, diskPath, null);
+  } catch (e) {
+    // Anything that is not a WAV lands here, because the safe parser
+    // only reads WAV. The library handles every other format, so that
+    // is where to send people rather than reaching for the decoder that
+    // crashes.
+    const msg = /valid WAV/i.test(e.message || '') ? t('svNeedsWav') : (t('svLoadFailed') + ': ' + e.message);
+    svSetStatus(msg, 'err');
+    showAppNotification(msg, 'err', null, 7000);
+  }
+}
+
+// Loading straight from the library is the point: the track is already
+// on disk, so there is no upload and no wait.
+async function svPickFromHistory() {
+  if (!histData || !histData.length) {
+    showAppNotification(t('svNoLibrary'), 'info');
+    return;
+  }
+  const rows = histData.slice(0, 300);
+  const modal = document.createElement('div');
+  modal.className = 'setup-modal';
+  modal.id = 'sv-pick-modal';
+  modal.style.display = 'flex';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-label', t('svPickTitle'));
+  modal.innerHTML = `
+    <div class="setup-card" style="max-width:620px;max-height:78vh;display:flex;flex-direction:column;padding:22px">
+      <div style="font-size:16px;font-weight:700;margin-bottom:10px">${t('svPickTitle')}</div>
+      <input type="search" id="sv-pick-search" placeholder="${t('searchTracks')}" style="width:100%;height:38px;padding:0 12px;margin-bottom:12px"/>
+      <div id="sv-pick-list" style="overflow-y:auto;flex:1"></div>
+      <div class="row" style="justify-content:flex-end;margin-top:14px">
+        <button class="btn sm" onclick="document.getElementById('sv-pick-modal').remove()">${t('closeWord')}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  trapFocus(modal);
+  const list = modal.querySelector('#sv-pick-list');
+  const draw = (q) => {
+    const ql = (q || '').toLowerCase();
+    const shown = rows.filter(r => !ql || (r.title || '').toLowerCase().includes(ql));
+    list.innerHTML = shown.slice(0, 120).map(r => `
+      <button class="sv-pick-row" onclick="svLoadFromHistory(${r.id})">
+        <span class="sv-pick-title">${escapeHtml(r.title || '(untitled)')}</span>
+        <span class="sv-pick-meta">${r.bpm ? Math.round(r.bpm) + ' BPM' : ''}${r.key_note ? ' · ' + escapeHtml(r.key_note) + ' ' + escapeHtml(r.key_mode || '') : ''}</span>
+      </button>`).join('') || `<div style="padding:18px;text-align:center;color:var(--hint)">${t('settingsNoMatch')}</div>`;
+  };
+  draw('');
+  modal.querySelector('#sv-pick-search').addEventListener('input', e => draw(e.target.value));
+}
+
+async function svLoadFromHistory(id) {
+  const row = (histData || []).find(h => h.id === id);
+  // Close the picker first, unconditionally. If anything after this
+  // throws, the user is looking at the page and an error message rather
+  // than a full-window overlay with nothing drawn in it.
+  const m = document.getElementById('sv-pick-modal');
+  if (m) m.remove();
+  if (!row || !row.file_path) { showAppNotification(t('svNoFile'), 'err'); return; }
+  try {
+    svSetStatus(t('svDecoding'), 'info');
+    // Reuse the same conversion the analyzer uses, so every format the
+    // app can open works here too.
+    const r = await fetch(API + '/convert-wav?path=' + encodeURIComponent(row.file_path));
+    if (!r.ok) throw new Error('conversion failed');
+    const buf = await r.arrayBuffer();
+    await svDecode(buf, row.title || 'track', row.file_path, row.id);
+  } catch (e) {
+    svSetStatus(t('svLoadFailed') + ': ' + e.message, 'err');
+    showAppNotification(t('svLoadFailed') + ': ' + e.message, 'err', null, 7000);
+    // Surface it: a failure here used to leave no trace anywhere.
+    try {
+      if (typeof _reportUiError === 'function') {
+        _reportUiError('crash', 'slowverb load: ' + e.message, { stack: e.stack || null });
+      }
+    } catch {}
+  }
+}
+
+async function svDecode(arrayBuf, name, path, historyId) {
+  const ctx = svEnsureCtx();
+  // parseWAV, not decodeAudioData: the latter crashes the renderer in
+  // packaged Electron. The decode completes, Blink tests the source
+  // buffer for detachment and dereferences a null wrapper, raising
+  // EXCEPTION_ACCESS_VIOLATION. The manual parser avoids that path and
+  // is sufficient here because every track arrives as WAV.
+  const decoded = parseWAV(arrayBuf, ctx);
+  svStop();
+  svState.buffer = decoded;
+  svState.name = name;
+  svState.path = path;
+  svState.historyId = historyId;
+  if (!svState.outGain) svBuildGraph();
+  const nm = document.getElementById('sv-track-name');
+  if (nm) nm.textContent = name;
+  const body = document.getElementById('sv-body');
+  if (body) body.classList.remove('sv-disabled');
+  const play = document.getElementById('sv-play');
+  if (play) play.disabled = false;
+  const dur = document.getElementById('sv-dur');
+  if (dur) dur.textContent = fmt2time(decoded.duration);
+  svState.offset = 0;
+  svSetStatus('', 'info');
+  svRenderPresets();
+  svRestoreVolume();
+  svRefreshLabels();
+  svApplyParams();
+}
+
+// ── Transport ───────────────────────────────────────────────────────
+function svTogglePlay() { svState.playing ? svPause() : svPlay(); }
+
+function svPlay() {
+  const st = svState;
+  if (!st.buffer) return;
+  const ctx = svEnsureCtx();
+  if (ctx.state === 'suspended') ctx.resume();
+  st.src = ctx.createBufferSource();
+  st.src.buffer = st.buffer;
+  st.src.connect(st.bassNode);
+  svApplyParams();
+  st.src.start(0, Math.max(0, Math.min(st.offset, st.buffer.duration - 0.05)));
+  st.startedAt = ctx.currentTime;
+  st.playing = true;
+  st.src.onended = () => { if (st.playing) { st.playing = false; st.offset = 0; svUpdateTransport(); } };
+  svUpdateTransport();
+  svTick();
+}
+
+function svPause() {
+  const st = svState;
+  if (st.src) {
+    st.offset += (st.ctx.currentTime - st.startedAt) * (st.speed / 100);
+    try { st.src.stop(); } catch {}
+    st.src = null;
+  }
+  st.playing = false;
+  svUpdateTransport();
+}
+
+function svStop() {
+  const st = svState;
+  if (st.src) { try { st.src.stop(); } catch {} st.src = null; }
+  st.playing = false; st.offset = 0;
+  if (st.raf) { cancelAnimationFrame(st.raf); st.raf = null; }
+}
+
+function svCurrentTime() {
+  const st = svState;
+  if (!st.playing) return st.offset;
+  return st.offset + (st.ctx.currentTime - st.startedAt) * (st.speed / 100);
+}
+
+function svTick() {
+  const st = svState;
+  // Same discipline as the rest of the app: no animation frames while
+  // nothing is moving.
+  if (!st.playing) { st.raf = null; return; }
+  const cur = Math.min(svCurrentTime(), st.buffer.duration);
+  const fill = document.getElementById('sv-seek-fill');
+  const curEl = document.getElementById('sv-cur');
+  if (fill) fill.style.width = (cur / st.buffer.duration * 100) + '%';
+  if (curEl) curEl.textContent = fmt2time(cur);
+  st.raf = requestAnimationFrame(svTick);
+}
+
+function svUpdateTransport() {
+  const lbl = document.getElementById('sv-play-lbl');
+  if (lbl) lbl.textContent = svState.playing ? t('svPause') : t('svPlay');
+  if (svState.playing && !svState.raf) svTick();
+}
+
+function svSeekClick(ev) {
+  const st = svState;
+  if (!st.buffer) return;
+  const r = ev.currentTarget.getBoundingClientRect();
+  const frac = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+  const wasPlaying = st.playing;
+  svPause();
+  st.offset = frac * st.buffer.duration;
+  const fill = document.getElementById('sv-seek-fill');
+  if (fill) fill.style.width = (frac * 100) + '%';
+  if (wasPlaying) svPlay(); else svUpdateTransport();
+}
+
+
+// ── Saving a copy ───────────────────────────────────────────────────
+// The preview is Web Audio; this asks the backend to apply the same
+// settings with ffmpeg, so the file is a real render at full quality
+// rather than a recording of playback.
+async function svExport() {
+  const st = svState;
+  if (!st.buffer) return;
+  if (!st.path) {
+    // Only reachable if the platform withheld the path, which Electron
+    // does not do - so this is a genuine edge case rather than the
+    // normal state it used to describe.
+    svSetStatus(t('svExportNeedsPath'), 'err');
+    return;
+  }
+  const btn = document.getElementById('sv-export');
+  const lbl = document.getElementById('sv-export-lbl');
+  const original = lbl ? lbl.textContent : '';
+  if (btn) btn.disabled = true;
+  if (lbl) lbl.textContent = t('svRendering');
+  svSetStatus(t('svRenderingLong'), 'info');
+  try {
+    const r = await fetch(API + '/slowverb/render', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: st.path,
+        speed: st.speed / 100,
+        reverb: st.reverb / 100,
+        room: st.room,
+        bass: st.bass,
+        keepPitch: st.keepPitch,
+        ...svFormatArgs(),
+      }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'render failed');
+    const detail = [
+      j.sampleRate ? (j.sampleRate / 1000).toFixed(1) + ' kHz' : null,
+      j.bits ? j.bits + '-bit' : null,
+      typeof j.peakDb === 'number' ? 'peak ' + j.peakDb.toFixed(1) + ' dBFS' : null,
+      j.reverbEngine === 'convolution' ? t('svConvolution') : null,
+    ].filter(Boolean).join('  ·  ');
+    svSetStatus(t('svSaved').replace('{f}', j.filename) + (detail ? '\n' + detail : ''), 'ok');
+    showAppNotification(t('svSaved').replace('{f}', j.filename), 'done', () => {
+      fetch(API + '/open-folder?path=' + encodeURIComponent(j.path.replace(/[\\/][^\\/]+$/, '')));
+    }, 8000);
+    loadHistory();
+  } catch (e) {
+    svSetStatus(t('svRenderFailed') + ': ' + e.message, 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+    if (lbl) lbl.textContent = original || t('svExportLbl');
+  }
+}
+
+function svSetStatus(msg, kind) {
+  const el = document.getElementById('sv-export-status');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.className = 'sv-export-status' + (kind === 'err' ? ' err' : kind === 'ok' ? ' ok' : '');
+}
+
+
+
 function diagLog(msg, cls) {
   try { _trail(msg); } catch {}
   const d = document.getElementById('diag');
@@ -161,8 +638,8 @@ function setStatus(msg) {
 }
 
 // The splash is shown from the first painted frame, so on a fast boot it
-// would otherwise appear and vanish within a few frames - a flicker that
-// reads as a glitch. Hold it for at least one bar (2.6s at 100 BPM),
+// would otherwise appear and vanish within a few frames. Hold it for at
+// least one bar (2.6s at 100 BPM),
 // then dissolve. Everything behind it is already interactive; the floor
 // only governs the overlay.
 const BOOT_SPLASH_FLOOR_MS = 3200;
@@ -1713,7 +2190,7 @@ async function loadAudioBuffer(arrayBuf, name, histId) {
   document.getElementById('notes-box').value = '';
   if (histId) { const row = histData.find(h => h.id == histId); if (row?.notes) document.getElementById('notes-box').value = row.notes; }
 
-  diagLog('Calling decodeAudioData...', 'info');
+  diagLog('Preparing audio for analysis...', 'info');
   try {
     dlSt('Converting audio…', 'spin');
 
@@ -5213,9 +5690,78 @@ function renderDuplicateFinder(data) {
     <div style="margin-bottom:14px;padding:10px 12px;background:var(--bg);border-radius:6px;border:1px solid var(--border);font-size:12px;color:var(--muted)">
       ${t('dupFoundSummary').replace('{x}', groups.length).replace('{g}', groups.length === 1 ? t('dupGroupOne') : t('dupGroupMany')).replace('{n}', hashed)}
     </div>
+    <div class="dup-toolbar">
+      <div class="dup-toolbar-actions">
+        <button class="btn xs" onclick="dupCheckAll(true)">${t('dupCheckAll')}</button>
+        <button class="btn xs" onclick="dupCheckAll(false)">${t('dupCheckNone')}</button>
+      </div>
+      <div class="dup-toolbar-right">
+        <span id="dup-selected-count" class="dup-count"></span>
+        <button class="btn xs danger" id="dup-delete-all" onclick="deleteAllCheckedDuplicates()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> ${t('dupDeleteAllChecked')}</button>
+      </div>
+    </div>
     ${groupsHTML}`;
 
+  // Keep the count and the button's enabled state honest as boxes change.
+  body.addEventListener('change', (e) => {
+    if (e.target && e.target.type === 'checkbox') _refreshDupSelection();
+  });
+  _refreshDupSelection();
+
   window._dupGroups = groups;
+}
+
+function _allDupCheckboxes() {
+  return Array.from(document.querySelectorAll('#dup-modal input[type=checkbox][data-id], .setup-modal input[type=checkbox][data-id]'));
+}
+
+function _refreshDupSelection() {
+  const checked = _allDupCheckboxes().filter(cb => cb.checked);
+  const label = document.getElementById('dup-selected-count');
+  const btn = document.getElementById('dup-delete-all');
+  if (label) label.textContent = checked.length
+    ? t('dupSelectedCount').replace('{n}', checked.length)
+    : t('dupNoneSelected');
+  if (btn) btn.disabled = checked.length === 0;
+}
+
+function dupCheckAll(on) {
+  // The pre-ticked state already spares the oldest copy in each group,
+  // so "select all" respects that rather than ticking the originals too.
+  _allDupCheckboxes().forEach(cb => { if (!cb.disabled) cb.checked = !!on; });
+  _refreshDupSelection();
+}
+
+// Delete every checked copy across every group in one pass, with a
+// single confirmation. Clearing a library used to mean confirming once
+// per group, which for dozens of groups is the same click repeated.
+async function deleteAllCheckedDuplicates() {
+  const ids = _allDupCheckboxes().filter(cb => cb.checked).map(cb => parseInt(cb.dataset.id, 10)).filter(Boolean);
+  if (!ids.length) { showAppNotification(t('dupNothingChecked'), 'warn'); return; }
+  const ok = await confirmModal({
+    title: t('dupDeleteTitle').replace('{n}', ids.length).replace('{w}', ids.length === 1 ? t('dupOne') : t('dupMany')),
+    message: t('dupDeleteMsg'),
+    okLabel: t('deleteWord'),
+    cancelLabel: t('cancelWord'),
+    danger: true,
+  });
+  if (!ok) return;
+  const btn = document.getElementById('dup-delete-all');
+  if (btn) { btn.disabled = true; btn.textContent = '0/' + ids.length; }
+  let done = 0, failed = 0;
+  for (const id of ids) {
+    try {
+      const r = await fetch(API + '/history/' + id, { method: 'DELETE' });
+      r.ok ? done++ : failed++;
+    } catch { failed++; }
+    if (btn) btn.textContent = (done + failed) + '/' + ids.length;
+  }
+  showAppNotification(
+    `${t('deletedWord')} ${done}${failed ? ' · ' + failed + ' ' + t('failedWord') : ''}`,
+    failed ? 'warn' : 'done'
+  );
+  await loadHistory();
+  openDuplicateFinder();
 }
 
 async function deleteDuplicateGroup(gi) {
@@ -7730,7 +8276,7 @@ function renderStemPlayers(result) {
 
   // Stage 1: render the rows immediately with placeholder state so the UI
   // appears instantly. The buffers + peaks will fill in over the next
-  // 1–2 seconds as the fetches complete (single fetch per stem, no races).
+  // 1-2 seconds as the fetches complete (single fetch per stem, no races).
   stems.forEach((s, i) => {
     sepAudioMap[i] = {
       audio: null,        // filled after fetch+blob-url
@@ -8413,7 +8959,7 @@ function setMasterVolume(val) {
 
 // ── Master VU meter ─────────────────────────────────────────────────────────
 // Reads the master analyser at ~30fps and paints fill height per channel.
-// Uses time-domain data to compute peak level; converts to a 0–1 fill
+// Uses time-domain data to compute peak level; converts to a 0-1 fill
 // scaled so 0 dBFS = 100% (top), -36 dBFS = 0% (bottom). Color gradient
 // in CSS provides the green/yellow/red segmentation visually.
 let _vuRaf = null;
@@ -10317,6 +10863,11 @@ const T = {
     dupNoneFound:'No duplicates found across <strong>{n}</strong> fingerprinted tracks.',
     dupNotScanned:'({n} tracks not yet scanned)',
     dupKeep:'KEEP',
+    dupCheckAll:'Select all copies',
+    dupCheckNone:'Clear selection',
+    dupDeleteAllChecked:'Delete all checked',
+    dupSelectedCount:'{n} selected across all groups',
+    dupNoneSelected:'Nothing selected',
     dupGroupWord:'Group',
     dupOne:'duplicate', dupMany:'duplicates',
     dupDeleteChecked:'Delete checked',
@@ -10363,6 +10914,10 @@ const T = {
     dupName:'Find duplicate tracks',
     dupDesc:'Detect tracks with identical audio (same song re-uploaded under different YouTube URLs, different bitrates, etc.). Uses a perceptual fingerprint of the audio itself, not filenames. New downloads are fingerprinted automatically; existing tracks need a one-time backfill.',
     btnFindDupes:'Find duplicates',
+    patchNotesName:'What\'s new',
+    patchNotesDesc:'The notes shown after an update - what changed in this version, any time you want them.',
+    patchNotesBtn:'Show notes',
+    patchNotesUnavailable:'Release notes are not available in this window',
     updName:'Check for updates',
     updDesc:'Manually check GitHub for a newer release. Updates download in the background and prompt to install when ready. The app also checks automatically every 4 hours.',
     btnCheckNow:'Check now',
@@ -10588,6 +11143,24 @@ const T = {
     tapHint:'tap at least 4 times', reset:'Reset',
     // History tab
     histTitle:'History', histSub:'Every track downloaded - BPM and key saved automatically',
+    svTitle:'Slow + Reverb',
+    svConvolution:'convolution reverb',
+    svVolumeHint:'Listening level only - the saved copy keeps the track\'s own level',
+    svPlay:'Play', svPause:'Pause',
+    svDecoding:'Decoding audio...',
+    svNeedsWav:'That file could not be read. If it is on a drive the app cannot reach, add it to your library first.',
+    svLoadFailed:'Could not load that track',
+    svNoLibrary:'Your library is empty - download something first',
+    svNoFile:'That track has no file on disk',
+    svPickTitle:'Choose a track',
+    svHintTape:'Slower drops the pitch too, the way a tape does',
+    svHintKeep:'Speed changes, pitch stays where it was',
+    svRendering:'Rendering...',
+    svRenderingLong:'Applying the settings to a real file. A few seconds.',
+    svRenderFailed:'Render failed',
+    svSaved:'Saved {f} - click to open the folder',
+    svExportNeedsPath:'This track has no file on disk to render from. Choose it from your library instead.',
+    svExportLbl:'Save a copy',
     searchTracks:'Search tracks…', select:'Select', cancel:'Cancel',
     selectAll:'Select All', selected:'selected',
     toStockpile:'<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v13H3zM3 7l3-4h12l3 4M12 3v17"/></svg> To Stockpile', moveTo:'<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> Move to…',
@@ -10892,6 +11465,11 @@ const T = {
     dupNoneFound:'Aucun doublon trouvé parmi <strong>{n}</strong> pistes indexées.',
     dupNotScanned:'({n} pistes pas encore analysées)',
     dupKeep:'GARDER',
+    dupCheckAll:'Tout sélectionner',
+    dupCheckNone:'Effacer la sélection',
+    dupDeleteAllChecked:'Supprimer tout ce qui est coché',
+    dupSelectedCount:'{n} sélectionnés dans tous les groupes',
+    dupNoneSelected:'Rien de sélectionné',
     dupGroupWord:'Groupe',
     dupOne:'doublon', dupMany:'doublons',
     dupDeleteChecked:'Supprimer la sélection',
@@ -10938,6 +11516,10 @@ const T = {
     dupName:'Trouver les pistes en double',
     dupDesc:'Détecte les pistes au contenu audio identique (même morceau re-uploadé sous différents liens YouTube, bitrates différents, etc.). Utilise une empreinte perceptuelle de l\'audio lui-même, pas les noms de fichiers. Les nouveaux téléchargements sont automatiquement indexés ; les pistes existantes nécessitent une indexation unique.',
     btnFindDupes:'Trouver les doublons',
+    patchNotesName:'Nouveautés',
+    patchNotesDesc:'Les notes affichées après une mise à jour - ce qui a changé dans cette version, quand vous voulez.',
+    patchNotesBtn:'Voir les notes',
+    patchNotesUnavailable:'Les notes de version ne sont pas disponibles dans cette fenêtre',
     updName:'Vérifier les mises à jour',
     updDesc:'Vérifie manuellement sur GitHub si une nouvelle version est disponible. Les mises à jour se téléchargent en arrière-plan et proposent l\'installation une fois prêtes. L\'application vérifie aussi automatiquement toutes les 4 heures.',
     btnCheckNow:'Vérifier',
@@ -11162,6 +11744,24 @@ const T = {
     tapHint:'tapez au moins 4 fois', reset:'Réinitialiser',
     // History tab
     histTitle:'Historique', histSub:'Toutes les pistes téléchargées - BPM et tonalité enregistrés automatiquement',
+    svTitle:'Ralenti + Réverbe',
+    svConvolution:'réverbe à convolution',
+    svVolumeHint:'Niveau d\'écoute seulement - la copie enregistrée garde le niveau de la piste',
+    svPlay:'Lecture', svPause:'Pause',
+    svDecoding:'Décodage de l\'audio...',
+    svNeedsWav:'Ce fichier n\'a pas pu être lu. S\'il est sur un disque inaccessible à l\'app, ajoutez-le d\'abord à votre bibliothèque.',
+    svLoadFailed:'Impossible de charger cette piste',
+    svNoLibrary:'Votre bibliothèque est vide - téléchargez d\'abord quelque chose',
+    svNoFile:'Cette piste n\'a aucun fichier sur le disque',
+    svPickTitle:'Choisissez une piste',
+    svHintTape:'Ralentir baisse aussi la hauteur, comme une cassette',
+    svHintKeep:'La vitesse change, la hauteur reste',
+    svRendering:'Rendu...',
+    svRenderingLong:'Application des réglages à un vrai fichier. Quelques secondes.',
+    svRenderFailed:'Échec du rendu',
+    svSaved:'{f} enregistré - cliquez pour ouvrir le dossier',
+    svExportNeedsPath:'Cette piste n\'a aucun fichier sur le disque à traiter. Choisissez-la depuis votre bibliothèque.',
+    svExportLbl:'Enregistrer une copie',
     searchTracks:'Rechercher des pistes…', select:'Sélectionner', cancel:'Annuler',
     selectAll:'Tout sélectionner', selected:'sélectionnée(s)',
     toStockpile:'<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v13H3zM3 7l3-4h12l3 4M12 3v17"/></svg> Vers le stockage', moveTo:'Déplacer vers…',
@@ -11786,6 +12386,13 @@ function renderSettings() {
               </div>
               <button class="btn sm" id="btn-ytdlp-update" onclick="manualUpdateYtdlp()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg> ${t('btnCheckNow')}</button>
             </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('patchNotesName')}</div>
+                <div class="setting-desc">${t('patchNotesDesc')}</div>
+              </div>
+              <button class="btn sm" onclick="openPatchNotes()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg> ${t('patchNotesBtn')}</button>
+            </div>
       </div></div>
     </div>
     <div class="settings-section" data-section="extension">
@@ -12241,6 +12848,21 @@ async function cleanTempFiles() {
 //
 // In dev / unpackaged builds, the updater bridge returns {ok:false,
 // reason:'dev'} and we surface that clearly instead of swallowing it.
+// The same page the app shows after an update, on demand. Reusing that
+// window rather than building a second view means there is one place
+// release notes are written and one way they look.
+function openPatchNotes() {
+  try {
+    if (window.api && window.api.updater && window.api.updater.openWindow) {
+      window.api.updater.openWindow({ phase: 'complete' });
+    } else {
+      showAppNotification(t('patchNotesUnavailable'), 'info', null, 5000);
+    }
+  } catch (e) {
+    showAppNotification(t('patchNotesUnavailable') + ': ' + e.message, 'err', null, 5000);
+  }
+}
+
 async function manualCheckForUpdates() {
   const btn = document.getElementById('btn-check-updates');
   const desc = document.getElementById('update-check-desc');
@@ -12838,8 +13460,15 @@ async function renderStockpileUntagged() {
   for (const track of slice) {
     const row = document.createElement('div');
     row.className = 'sp-untagged-row';
+    // These rows carried no artwork at all, so a list of beats read as a
+    // wall of text - the one place artwork helps most, since the titles
+    // are near-identical.
+    const utThumb = track.thumbnail
+      ? `<img class="sp-ut-thumb" loading="lazy" decoding="async" src="${escapeHtml(resolveThumb(track.thumbnail))}" onerror="window._thumbFail(this)" alt=""/>`
+      : `<div class="sp-ut-thumb fallback"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>`;
     row.innerHTML = `
-      <div>
+      ${utThumb}
+      <div class="sp-ut-textcol">
         <div class="sp-ut-title">${escapeHtml(track.title || track.file_path || '?')}</div>
         <div class="sp-ut-meta">${track.bpm ? `${Math.round(track.bpm)} BPM` : ''}${track.key_note ? ` · ${escapeHtml(track.key_note)} ${escapeHtml(track.key_mode || '')}` : ''}</div>
       </div>

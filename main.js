@@ -204,10 +204,22 @@ function consumeUpdateFlag() {
     try {
       if (fs.existsSync(stampPath)) previous = JSON.parse(fs.readFileSync(stampPath, 'utf8')).version;
     } catch {}
-    if (previous !== current) {
+    if (previous === current) return false;
+
+    // Record the new version before deciding to show anything. If the
+    // write fails - a locked file, a full disk, a folder the user cannot
+    // write to - the version never changes on disk and the page would
+    // greet them on every single launch from then on. Better to skip it
+    // once than to repeat it forever.
+    try {
       fs.writeFileSync(stampPath, JSON.stringify({ version: current, at: new Date().toISOString() }));
+      const check = JSON.parse(fs.readFileSync(stampPath, 'utf8'));
+      if (check.version !== current) return false;
+    } catch (e) {
+      log('update stamp could not be written, skipping the what\'s new page: ' + e.message);
+      return false;
     }
-    return !!previous && previous !== current;
+    return !!previous;   // nothing to announce on a first install
   } catch { return false; }
 }
 

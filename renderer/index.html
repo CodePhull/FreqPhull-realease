@@ -84,9 +84,9 @@
    *   --t-slow  : entrances, overlays, larger reveals
    *
    * Easings:
-   *   --e-out   : default — fast start, gentle settle. Apple/Material standard.
+   *   --e-out   : default - fast start, gentle settle. Apple/Material standard.
    *   --e-in-out: balanced curve for two-way changes (open/close, fade in/out)
-   *   --e-spring: gentle overshoot for entrances — feels alive, not robotic
+   *   --e-spring: gentle overshoot for entrances - feels alive, not robotic
    *   --e-linear: width fills and progress bars where uniform speed matters
    */
   --t-fast: 120ms;
@@ -98,12 +98,12 @@
   --e-linear: linear;
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-/* Kill the user-agent blue focus ring on buttons globally — Electron/Chrome
+/* Kill the user-agent blue focus ring on buttons globally - Electron/Chrome
  * paints a thick blue dashed outline (and sometimes a box-shadow) by default
  * that fights with our dark theme. We suppress both outline AND box-shadow,
  * and on the mini-player buttons we ALSO call preventDefault() in mousedown
  * (see app.js setupMiniPlayerFocusKill) so the browser never assigns focus
- * to them at all — belt and suspenders. */
+ * to them at all - belt and suspenders. */
 button:focus,button:focus-visible{outline:none!important;box-shadow:none!important}
 button::-moz-focus-inner{border:0;padding:0}
 /* Also kill it on SVGs inside buttons (sometimes the ring jumps inward) */
@@ -113,11 +113,11 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--off);font
 /* Anti-flicker on startup: body starts faded out until JS marks itself
  * ready. Prevents the "jiggle" where unstyled / partially-laid-out content
  * paints once before settings/lang/sidebar finish hydrating, then re-flows
- * visibly. The fade is fast (140ms) so users see it as instant — they
+ * visibly. The fade is fast (140ms) so users see it as instant - they
  * just don't see the layout-shift dance underneath. */
 body{opacity:0;transition:opacity .14s ease-out;will-change:opacity}
 body.app-ready{opacity:1}
-/* Subtle geometric background — fixed, non-interactive */
+/* Subtle geometric background - fixed, non-interactive */
 body::before{
   content:'';
   position:fixed;inset:0;z-index:0;pointer-events:none;
@@ -127,7 +127,7 @@ body::before{
   background-size: 72px 72px, 72px 72px;
   background-position: 0 0, 36px 36px;
 }
-/* Vignette — darkens edges so content stands out */
+/* Vignette - darkens edges so content stands out */
 body::after{
   content:'';
   position:fixed;inset:0;z-index:0;pointer-events:none;
@@ -151,7 +151,7 @@ body > *{position:relative;z-index:1;}
 .load-bar{height:100%;background:var(--white);width:0%;animation:loadbar 4s ease forwards}
 .load-status{font-size:14px;color:var(--muted);min-height:18px;letter-spacing:0.04em}
 
-/* Diagnostic log — shown during loading */
+/* Diagnostic log - shown during loading */
 #diag{
   width:500px;max-height:160px;overflow-y:auto;
   background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);
@@ -214,7 +214,7 @@ body > *{position:relative;z-index:1;}
  * to .card and a few high-traffic reveal-heavy ids to avoid animating
  * every random unhide across the app. CSS animations re-fire whenever
  * the selector starts matching, so this plays each time a hidden card
- * becomes visible — exactly the behavior we want. */
+ * becomes visible - exactly the behavior we want. */
 .card:not(.hidden),
 #stems-results:not(.hidden),
 #trans-card:not(.hidden){
@@ -356,7 +356,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 /* ── History ── */
 .hist-empty{text-align:center;padding:70px 40px;color:var(--hint);font-size:14px}
 
-/* History list — reserve vertical space so the first render and any
+/* History list - reserve vertical space so the first render and any
  * subsequent re-render don't cause the page below to collapse/expand and
  * trigger the visible "jiggle". A min-height absorbs the brief moment
  * between fetch-start and rows-rendered. */
@@ -381,7 +381,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 /* Favorite heart on history rows */
 /* Favorite heart icon in history rows.
  * BEHAVIOR: hidden by default, fades in on row hover. Applies to ALL rows
- * including favorited ones — keeps the list visually clean and uniform.
+ * including favorited ones - keeps the list visually clean and uniform.
  * The .on state (favorited) controls the heart COLOR when revealed (red
  * fill vs muted outline) but not its visibility. */
 .hist-row .hist-fav{width:28px;height:28px;border-radius:50%;border:none;background:transparent;color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0;outline:none;opacity:0;transition:opacity .15s,transform .1s,color .1s}
@@ -448,7 +448,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .pro-stat-val.pro-red{color:var(--red)}
 .pro-stat-unit{font-size:10px;color:var(--muted)}
 .pro-hint{font-size:11px;color:var(--hint);line-height:1.7;margin-top:6px;padding-top:8px;border-top:1px solid var(--border)}
-/* Spectrum analyzer — FabFilter Pro-Q-style EQ graph */
+/* Spectrum analyzer - FabFilter Pro-Q-style EQ graph */
 .pro-spectrum{position:relative;width:100%;height:280px;background:#0a0a0a;border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:10px;cursor:crosshair}
 .pro-spectrum canvas{display:block;position:absolute;top:0;left:0}
 .pro-spectrum-bands{display:grid;grid-template-columns:repeat(6, 1fr);gap:6px}
@@ -456,10 +456,10 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .pro-spectrum-band-lbl{font-size:10px;color:var(--hint);letter-spacing:.04em;text-transform:uppercase}
 .pro-spectrum-band-val{font-size:14px;color:var(--white);font-family:monospace;font-weight:600;margin:2px 0}
 .pro-spectrum-band-freq{font-size:9px;color:var(--muted)}
-/* Hover readout — frequency + dB + nearest note. Appended into pro-title. */
+/* Hover readout - frequency + dB + nearest note. Appended into pro-title. */
 .pro-spectrum-readout{display:inline-block;margin-left:14px;font-size:11px;color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:500;letter-spacing:.02em;vertical-align:middle}
 
-/* Live indicator dot — gently pulses red while audio is playing, dims
+/* Live indicator dot - gently pulses red while audio is playing, dims
  * when the spectrum is just a static snapshot. */
 .pro-live-dot{display:inline-block;font-size:11px;color:#444;margin-left:8px;vertical-align:middle;transition:color .3s}
 .pro-live-dot.live{color:#e84040;animation:proLivePulse 1.5s ease-in-out infinite}
@@ -486,7 +486,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 
 /* ── Stem separator ── */
 /* ---------- Stem Mixer ---------- */
-/* Master transport bar — sits above the stem rows */
+/* Master transport bar - sits above the stem rows */
 .mixer-master{display:flex;align-items:center;gap:14px;padding:14px 18px;background:linear-gradient(180deg,var(--bg3),var(--bg2));border:1px solid var(--border2);border-radius:var(--rl);margin-bottom:10px;flex-wrap:wrap}
 .mixer-master-info{display:flex;flex-direction:column;gap:2px;min-width:120px}
 .mixer-master-title{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em}
@@ -500,7 +500,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .mixer-master-seek{flex:1 1 100%;height:4px;background:var(--bg4);border-radius:2px;cursor:pointer;position:relative;margin-top:6px;min-width:200px}
 .mixer-master-seek-fill{height:100%;background:var(--white);border-radius:2px;width:0%;pointer-events:none}
 
-/* Master fader — single fader controlling the whole mix output. Sits in
+/* Master fader - single fader controlling the whole mix output. Sits in
  * the toolbar between transport buttons and seek bar. */
 .mixer-master-fader{display:flex;align-items:center;gap:8px;flex-shrink:0;padding:0 10px;border-left:1px solid var(--border);border-right:1px solid var(--border);height:34px;color:var(--muted)}
 .mixer-master-vol{width:130px;-webkit-appearance:none;appearance:none;height:4px;background:var(--bg4);border-radius:2px;outline:none;cursor:pointer}
@@ -508,7 +508,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .mixer-master-vol:hover::-webkit-slider-thumb{transform:scale(1.25);box-shadow:0 0 0 6px rgba(255,255,255,.08)}
 .mixer-master-vol-lbl{font-size:10px;color:var(--hint);min-width:36px;text-align:right;font-variant-numeric:tabular-nums}
 
-/* Master VU meter — stereo bars, vertical, segmented look via background gradient */
+/* Master VU meter - stereo bars, vertical, segmented look via background gradient */
 .mixer-master-vu{display:flex;gap:2px;width:8px;height:34px;flex-shrink:0}
 .mixer-master-vu-bar{flex:1;height:100%;background:var(--bg);border-radius:1px;position:relative;overflow:hidden;display:flex;align-items:flex-end}
 .mixer-master-vu-fill{width:100%;height:0%;background:linear-gradient(0deg,#4caf50 0%,#4caf50 60%,#f59e0b 70%,#f59e0b 88%,#ef4444 92%,#ef4444 100%);transition:height .04s linear;border-radius:1px}
@@ -516,7 +516,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 /* Loop button gets an "active" state showing the loop region is engaged */
 #mixer-loop-btn.active{background:rgba(255,255,255,.10);border-color:var(--white);color:var(--white)}
 
-/* Master waveform overview — DAW-style timeline showing all stems overlaid
+/* Master waveform overview - DAW-style timeline showing all stems overlaid
  * in their colors at low alpha. Click to seek; playhead is the white line
  * that walks across as audio plays. Sits between master transport and the
  * per-stem rows. */
@@ -525,13 +525,13 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .mixer-master-waveform canvas{position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none}
 .mixer-master-wave-playhead{position:absolute;top:0;bottom:0;width:2px;background:#fff;left:0%;pointer-events:none;box-shadow:0 0 8px rgba(255,255,255,.7),0 0 16px rgba(255,255,255,.4);z-index:3}
 
-/* Loop region overlay — visible when loop is enabled. Semi-transparent
+/* Loop region overlay - visible when loop is enabled. Semi-transparent
  * white box with subtle border markers at the start/end. Layered between
  * the waveform canvas and the playhead. */
 .mixer-master-loop-region{position:absolute;top:0;bottom:0;left:0%;width:0%;background:rgba(255,255,255,.10);border-left:2px solid rgba(255,255,255,.65);border-right:2px solid rgba(255,255,255,.65);pointer-events:none;display:none;z-index:2}
 .mixer-master-loop-region.active{display:block}
 
-/* Bar/beat grid canvas — semi-transparent vertical lines aligned to BPM.
+/* Bar/beat grid canvas - semi-transparent vertical lines aligned to BPM.
  * Drawn from #mixer-master-grid; positioned above wave canvas but under
  * the playhead/loop overlays. */
 #mixer-master-grid{z-index:1}
@@ -539,7 +539,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 /* Stems list */
 .mixer-stems{display:flex;flex-direction:column;gap:6px}
 
-/* Per-stem row — handle, color, name, controls, drag-out */
+/* Per-stem row - handle, color, name, controls, drag-out */
 .stem-row{display:flex;align-items:center;gap:14px;padding:14px 16px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);transition:background var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out),box-shadow var(--t-base) var(--e-out),opacity var(--t-base) var(--e-out);cursor:grab;min-height:88px}
 .stem-row:hover{border-color:var(--border2);background:var(--bg3)}
 .stem-row.dragging{opacity:0.4;cursor:grabbing;border-color:var(--white)}
@@ -553,13 +553,13 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .stem-color.other{background:#6b7280}
 .stem-color.guitar{background:#4caf50}
 .stem-color.piano{background:#3b82f6}
-/* Vocal sub-stems — same red family as 'vocals', distinct shades */
+/* Vocal sub-stems - same red family as 'vocals', distinct shades */
 .stem-color.lead_vocal{background:#ff5566}
 .stem-color.back_vocal{background:#b03030}
 .stem-color.sample_vocal{background:#7a2424}
 .stem-name{flex:1;min-width:80px;font-size:14px;font-weight:600;color:var(--white);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-/* Stem name block — stacks the stem name on top, BPM/key chips below.
+/* Stem name block - stacks the stem name on top, BPM/key chips below.
  * Used in renderStemRow when per_stem_analysis is present in the done
  * payload. The chips are small monospace-style badges that show the
  * stem's detected tempo + tonality. Clicking a chip currently does
@@ -591,7 +591,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
   background:rgba(255,255,255,.08);
 }
 
-/* Per-stem inline waveform — DAW-style: fills remaining row width, tall
+/* Per-stem inline waveform - DAW-style: fills remaining row width, tall
  * enough to see detail, faint inner shadow for depth. Click anywhere to
  * seek (handled in JS), drag-handle plays back at that position. */
 .stem-waveform{position:relative;flex:1;min-width:240px;height:60px;background:linear-gradient(180deg, rgba(0,0,0,0.20), rgba(0,0,0,0.05));border:1px solid var(--border);border-radius:4px;cursor:pointer;overflow:hidden;box-shadow:inset 0 1px 0 rgba(255,255,255,.02)}
@@ -599,7 +599,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .stem-wave-canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .stem-wave-playhead{position:absolute;top:0;bottom:0;width:1px;background:#fff;left:0%;pointer-events:none;box-shadow:0 0 6px rgba(255,255,255,.6),0 0 14px rgba(255,255,255,.3)}
 
-/* Stem-row layout reflows on narrow viewports — waveform goes to its own
+/* Stem-row layout reflows on narrow viewports - waveform goes to its own
  * line below the controls so the row stays readable */
 @media (max-width: 1280px) {
   .stem-waveform{min-width:180px}
@@ -632,14 +632,14 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .stem-drag-out:hover{border-color:var(--border3);color:var(--white);background:var(--wbg)}
 .stem-drag-out:active{cursor:grabbing}
 
-/* Tighter mixer rows on narrow viewports — sliders shrink first */
+/* Tighter mixer rows on narrow viewports - sliders shrink first */
 @media (max-width:900px){
   .stem-knob-group{width:60px}
   .stem-vol,.stem-pan{width:60px}
   .stem-name{min-width:60px;font-size:13px}
 }
 
-/* Ensemble quality badge — shown on results header */
+/* Ensemble quality badge - shown on results header */
 /* ── Stockpile (style folders, mood tagging, suggestions) ── */
 .sp-summary-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
 .sp-stat-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:14px 16px;text-align:center}
@@ -648,7 +648,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .sp-root-card{margin-bottom:14px}
 .sp-hint{font-size:11px;color:var(--hint);margin-top:8px;line-height:1.4}
 .sp-hint code{background:var(--bg);padding:1px 5px;border-radius:3px;font-size:10px;color:var(--off)}
-/* Folder grid — auto-fills as many columns as fit, but always shows at
+/* Folder grid - auto-fills as many columns as fit, but always shows at
  * least 2 across on narrow viewports. Cards collapse to 180px min on
  * narrow screens. Vertical: unlimited rows, container scrolls if app is
  * tall enough but otherwise grows naturally. */
@@ -680,7 +680,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .sp-match-meta{font-size:10px;color:var(--hint);margin-top:2px}
 .sp-match-conf{font-size:11px;color:var(--accent);font-variant-numeric:tabular-nums;font-weight:600;flex-shrink:0}
 .sp-untagged-list{display:flex;flex-direction:column;gap:6px;max-height:480px;overflow-y:auto}
-.sp-untagged-row{display:grid;grid-template-columns:1fr auto;gap:12px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;align-items:center}
+.sp-untagged-row{display:grid;grid-template-columns:auto 1fr auto;gap:12px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;align-items:center}
 .sp-untagged-row .sp-ut-title{font-size:12px;color:var(--white);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sp-untagged-row .sp-ut-meta{font-size:10px;color:var(--hint);margin-top:2px}
 .sp-untagged-row .sp-ut-suggestions{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end;max-width:340px}
@@ -738,7 +738,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 /* ── Mini-DAW overlay ─────────────────────────────────────────────────────
  * Full-screen editor that slides up from below when stems are ready and the
  * user clicks "Open DAW". Position: fixed inset 0 so it covers everything.
- * Uses transform translateY for the entrance — GPU-accelerated, butter smooth.
+ * Uses transform translateY for the entrance - GPU-accelerated, butter smooth.
  * The .opening class is the START state (off-screen below); removing it
  * lets the transition animate to the resting state. */
 .daw-overlay{
@@ -773,7 +773,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
   /* row-gap kicks in when the toolbar wraps to a second line on narrow windows */
 }
 .daw-header-left,.daw-header-right{display:flex;align-items:center;gap:8px;flex-shrink:0}
-/* Toolbar — center area. flex-wrap so on narrow windows it spills to a new
+/* Toolbar - center area. flex-wrap so on narrow windows it spills to a new
  * line under the back-button row instead of overflowing offscreen.
  * justify-content:center keeps it centered on wide screens; when wrapped to
  * its own line it stays centered too. */
@@ -808,7 +808,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .daw-back-btn:hover{background:var(--white);color:#000;border-color:var(--white)}
 .daw-back-btn:active{transform:scale(.97)}
 /* Ensure SVG + text inside back button don't intercept clicks before the
- * button. This is the fix for the "half-broken back button" — clicking on
+ * button. This is the fix for the "half-broken back button" - clicking on
  * the icon or label inside should still trigger the button's click. */
 .daw-back-btn > *{pointer-events:none}
 .daw-title{font-size:13px;font-weight:600;color:var(--white);letter-spacing:.03em}
@@ -854,7 +854,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 }
 .daw-export-btn:hover{color:var(--white);background:var(--bg);border-color:var(--border2)}
 
-/* Master fader — sits in the header-right next to zoom. Speaker icon,
+/* Master fader - sits in the header-right next to zoom. Speaker icon,
  * slider, dB readout. Fixed widths so layout stays predictable across
  * resizes; the slider itself gets the bulk of the space. Ctrl+click on
  * the slider resets to default (-1.4 dB). */
@@ -897,11 +897,11 @@ input[type=range]{flex:1;accent-color:var(--white)}
  * the user scrolls horizontally to inspect later parts of the timeline.
  * Z-indexes: ruler-wrap=11 (above track-heads at 10), ruler-head=12
  * (above the wrap so the corner stays on top of itself). Playhead is z:5
- * so it sits BELOW all sticky headers — no more bleeding through. */
+ * so it sits BELOW all sticky headers - no more bleeding through. */
 .daw-ruler-wrap{
   position:sticky;top:0;z-index:11;
   display:flex;background:#0d0d0d;border-bottom:1px solid var(--border);
-  /* Same reason as .daw-track-row — flex container must be as wide as the
+  /* Same reason as .daw-track-row - flex container must be as wide as the
    * ruler canvas content for sticky-left on .daw-ruler-head to work. */
   min-width:max-content;
 }
@@ -943,7 +943,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .daw-track-controls{
   display:flex;align-items:center;gap:5px;
 }
-/* Mute / Solo buttons — bumped to 30×30 from old 24×24 so they're easy to
+/* Mute / Solo buttons - bumped to 30×30 from old 24×24 so they're easy to
  * hit. Bold letter, clear color states (red when muted, green when soloed).
  * Same size for both so the row stays balanced. */
 .daw-mute-btn,.daw-solo-btn{
@@ -976,7 +976,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
   background:transparent;min-width:0;
 }
 
-/* Pan row — sits below the M/S/Vol row. Small L/R labels flanking a
+/* Pan row - sits below the M/S/Vol row. Small L/R labels flanking a
  * centered slider. Double-click slider to reset to center. */
 .daw-pan-row{
   display:flex;align-items:center;gap:6px;margin-top:2px;
@@ -1035,7 +1035,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 /* ── Update banner ─────────────────────────────────────────────────────────
  * Slides in from the top-right when an update is available. Non-modal so
  * the user can keep working while it downloads in the background.
- * Uses transform + opacity for GPU-accelerated entrance — same easing as
+ * Uses transform + opacity for GPU-accelerated entrance - same easing as
  * the mini player compact transition (Material's decelerate curve). */
 .update-banner{
   position:fixed;top:48px;right:14px;z-index:calc(var(--z-toast) + 10); /* above the toast stack (9998) — Install must never be covered */
@@ -1044,7 +1044,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
   box-shadow:0 12px 36px rgba(0,0,0,.55);
   width:380px;max-width:calc(100vw - 28px);
   /* Slide-in animation. opacity + translateX for the entrance feel.
-   * cubic-bezier(.4,0,.2,1) decelerate curve, 320ms — slightly longer than
+   * cubic-bezier(.4,0,.2,1) decelerate curve, 320ms - slightly longer than
    * the mini-player transition so it reads as a deliberate notification
    * arriving, not a UI element flickering. */
   transition:opacity 320ms cubic-bezier(.4,0,.2,1),transform 320ms cubic-bezier(.4,0,.2,1);
@@ -1052,7 +1052,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 }
 .update-banner.hidden{display:none}
 /* When hidden via .out class (instead of full display:none), animate the
- * exit too — slides right + fades. Caller adds .out, waits 320ms, then
+ * exit too - slides right + fades. Caller adds .out, waits 320ms, then
  * adds .hidden for true removal. */
 .update-banner.out{opacity:0;transform:translateX(20px)}
 .update-banner-icon{
@@ -1072,7 +1072,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
   font-size:11px;color:var(--hint);line-height:1.3;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
-/* Progress bar — only visible during DOWNLOADING state */
+/* Progress bar - only visible during DOWNLOADING state */
 .update-banner-progress{
   margin-top:6px;height:3px;width:100%;
   background:var(--bg);border-radius:2px;overflow:hidden;
@@ -1095,10 +1095,10 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .update-banner-btn:disabled{opacity:.45;cursor:default}
 .update-banner-btn:focus{outline:none;box-shadow:none}
 
-/* Mini player — single-row Spotify-bar style with thumbnail */
+/* Mini player - single-row Spotify-bar style with thumbnail */
 .sp-fv-mini-player{position:fixed;bottom:14px;right:14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:8px 12px;display:flex;align-items:center;gap:8px;box-shadow:0 8px 32px rgba(0,0,0,.45);z-index:var(--z-player);width:760px;max-width:calc(100vw - 28px);height:56px;
   /* Animate width changes for the compact-mode swap (Analyze tab vs others).
-   * cubic-bezier(.4,0,.2,1) is Material's standard decelerate curve —
+   * cubic-bezier(.4,0,.2,1) is Material's standard decelerate curve -
    * the same one Spotify, YouTube Music, and Apple Music use for player
    * transitions. 280ms is long enough to read as intentional, short enough
    * not to feel sluggish. The will-change hint promotes to its own layer
@@ -1107,7 +1107,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
   transition:width 280ms var(--e-out),gap 280ms var(--e-out),box-shadow 280ms var(--e-out);
   will-change:width}
 
-/* ── Compact mode — applied on Analyze tab while in mirror mode ─────────────
+/* ── Compact mode - applied on Analyze tab while in mirror mode ─────────────
  * The Analyzer view already exposes time, seek bar, and volume on its own
  * page, so duplicating them in the mini player is noise. Compact keeps the
  * actually-useful controls (transport, favorite, notepad) and slides
@@ -1147,7 +1147,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
     margin 280ms var(--e-out),
     padding 280ms var(--e-out);
 }
-/* Avoid a flash of the wrong layout on first paint — only animate after
+/* Avoid a flash of the wrong layout on first paint - only animate after
  * the player has been mounted once. The hidden→shown transition is
  * handled by display:none so opacity/width transitions don't fight it. */
 .sp-fv-mini-player.hidden{display:none}
@@ -1158,7 +1158,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .sp-fv-mini-mode-btn.on{color:var(--accent)}
 .sp-fv-mini-mode-btn:focus{outline:none}
 
-/* Mirror-mode dim state — applied to prev/next/shuffle/loop when the
+/* Mirror-mode dim state - applied to prev/next/shuffle/loop when the
  * mini player is mirroring the Analyzer (Analyzer is single-track, no
  * playlist concept). Visibly dimmed + pointer-events:none so the buttons
  * are obviously inert. */
@@ -1169,7 +1169,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .sp-fv-mini-extra-btn{background:transparent;border:none;color:var(--muted);cursor:pointer;width:26px;height:26px;display:flex;align-items:center;justify-content:center;padding:0;border-radius:4px;outline:none;flex-shrink:0;transition:color .12s,transform .1s}
 .sp-fv-mini-extra-btn:hover{color:var(--white);transform:scale(1.08)}
 .sp-fv-mini-extra-btn:focus{outline:none}
-/* Scroll-lock toggle states (v0.2.6) — engaged = bright white anchor,
+/* Scroll-lock toggle states (v0.2.6) - engaged = bright white anchor,
  * disengaged = muted with a subtle slash for "follow disabled". */
 .scroll-lock-btn{color:var(--white)}
 .scroll-lock-btn.off{color:var(--muted)}
@@ -1178,7 +1178,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 #sp-fv-mini-fav.on svg{fill:#ff5555;stroke:#ff5555}
 #sp-fv-mini-notepad-btn.on{color:var(--accent)}
 
-/* Notepad popover — folds up above the player */
+/* Notepad popover - folds up above the player */
 .sp-fv-mini-notepad{position:absolute;bottom:64px;right:0;width:340px;max-width:calc(100vw - 28px);background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:10px;box-shadow:0 8px 32px rgba(0,0,0,.5);z-index:1}
 .sp-fv-mini-notepad.hidden{display:none}
 .sp-fv-mini-notepad-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
@@ -1196,7 +1196,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .sp-fv-mini-title{font-size:12px;color:var(--white);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;line-height:1.2}
 .sp-fv-mini-sub{font-size:10px;color:var(--hint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}
 .sp-fv-mini-transport{display:flex;align-items:center;gap:4px;flex-shrink:0}
-/* Mini player buttons — force the same font as the rest of the UI to
+/* Mini player buttons - force the same font as the rest of the UI to
  * prevent Segoe UI Emoji from rendering U+23EE/U+23EF/U+23ED as colored
  * emoji blocks on Windows. We use SVGs for the glyphs themselves now, but
  * this also ensures any future Unicode character we use stays monochrome. */
@@ -1212,7 +1212,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .sp-fv-mini-time-cur{text-align:right}
 .sp-fv-mini-time-dur{text-align:left}
 
-/* Scrubber bar — bigger and more prominent than volume (it's the principal control) */
+/* Scrubber bar - bigger and more prominent than volume (it's the principal control) */
 .sp-fv-mini-seek{flex:1;height:18px;cursor:pointer;display:flex;align-items:center;position:relative;min-width:120px}
 .sp-fv-mini-seek-track{width:100%;height:5px;background:var(--bg);border-radius:3px;position:relative;overflow:visible}
 .sp-fv-mini-seek-buffered{position:absolute;top:0;left:0;height:100%;background:rgba(255,255,255,.15);border-radius:3px;width:0%;transition:width .1s linear}
@@ -1221,7 +1221,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .sp-fv-mini-seek:hover .sp-fv-mini-seek-thumb{opacity:1}
 .sp-fv-mini-seek:hover .sp-fv-mini-seek-fill{background:#8d8c89}
 
-/* Volume — slimmer inline slider so timeline has the priority real estate */
+/* Volume - slimmer inline slider so timeline has the priority real estate */
 .sp-fv-mini-volume-wrap{display:flex;align-items:center;gap:7px;flex-shrink:0;width:84px}
 .sp-fv-mini-vol-btn{background:transparent;border:none;color:var(--muted);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;flex-shrink:0;border-radius:4px;width:22px;height:22px;outline:none}
 .sp-fv-mini-vol-btn:hover{color:var(--white)}
@@ -1253,13 +1253,13 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .hist-tag-add:hover{border-color:var(--accent);color:var(--accent)}
 
 /* Modal overlay (reused for new folder + tag picker popup) */
-.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.65);z-index:var(--z-confirm);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.72);z-index:var(--z-confirm);display:flex;align-items:center;justify-content:center}
 .modal-overlay.hidden{display:none}
 .modal-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:24px;width:min(440px,92vw);box-shadow:0 16px 60px rgba(0,0,0,.5)}
 .modal-title{font-size:16px;font-weight:600;color:var(--white);margin-bottom:16px}
 /* Body + detail used by confirmModal(). Body is the main message; detail
  * is a smaller muted secondary line for surfacing filenames, formats,
- * etc. — anything that helps the user understand what they're confirming. */
+ * etc. - anything that helps the user understand what they're confirming. */
 .modal-body{font-size:13px;color:var(--off);line-height:1.55;margin-bottom:10px}
 .modal-detail{font-size:12px;color:var(--muted);line-height:1.55;background:var(--bg);border:1px solid var(--border);border-radius:5px;padding:9px 11px;margin-bottom:14px}
 .modal-input{width:100%;height:36px;padding:0 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--white);font-size:13px;margin-top:6px;margin-bottom:10px;font-family:inherit}
@@ -1279,7 +1279,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .tag-picker-row .tp-reasons{font-size:10px;color:var(--hint);margin-top:2px}
 .tag-picker-empty{text-align:center;color:var(--muted);font-size:12px;padding:16px}
 
-/* Build-tamper banner — shown at top of app if integrity check fails */
+/* Build-tamper banner - shown at top of app if integrity check fails */
 .tamper-banner{position:sticky;top:0;left:0;right:0;z-index:var(--z-confirm);display:flex;align-items:center;gap:14px;padding:10px 18px;background:linear-gradient(90deg,rgba(232,64,64,0.16),rgba(232,64,64,0.08));border-bottom:1px solid rgba(232,64,64,0.45);color:#ffb4b4;font-size:13px;backdrop-filter:blur(8px)}
 .tamper-banner.soft{background:linear-gradient(90deg,rgba(255,200,80,0.10),rgba(255,200,80,0.04));border-bottom-color:rgba(255,200,80,0.35);color:#ffd99a}
 .tamper-banner.soft strong{color:#ffc864}
@@ -1293,7 +1293,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 
 /* Mastering section on the stems results card. Sits below the stem list
  * so users see their stems first, then optional rule-based mastering as
- * a follow-up step. Honest labeling — "rule-based, no AI" — avoids the
+ * a follow-up step. Honest labeling - "rule-based, no AI" - avoids the
  * AI-mastering hype. */
 /* ── Quality Advanced (Separator tab) ────────────────────────────────────
  * Collapsible panel below the toggles. Header shows the active preset
@@ -1531,7 +1531,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 }
 .master-result-actions{display:flex;gap:6px}
 
-/* Reference-match controls — appear below the preset row when the user
+/* Reference-match controls - appear below the preset row when the user
  * picks "Reference Match" from the dropdown. The drop area accepts a
  * dragged audio file or click-to-pick; the strength slider controls
  * how aggressively the matching EQ pushes input toward reference. */
@@ -1571,11 +1571,11 @@ input[type=range]{flex:1;accent-color:var(--white)}
   min-width:36px;text-align:right;
 }
 
-/* Quality option chips — small descriptors below the option pills */
+/* Quality option chips - small descriptors below the option pills */
 .q-chip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:30px;background:var(--bg4);border:1px solid var(--border2);color:var(--muted);font-size:11px;font-weight:500;margin-right:6px}
 .q-chip.warn{background:rgba(245,158,11,0.08);color:#f59e0b;border-color:rgba(245,158,11,0.28)}
 
-/* Stage progress — visualizes the 2-stage ensemble pipeline */
+/* Stage progress - visualizes the 2-stage ensemble pipeline */
 .stage-row{display:flex;gap:8px;margin-top:10px;font-size:11px;color:var(--hint)}
 .stage-pill{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:30px;background:var(--bg4);border:1px solid var(--border2);transition:background var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out),color var(--t-base) var(--e-out),opacity var(--t-base) var(--e-out)}
 .stage-pill.active{background:rgba(255,255,255,0.06);border-color:var(--border3);color:var(--white)}
@@ -1591,7 +1591,12 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .sep-hist-meta{font-size:12px;color:var(--muted)}
 
 /* ── First-launch engines setup modal ── */
-.setup-modal{position:fixed;inset:0;background:rgba(8,8,8,0.96);backdrop-filter:blur(6px);z-index:var(--z-dialog);display:flex;align-items:center;justify-content:center;padding:24px;-webkit-app-region:no-drag;cursor:default}
+/* No backdrop blur here. At 96% opacity it is close to invisible
+   anyway - the same reasoning that removed it under lite mode - and a
+   full-window blurred layer is a known way to get a solid black
+   rectangle instead of a dialogue on some GPUs. It cost nothing to
+   look at and could cost the whole window. */
+.setup-modal{position:fixed;inset:0;background:rgba(8,8,8,0.975);z-index:var(--z-dialog);display:flex;align-items:center;justify-content:center;padding:24px;-webkit-app-region:no-drag;cursor:default}
 .setup-card{background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:32px 30px;width:100%;max-width:480px;box-shadow:0 20px 60px rgba(0,0,0,0.5);-webkit-app-region:no-drag}
 .setup-logo{display:flex;justify-content:center;margin-bottom:18px}
 .setup-logo img{width:56px;height:56px;border-radius:10px;opacity:0.92}
@@ -1648,7 +1653,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
  * message, and a thin progress bar at the bottom that depletes to indicate
  * auto-dismiss. Hovering the stack pauses every timer (Apple-style). The
  * container itself is pointer-events:none so the empty area never blocks
- * clicks on the app underneath — only the actual toasts intercept input. */
+ * clicks on the app underneath - only the actual toasts intercept input. */
 .bs-card{background:var(--bg3,#161616);border:1px solid var(--border2,#2a2a2a);border-radius:8px;padding:12px 14px;margin-bottom:12px}
 .bs-head{font-size:13px;font-weight:700;color:var(--white);margin-bottom:6px;letter-spacing:.3px}
 .bs-switch-note{font-size:12px;color:var(--muted);margin-bottom:8px}
@@ -1673,7 +1678,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 /* ── Notifications redesigned v0.2.8 ─────────────────────────────
  *  • Monochrome: white-on-dark for every type (ok / info / warn).
  *    Only errors keep the red accent for instant recognition.
- *  • Subtle internal sheen via gradient — no flat color washes.
+ *  • Subtle internal sheen via gradient - no flat color washes.
  *  • Spring entry is smoother (slightly slower, less overshoot, more
  *    "premium product" than "popup ad").
  *  • Bottom progress strip is white, depleting cleanly.
@@ -1774,7 +1779,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .app-notif-close:hover{color:#fff;background:rgba(255,255,255,.08)}
 .app-notif-close svg{pointer-events:none}
 
-/* Progress bar — thin strip at the bottom. CSS animation depletes width
+/* Progress bar - thin strip at the bottom. CSS animation depletes width
  * from 100% to 0% over the duration. Paused by class .paused (hover). */
 .app-notif-timer{
   position:absolute;bottom:0;left:0;right:0;
@@ -1864,7 +1869,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 
 
 /* ═══════════════════════════════════════════════════════════════════
- * v0.2.2 — Responsive shell + accessibility + polish
+ * v0.2.2 - Responsive shell + accessibility + polish
  * Additive only: nothing here changes the default ≥1100px rendering.
  * ═══════════════════════════════════════════════════════════════════ */
 
@@ -1876,14 +1881,14 @@ input[type=range]{flex:1;accent-color:var(--white)}
 }
 
 /* Sidebar shrinks gradually before going icon-only.
- * 960–800px: trim to 168px, ellipsis long labels */
+ * 960-800px: trim to 168px, ellipsis long labels */
 @media (max-width: 960px) {
   #sidebar{width:168px}
   .nav-btn{font-size:13.5px;padding:10px 14px;gap:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .nav-sec{padding:12px 14px 6px;font-size:11px}
 }
 
-/* 800–620px: icon rail (62px). Labels become tooltips on hover.
+/* 800-620px: icon rail (62px). Labels become tooltips on hover.
  * Section dividers collapse to a thin line so the rail stays clean. */
 @media (max-width: 800px) {
   #sidebar{width:62px;padding:6px 0}
@@ -1908,7 +1913,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
   .pro-stat{min-width:0}
 }
 
-/* Tiny windows (≤460px) — emergency reflow, app still usable */
+/* Tiny windows (≤460px) - emergency reflow, app still usable */
 @media (max-width: 460px) {
   #main{padding:14px 12px}
   #sidebar{width:48px}
@@ -1940,7 +1945,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible{outline:2px so
  * box-shadow change still costs but only fires on direct hover. */
 .sp-folder-card, .setup-card{will-change:transform}
 
-/* Scrollbar polish — only inside scrollable panes. Webkit only; falls
+/* Scrollbar polish - only inside scrollable panes. Webkit only; falls
  * back gracefully to the browser default. */
 ::-webkit-scrollbar{width:10px;height:10px}
 ::-webkit-scrollbar-track{background:transparent}
@@ -1953,7 +1958,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible{outline:2px so
   .nav-btn.on{background:Highlight;color:HighlightText}
 }
 
-/* Touch targets — make sure interactive controls are ≥32px tall on
+/* Touch targets - make sure interactive controls are ≥32px tall on
  * pointer:coarse devices (touch laptops, kiosks). Doesn't affect
  * mouse/trackpad users. */
 @media (pointer: coarse){
@@ -1964,7 +1969,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible{outline:2px so
 
 
 
-/* Background analysis pill (0.2.2) — floats bottom-right, fades in/out
+/* Background analysis pill (0.2.2) - floats bottom-right, fades in/out
  * gently, never blocks the underlying UI. Click to retry. */
 .bg-pill{
   position:fixed;bottom:18px;right:18px;z-index:var(--z-player);
@@ -2015,7 +2020,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible{outline:2px so
 .nav-btn[aria-current="page"] .nav-ico{opacity:1;color:var(--white)}
 
 /* Quieter empty-state placeholder under cards. Used for "no items yet"
- * messages — gentle prompt instead of just centered text. */
+ * messages - gentle prompt instead of just centered text. */
 .empty-state{
   text-align:center;padding:48px 24px;color:var(--hint);
   display:flex;flex-direction:column;align-items:center;gap:10px;
@@ -2033,7 +2038,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible{outline:2px so
   .tab-pane{transition:none}
 }
 
-/* Buttons with both an icon and text — slightly tighter gap reads
+/* Buttons with both an icon and text - slightly tighter gap reads
  * cleaner. Compositing-cheap. */
 .btn svg + *, .btn * + svg{gap:6px}
 
@@ -2098,7 +2103,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible{outline:2px so
 .btn:active:not(:disabled){transform:translateY(0) scale(.97)}
 
 /* Ripple-ish glow on big primary buttons when pressed (purely composite,
- * no DOM injection — uses the existing button's background as the canvas) */
+ * no DOM injection - uses the existing button's background as the canvas) */
 .btn.pri{position:relative;overflow:hidden}
 .btn.pri::before{
   content:""; position:absolute; inset:0;
@@ -2150,7 +2155,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible{outline:2px so
 .sp-fv-play:hover{transform:scale(1.08); box-shadow:0 4px 12px -4px rgba(255,255,255,.16)}
 .sp-fv-play:active{transform:scale(.94)}
 
-/* Heart fav — pop on engage (CSS only, JS just toggles .on) */
+/* Heart fav - pop on engage (CSS only, JS just toggles .on) */
 #sp-fv-mini-fav svg{transition:transform 220ms var(--ease-spring), color 180ms var(--ease-out-cubic)}
 #sp-fv-mini-fav.on svg{animation:heart-pop 380ms var(--ease-spring)}
 @keyframes heart-pop {
@@ -2160,7 +2165,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible{outline:2px so
   100% {transform:scale(1)}
 }
 
-/* Seek bar — fade buffered fill in, thumb grows on hover */
+/* Seek bar - fade buffered fill in, thumb grows on hover */
 .sp-fv-mini-seek-fill{transition:width 100ms linear}  /* keep it tight - playback */
 .sp-fv-mini-seek-thumb{transition:transform 140ms var(--ease-out-quad), opacity 140ms var(--ease-out-quad)}
 .sp-fv-mini-seek:hover .sp-fv-mini-seek-thumb{transform:scale(1.4)}
@@ -2350,7 +2355,7 @@ body{
   background-image: linear-gradient(180deg, rgba(255,255,255,.06) 0%, transparent 40%);
 }
 
-/* Hist-row gets a faint inset bottom line that brightens on hover —
+/* Hist-row gets a faint inset bottom line that brightens on hover -
  * cleaner separation than a flat divider */
 .hist-row {
   box-shadow: inset 0 -1px 0 0 rgba(255,255,255,.018);
@@ -2365,7 +2370,7 @@ body{
     0 1px 0 0 rgba(255,255,255,.04) inset;
 }
 
-/* Sidebar gets a faint right-edge that fades out at top/bottom — gives
+/* Sidebar gets a faint right-edge that fades out at top/bottom - gives
  * the rail a sense of depth without a hard separator. */
 #sidebar {
   background-image: linear-gradient(180deg,
@@ -2383,13 +2388,13 @@ body{
     0 -8px 24px -8px rgba(0,0,0,.4);
 }
 
-/* Inputs get a soft top-inset shadow when not focused — gives them
+/* Inputs get a soft top-inset shadow when not focused - gives them
  * subtle depth, then brightens on focus */
 input:not(:focus), textarea:not(:focus), select:not(:focus) {
   box-shadow: inset 0 1px 0 0 rgba(0,0,0,.18);
 }
 
-/* Scrollbar — already styled in 0.2.2 but tighten the timing */
+/* Scrollbar - already styled in 0.2.2 but tighten the timing */
 ::-webkit-scrollbar-thumb {
   transition: background 240ms var(--ease-out-cubic);
 }
@@ -2400,7 +2405,7 @@ input:not(:focus), textarea:not(:focus), select:not(:focus) {
  * v0.2.8 - How-to modal styling + thumb fallback + leave anim
  * ═══════════════════════════════════════════════════════════════════ */
 
-/* Extension how-to modal — clear numbered steps with HK branding */
+/* Extension how-to modal - clear numbered steps with HK branding */
 .ext-howto-card { text-align:left; }
 .ext-howto-list {
   list-style:none; padding:0; margin:0;
@@ -2462,7 +2467,7 @@ input:not(:focus), textarea:not(:focus), select:not(:focus) {
   line-height:1.5;
 }
 
-/* Thumbnail fallback — discreet HK monogram tile */
+/* Thumbnail fallback - discreet HK monogram tile */
 .hist-thumb.thumb-fallback,
 .sp-fv-row-thumb.thumb-fallback,
 img.thumb-fallback {
@@ -2471,7 +2476,7 @@ img.thumb-fallback {
   filter:saturate(.4);
 }
 
-/* Row leave animation — used by the reconciler when a row vanishes */
+/* Row leave animation - used by the reconciler when a row vanishes */
 .hist-row-leaving {
   animation: hist-row-out 180ms var(--ease-out-cubic) forwards;
   pointer-events:none;
@@ -2549,7 +2554,7 @@ img.thumb-fallback {
  * Collapsible sections replace the flat 22-row scroll. Persisted state
  * in localStorage; smooth grid-template-rows transition for open/close
  * (works on auto-height content without measuring). Only opacity +
- * grid-template-rows animate — no reflow churn. */
+ * grid-template-rows animate - no reflow churn. */
 .settings-section {
   background:var(--bg2);
   border:1px solid var(--border);
@@ -2650,7 +2655,7 @@ img.thumb-fallback {
 .settings-section.collapsed .settings-section-body-inner {
   opacity:0;
 }
-/* Collapsed sections shrink visually to just their header — no
+/* Collapsed sections shrink visually to just their header - no
  * dangling padding, no residual margin. */
 .settings-section.collapsed { background:var(--bg2); }
 
@@ -2796,7 +2801,7 @@ h1, h2, h3,
   filter: brightness(.92);
 }
 
-/* Modal cards: warmer dark background gradient — depth without color */
+/* Modal cards: warmer dark background gradient - depth without color */
 .setup-card {
   background:
     linear-gradient(180deg, rgba(255,255,255,.018) 0%, transparent 50%),
@@ -2943,6 +2948,80 @@ button:focus:not(:focus-visible){outline:none}
 
 /* ── v0.4.3 boot splash ─────────────────────────────────────────── */
 
+
+
+/* Artwork in the untagged list. Titles there are near-identical - a wall
+   of "[FREE] ... Type Beat" - so the thumbnail is what tells them apart. */
+.sp-ut-thumb{
+  width:44px; height:32px; border-radius:4px; object-fit:cover;
+  flex-shrink:0; background:var(--bg3);
+}
+.sp-ut-thumb.fallback{
+  display:flex; align-items:center; justify-content:center;
+  color:var(--hint); border:1px solid var(--border);
+}
+.sp-ut-textcol{ min-width:0 }
+
+
+/* Duplicate finder toolbar: acts on every group at once. */
+.dup-toolbar{
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  margin-bottom:14px; padding:10px 12px;
+  background:var(--bg2); border:1px solid var(--border2); border-radius:6px;
+  position:sticky; top:0; z-index:1;
+}
+.dup-toolbar-actions{ display:flex; gap:8px }
+.dup-toolbar-right{ display:flex; align-items:center; gap:10px }
+.dup-count{ font-size:11.5px; color:var(--muted); font-variant-numeric:tabular-nums }
+#dup-delete-all:disabled{ opacity:.45; cursor:not-allowed }
+
+
+/* ── Slow + Reverb ─────────────────────────────────────────────────
+   Controls are grouped so the two that define the sound - speed and
+   reverb - sit first and largest. Everything previews live, so the
+   page has no render state to design around until you save. */
+.sv-track-name{ font-size:12.5px; color:var(--muted); margin-left:4px; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0 }
+.sv-disabled{ opacity:.4; pointer-events:none }
+.sv-transport{ display:flex; align-items:center; gap:14px; margin-top:6px }
+.sv-seek{ flex:1; height:8px; background:var(--bg3); border-radius:4px; cursor:pointer; position:relative; overflow:hidden }
+.sv-seek-fill{ height:100%; width:0%; background:var(--accent); border-radius:4px }
+.sv-time{ font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; min-width:88px; text-align:right }
+.sv-presets{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:4px }
+.sv-preset{ padding:8px 14px; background:var(--bg2); border:1px solid var(--border2);
+  border-radius:20px; color:var(--muted); font-size:12px; cursor:pointer; font-family:inherit }
+.sv-preset:hover{ color:var(--off); border-color:var(--accent-dim) }
+.sv-preset.on{ background:var(--off); color:#080808; border-color:var(--off); font-weight:600 }
+.sv-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:18px; margin-top:18px }
+.sv-ctl-head{ display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px }
+.sv-ctl-head label{ font-size:12px; color:var(--off); letter-spacing:.02em }
+.sv-val{ font-size:12px; color:var(--accent); font-variant-numeric:tabular-nums }
+.sv-ctl input[type=range]{ width:100%; accent-color:var(--accent) }
+.sv-hint{ font-size:11px; color:var(--hint); margin-top:5px; line-height:1.4 }
+.sv-check{ display:flex; align-items:center; gap:9px; margin-top:18px; font-size:12.5px;
+  color:var(--muted); cursor:pointer }
+.sv-check input{ accent-color:var(--accent) }
+.sv-actions{ display:flex; gap:10px; margin-top:20px }
+.sv-export-status{ margin-top:10px; font-size:12px; color:var(--muted); min-height:16px; white-space:pre-line; line-height:1.5 }
+.sv-export-status.ok{ color:var(--accent) }
+.sv-export-status.err{ color:#ff8a8a }
+
+.sv-formats{ display:flex; flex-wrap:wrap; gap:8px }
+.sv-fmt{ display:flex; flex-direction:column; align-items:flex-start; gap:2px;
+  padding:9px 14px; background:var(--bg2); border:1px solid var(--border2);
+  border-radius:6px; color:var(--muted); font-size:12px; cursor:pointer;
+  font-family:inherit; line-height:1.25 }
+.sv-fmt span{ font-size:10px; color:var(--hint) }
+.sv-fmt:hover{ color:var(--off); border-color:var(--accent-dim) }
+.sv-fmt.on{ background:var(--off); color:#080808; border-color:var(--off); font-weight:600 }
+.sv-fmt.on span{ color:rgba(8,8,8,.62) }
+.sv-report{ margin-top:8px; font-size:11.5px; color:var(--hint); font-variant-numeric:tabular-nums }
+.sv-pick-row{ display:flex; justify-content:space-between; align-items:center; gap:12px; width:100%;
+  padding:10px 12px; background:transparent; border:0; border-bottom:1px solid var(--border);
+  color:var(--off); font-size:12.5px; text-align:left; cursor:pointer; font-family:inherit }
+.sv-pick-row:hover{ background:var(--bg2) }
+.sv-pick-title{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.sv-pick-meta{ font-size:11px; color:var(--hint); flex-shrink:0; font-variant-numeric:tabular-nums }
 
 /* ── Settings search ───────────────────────────────────────────────
    Ten sections is enough that scanning stops being viable, so the
@@ -3183,6 +3262,10 @@ button:focus:not(:focus-visible){outline:none}
     <button class="nav-btn" data-tab="transcribe" onclick="showTab(this)">
       <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>
       Transcribe
+    </button>
+    <button class="nav-btn" data-tab="slowverb" onclick="showTab(this)">
+      <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h3l3-7 4 14 3-9 2 2h3"/></svg>
+      Slow + Reverb
     </button>
     <div class="nav-sec" style="margin-top:4px">Artist Tools</div>
     <button class="nav-btn" data-tab="tools" onclick="showTab(this)">
@@ -3731,6 +3814,87 @@ button:focus:not(:focus-visible){outline:none}
     </div>
 
     <!-- TOOLS -->
+    <div class="tab-pane" id="tab-slowverb">
+      <div class="ph"><div class="ph-title">Slow + Reverb</div><div class="ph-sub">Slow it down, speed it up, drown it in reverb - hear every change as you make it</div></div>
+
+      <div class="card">
+        <div class="card-lbl">Track</div>
+        <div class="row mb" style="gap:8px;align-items:center">
+          <button class="btn sm" onclick="svPickFromHistory()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 12h18M3 6h18M3 18h12"/></svg> <span id="sv-pick-lbl">Choose from library</span></button>
+          <button class="btn sm" onclick="document.getElementById('sv-file').click()"><span id="sv-file-lbl">Open a file</span></button>
+          <input type="file" id="sv-file" accept="audio/*,.wav,.mp3,.flac,.m4a,.aac,.ogg" style="display:none" onchange="svLoadFile(this.files[0])"/>
+          <div id="sv-track-name" class="sv-track-name">Nothing loaded</div>
+        </div>
+
+        <div id="sv-body" class="sv-disabled">
+          <div class="sv-transport">
+            <button class="btn pri" id="sv-play" onclick="svTogglePlay()" disabled>
+              <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="7,5 7,19 19,12"/></svg>
+              <span id="sv-play-lbl">Play</span>
+            </button>
+            <div class="sv-seek" id="sv-seek" onclick="svSeekClick(event)">
+              <div class="sv-seek-fill" id="sv-seek-fill"></div>
+            </div>
+            <div class="sv-time"><span id="sv-cur">0:00</span> / <span id="sv-dur">0:00</span></div>
+          </div>
+
+          <div class="card-lbl" style="margin-top:16px">Presets</div>
+          <div class="sv-presets" id="sv-presets"></div>
+
+          <div class="sv-grid">
+            <div class="sv-ctl">
+              <div class="sv-ctl-head"><label for="sv-speed">Speed</label><span class="sv-val" id="sv-speed-val">100%</span></div>
+              <input type="range" id="sv-speed" min="50" max="150" step="1" value="100" oninput="svSet('speed', this.value)"/>
+              <div class="sv-hint" id="sv-speed-hint">Slower drops the pitch too, the way a tape does</div>
+            </div>
+
+            <div class="sv-ctl">
+              <div class="sv-ctl-head"><label for="sv-reverb">Reverb</label><span class="sv-val" id="sv-reverb-val">0%</span></div>
+              <input type="range" id="sv-reverb" min="0" max="100" step="1" value="0" oninput="svSet('reverb', this.value)"/>
+              <div class="sv-hint">How much of the room you hear</div>
+            </div>
+
+            <div class="sv-ctl">
+              <div class="sv-ctl-head"><label for="sv-room">Room size</label><span class="sv-val" id="sv-room-val">Medium</span></div>
+              <input type="range" id="sv-room" min="1" max="5" step="1" value="3" oninput="svSet('room', this.value)"/>
+              <div class="sv-hint">Small booth through to a cathedral</div>
+            </div>
+
+            <div class="sv-ctl">
+              <div class="sv-ctl-head"><label for="sv-bass">Bass</label><span class="sv-val" id="sv-bass-val">0 dB</span></div>
+              <input type="range" id="sv-bass" min="-6" max="12" step="1" value="0" oninput="svSet('bass', this.value)"/>
+              <div class="sv-hint">Lifts everything under 120 Hz</div>
+            </div>
+
+            <div class="sv-ctl">
+              <div class="sv-ctl-head"><label for="sv-volume">Volume</label><span class="sv-val" id="sv-volume-val">85%</span></div>
+              <input type="range" id="sv-volume" min="0" max="100" step="1" value="85" oninput="svSet('volume', this.value)"/>
+              <div class="sv-hint" id="sv-volume-hint">Listening level only - the saved copy keeps the track's own level</div>
+            </div>
+          </div>
+
+          <label class="sv-check"><input type="checkbox" id="sv-keep-pitch" onchange="svSet('keepPitch', this.checked)"/> <span id="sv-keep-pitch-lbl">Keep the original pitch when changing speed</span></label>
+
+          <div class="card-lbl" style="margin-top:20px">Export format</div>
+          <div class="sv-formats" id="sv-formats">
+            <button class="sv-fmt on" data-fmt="wav24" onclick="svSetFormat('wav24')">WAV 24-bit<span>master</span></button>
+            <button class="sv-fmt" data-fmt="wav16" onclick="svSetFormat('wav16')">WAV 16-bit<span>CD / streaming</span></button>
+            <button class="sv-fmt" data-fmt="flac24" onclick="svSetFormat('flac24')">FLAC 24-bit<span>lossless, smaller</span></button>
+            <button class="sv-fmt" data-fmt="mp3" onclick="svSetFormat('mp3')">MP3 320<span>reference copy</span></button>
+          </div>
+
+          <div class="sv-actions">
+            <button class="btn sm" onclick="svReset()"><span id="sv-reset-lbl">Reset</span></button>
+            <button class="btn sm pri" id="sv-export" onclick="svExport()">
+              <svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <span id="sv-export-lbl">Save a copy</span>
+            </button>
+          </div>
+          <div class="sv-export-status" id="sv-export-status"></div>
+        </div>
+      </div>
+    </div>
+
     <div class="tab-pane" id="tab-tools">
       <div class="ph"><div class="ph-title">Tools</div><div class="ph-sub">Metronome, tap BPM, and scale reference</div></div>
       <div class="tgrid">
