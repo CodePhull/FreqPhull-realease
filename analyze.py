@@ -1426,6 +1426,18 @@ if __name__=='__main__':
     if len(args)<1: print(json.dumps({'error':'Usage: analyze.py [--stem] <wav_path>'}));sys.exit(1)
     path=args[0]
     if not os.path.exists(path): print(json.dumps({'error':f'File not found: {path}'}));sys.exit(1)
+    # An empty or stub-sized file throws deep inside the WAV reader with a
+    # blank message, which reaches crash reporting as "exit 1" and nothing
+    # else. Name the condition here instead.
+    try:
+        _sz = os.path.getsize(path)
+    except OSError as e:
+        print(json.dumps({'error': f'Cannot read file: {e}'})); sys.exit(1)
+    if _sz < 1024:
+        print(json.dumps({
+            'error': f'Audio file is empty or truncated ({_sz} bytes)',
+            'hint': 'The download was probably interrupted. Re-download this track.',
+        })); sys.exit(1)
     try:
         result = analyze_stem(path) if stem_mode else analyze(path, force_sections=force_sections)
         print(json.dumps(result))
@@ -1433,4 +1445,7 @@ if __name__=='__main__':
         print(json.dumps({'error':f'Missing library: {e}','hint':'Run AI Transcribe Setup.exe'}));sys.exit(2)
     except Exception as e:
         import traceback
-        print(json.dumps({'error':str(e),'traceback':traceback.format_exc()}));sys.exit(1)
+        msg = str(e) or f'{type(e).__name__} (no message)'
+        if 'RIFF' in msg:
+            msg = 'Not a readable WAV file (header missing or corrupt)'
+        print(json.dumps({'error': msg, 'traceback': traceback.format_exc()})); sys.exit(1)

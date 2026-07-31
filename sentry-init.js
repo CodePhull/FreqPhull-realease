@@ -189,6 +189,54 @@ function _requireSentry(processKind) {
 //   category:    short tag like 'bg-analyze.python-crash'
 //   error:       Error object OR a string
 //   context:     optional object of extra fields (will be scrubbed)
+// ── Breadcrumbs ─────────────────────────────────────────────────────
+// An isolated snapshot tells you what broke; a trail tells you why. Every
+// server log line becomes a breadcrumb, so an event arrives with the
+// sequence that led to it - which request ran, which file, which engine
+// decision - instead of just the moment of failure. Sentry keeps the most
+// recent hundred and attaches them automatically.
+function addTrail(processKind, message, data) {
+  try {
+    const Sentry = _requireSentry(processKind);
+    if (!Sentry || !Sentry.addBreadcrumb) return;
+    Sentry.addBreadcrumb({
+      category: 'app',
+      level: 'info',
+      message: String(message).slice(0, 300),
+      data: data && typeof data === 'object' ? data : undefined,
+    });
+  } catch {}
+}
+
+// A stable, anonymous id per installation. Without it there is no way to
+// tell one machine reporting four hundred times from four hundred
+// machines reporting once - which is the difference between a nuisance
+// and an emergency. It is a random identifier written beside the app's
+// own data: no name, no account, nothing tied to a person.
+let _installId = null;
+function getInstallId(dataDir) {
+  if (_installId) return _installId;
+  try {
+    const fs = require('fs'), path = require('path'), crypto = require('crypto');
+    const dir = dataDir || path.join(require('os').homedir(), 'AppData', 'Roaming', 'freqphull');
+    const file = path.join(dir, 'install-id');
+    if (fs.existsSync(file)) {
+      _installId = String(fs.readFileSync(file, 'utf8')).trim().slice(0, 40);
+    }
+    if (!_installId) {
+      _installId = crypto.randomBytes(8).toString('hex');
+      try { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(file, _installId); } catch {}
+    }
+  } catch { _installId = 'unknown'; }
+  return _installId;
+}
+
+// Anything that knows about live app state registers here, so every
+// event carries the state at the moment it happened rather than a
+// guess reconstructed later.
+let _stateProvider = null;
+function setStateProvider(fn) { _stateProvider = typeof fn === 'function' ? fn : null; }
+
 function reportSoftError(processKind, category, error, context) {
   if (!SENTRY_DSN_ENV) return;
   const Sentry = _requireSentry(processKind);
@@ -208,7 +256,38 @@ function reportSoftError(processKind, category, error, context) {
       scope.setTag('category', category);
       // Group by category, not by message - "exit 1" vs "exit 9009"
       // shouldn't fragment the dashboard into single-event issues.
-      scope.setFingerprint([category]);
+      // Group by category so five exit codes make one issue rather than
+      // five. A payload can add `_group` when the category is too broad
+      // to be useful on its own - distinct Python exceptions deserve
+      // separate issues even though they share a category.
+      const group = context && context._group ? String(context._group).slice(0, 80) : null;
+      scope.setFingerprint(group ? [category, group] : [category]);
+
+      // Tags are what Sentry can filter and aggregate on, so the
+      // dimensions worth asking "is this only on X?" about live here
+      // rather than buried in the payload.
+      try {
+        const os = require('os');
+        scope.setTag('os_release', os.release());
+        scope.setTag('arch', os.arch());
+        scope.setTag('cores', String(os.cpus().length));
+        scope.setTag('ram_gb', String(Math.round(os.totalmem() / 1073741824)));
+        scope.setTag('locale', process.env.LANG || process.env.LC_ALL ||
+          (Intl.DateTimeFormat().resolvedOptions().locale || 'unknown'));
+      } catch {}
+      try { scope.setUser({ id: getInstallId() }); } catch {}
+
+      // Live application state, supplied by whichever process knows it.
+      try {
+        if (_stateProvider) {
+          const st = _stateProvider() || {};
+          scope.setContext('app_state', st);
+          // The few that are worth filtering on get promoted to tags.
+          for (const key of ['engine_source', 'python_version', 'lite', 'packaged', 'engines_ok']) {
+            if (st[key] !== undefined && st[key] !== null) scope.setTag(key, String(st[key]));
+          }
+        }
+      } catch {}
       // Machine context on every event. Cheap to gather, and it's the
       // first thing you want when triaging a remote failure.
       try {
@@ -234,4 +313,8 @@ function reportSoftError(processKind, category, error, context) {
   } catch { /* never let reporting take the app down */ }
 }
 
-module.exports = { init, scrubString, scrubObject, reportSoftError };
+module.exports = { init, scrubString, scrubObject, reportSoftError,
+  addTrail,
+  getInstallId,
+  setStateProvider,
+};

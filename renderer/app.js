@@ -80,7 +80,60 @@ let autoAnalyze = getSetting('autoAnalyze', true);
 // ── History scroll preservation ──────────────────────────────────────────────
 let historyScrollTop = 0;
 
+// ── Crash reporting for the window itself ──────────────────────────
+// The renderer is a browser context with no Sentry of its own, so until
+// now an exception in the UI vanished silently: no log, no report, just
+// a page that stopped working. These handlers ship it to the backend,
+// which reports it with the same detail as a server fault.
+const _uiTrail = [];
+function _trail(line) {
+  try {
+    _uiTrail.push(new Date().toISOString().slice(11, 19) + ' ' + String(line).slice(0, 180));
+    if (_uiTrail.length > 60) _uiTrail.shift();
+  } catch {}
+}
+
+let _uiErrorsSent = 0;
+function _reportUiError(kind, message, extra) {
+  // A crash inside a render loop can fire every frame; a handful is
+  // enough to diagnose and the cap protects both quota and the app.
+  if (_uiErrorsSent >= 5) return;
+  _uiErrorsSent++;
+  try {
+    const activeTab = document.querySelector('.tabbtn.on');
+    fetch(API + '/client-error', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(Object.assign({
+        kind, message: String(message || '').slice(0, 300),
+        tab: activeTab ? (activeTab.dataset.tab || '') : '',
+        ua: navigator.userAgent,
+        trail: _uiTrail.slice(),
+      }, extra || {})),
+    }).catch(() => {});
+  } catch {}
+}
+
+window.addEventListener('error', (e) => {
+  // Failed images and other resource errors surface here too; they are
+  // handled elsewhere and would drown the real faults.
+  if (e && e.target && e.target !== window && e.target.tagName) return;
+  _reportUiError('crash', (e && e.message) || 'unknown error', {
+    stack: e && e.error && e.error.stack ? String(e.error.stack) : null,
+    source: e && e.filename ? String(e.filename).split(/[\\/]/).pop() : null,
+    line: e && e.lineno, column: e && e.colno,
+  });
+});
+
+window.addEventListener('unhandledrejection', (e) => {
+  const r = e && e.reason;
+  _reportUiError('rejection', (r && r.message) || String(r || 'unknown rejection'), {
+    stack: r && r.stack ? String(r.stack) : null,
+  });
+});
+
 function diagLog(msg, cls) {
+  try { _trail(msg); } catch {}
   const d = document.getElementById('diag');
   if (!d) return;
   const el = document.createElement('div');
@@ -112,7 +165,7 @@ function setStatus(msg) {
 // reads as a glitch. Hold it for at least one bar (2.6s at 100 BPM),
 // then dissolve. Everything behind it is already interactive; the floor
 // only governs the overlay.
-const BOOT_SPLASH_FLOOR_MS = 2600;
+const BOOT_SPLASH_FLOOR_MS = 3200;
 const _bootSplashShownAt = Date.now();
 let _bootSplashDismissed = false;
 
@@ -5212,6 +5265,9 @@ function openCreateSmartFolderDialog() {
   modal.id = 'smart-folder-modal';
   modal.className = 'setup-modal';
   modal.style.display = 'flex';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-label', t('smartTitle'));
   const KEYS = ['', 'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   modal.innerHTML = `
     <div class="setup-card" style="max-width:420px;padding:24px">
@@ -5241,6 +5297,7 @@ function openCreateSmartFolderDialog() {
       </div>
     </div>`;
   document.body.appendChild(modal);
+  trapFocus(modal);
   setTimeout(() => { const el = document.getElementById('smart-name'); if (el) el.focus(); }, 50);
 }
 
@@ -5291,6 +5348,37 @@ async function fixIdTitles(btn) {
   }
 }
 
+// Keeps keyboard focus inside an open dialogue and hands it back to
+// whatever opened it. Without this, Tab walks straight out of the
+// overlay into the page behind, which is invisible to a sighted user
+// and completely disorienting with a screen reader.
+function trapFocus(modal) {
+  if (!modal) return;
+  const opener = document.activeElement;
+  const focusables = () => Array.from(modal.querySelectorAll(
+    'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])'
+  )).filter(el => el.offsetParent !== null);
+  const first = focusables()[0];
+  if (first) setTimeout(() => { try { first.focus(); } catch {} }, 30);
+  const onKey = (e) => {
+    if (e.key !== 'Tab') return;
+    const items = focusables();
+    if (!items.length) return;
+    const lo = items[0], hi = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === lo) { hi.focus(); e.preventDefault(); }
+    else if (!e.shiftKey && document.activeElement === hi) { lo.focus(); e.preventDefault(); }
+  };
+  modal.addEventListener('keydown', onKey);
+  // Give focus back when the dialogue leaves the DOM.
+  const obs = new MutationObserver(() => {
+    if (!document.body.contains(modal)) {
+      obs.disconnect();
+      try { if (opener && opener.focus) opener.focus(); } catch {}
+    }
+  });
+  obs.observe(document.body, { childList: true, subtree: true });
+}
+
 async function openLibraryDoctor() {
   if (!backendOnline) { showAppNotification('Backend offline', 'err'); return; }
   let modal = document.getElementById('doctor-modal');
@@ -5299,6 +5387,9 @@ async function openLibraryDoctor() {
   modal.id = 'doctor-modal';
   modal.className = 'setup-modal';
   modal.style.display = 'flex';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-label', t('doctorTitle'));
   modal.innerHTML = `
     <div class="setup-card" style="max-width:640px;max-height:80vh;display:flex;flex-direction:column;padding:24px">
       <div style="font-size:16px;font-weight:700;margin-bottom:12px">${t('doctorTitle')}</div>
@@ -5308,11 +5399,38 @@ async function openLibraryDoctor() {
       </div>
     </div>`;
   document.body.appendChild(modal);
+  trapFocus(modal);
   const body = modal.querySelector('#doctor-body');
   try {
-    const r = await fetch(API + '/history/doctor');
+    const [r, stuckR] = await Promise.all([
+      fetch(API + '/history/doctor'),
+      fetch(API + '/history/analysis-stuck').catch(() => null),
+    ]);
     const j = await r.json();
+    let stuckHTML = '';
+    try {
+      const sj = stuckR ? await stuckR.json() : null;
+      if (sj && sj.tracks && sj.tracks.length) {
+        stuckHTML = `
+          <div class="doctor-group" style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:14px">
+            <div style="font-size:11px;color:var(--hint);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">${t('doctorStuckTitle')}</div>
+            <div style="font-size:12px;color:var(--muted);margin-bottom:10px">${t('doctorStuckDesc').replace('{n}', sj.tracks.length)}</div>
+            ${sj.tracks.map(tr => `
+              <div class="row" id="stuck-row-${tr.id}" style="align-items:center;gap:10px;padding:6px 0;border-top:1px solid var(--border)">
+                <div style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(tr.title || '(untitled)')}</div>
+                <button class="btn xs" onclick="doctorRetryAnalysis(${tr.id}, this)">${t('doctorRetry')}</button>
+              </div>`).join('')}
+          </div>`;
+      }
+    } catch {}
+    if (stuckHTML) body.innerHTML = stuckHTML;
     if (!j.groups || !j.groups.length) {
+      if (stuckHTML && !j.scanned) return;  // stuck list already shown, nothing else to say
+      if (stuckHTML) {
+        body.insertAdjacentHTML('beforeend',
+          `<div style="padding:20px;text-align:center;color:var(--hint)">${t('doctorClean').replace('{n}', j.scanned || 0)}</div>`);
+        return;
+      }
       if (!j.scanned) {
         // Nothing had a fingerprint - the scan cannot see anything yet.
         body.innerHTML = `
@@ -5325,7 +5443,7 @@ async function openLibraryDoctor() {
       body.innerHTML = `<div style="padding:20px;text-align:center;color:var(--hint)">${t('doctorClean').replace('{n}', j.scanned)}</div>`;
       return;
     }
-    body.innerHTML = j.groups.map(g => `
+    body.insertAdjacentHTML('beforeend', j.groups.map(g => `
       <div class="doctor-group" style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px">
         <div style="font-size:11px;color:var(--hint);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">${t('doctorOriginal')}</div>
         <div style="font-weight:600;margin-bottom:10px">${escapeHtml(g.original.title || '(untitled)')}</div>
@@ -5340,7 +5458,7 @@ async function openLibraryDoctor() {
               ? `<button class="btn xs pri" onclick="doctorRedownload(${sp.id}, this)">${t('doctorRedl')}</button>`
               : `<span style="font-size:11px;color:var(--muted)">${t('doctorNoUrl')}</span>`}
           </div>`).join('')}
-      </div>`).join('');
+      </div>`).join(''));
   } catch (e) {
     body.innerHTML = `<div style="padding:20px;color:#ff8a8a">${escapeHtml(e.message)}</div>`;
   }
@@ -5349,6 +5467,24 @@ async function openLibraryDoctor() {
 // Re-download a suspect row's real audio using its own youtube_url,
 // into the same folder its (corrupt) file lives in. On success, the
 // corrupt row is removed - the fresh download created its own row.
+// Clears a track's permanent analysis give-up flag and nudges the
+// worker to try it again - for after the user fixes engines, replaces a
+// bad file, or just wants one more shot.
+async function doctorRetryAnalysis(id, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = t('doctorRetrying'); }
+  try {
+    const r = await fetch(API + '/history/' + id + '/retry-analysis', { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error(j.error || 'failed');
+    const row = document.getElementById('stuck-row-' + id);
+    if (row) row.remove();
+    showAppNotification(t('doctorRetryQueued'), 'done', null, 4000);
+  } catch (e) {
+    showAppNotification(t('doctorRetryFailed') + ': ' + e.message, 'err');
+    if (btn) { btn.disabled = false; btn.textContent = t('doctorRetry'); }
+  }
+}
+
 async function doctorRedownload(suspectId, btn) {
   const row = (histData || []).find(h => h.id === suspectId);
   let info = row;
@@ -8067,7 +8203,7 @@ function renderStemRow(s, i, analysisMap) {
         ${chipsHTML}
       </div>
       <div class="stem-mixer-controls">
-        <button class="stem-tog stem-tog-mute" id="stem-mute-${i}" onclick="toggleMute(${i})" title="${t('sepMute')}">M</button>
+        <button class="stem-tog stem-tog-mute" id="stem-mute-${i}" onclick="toggleStemMute(${i})" title="${t('sepMute')}">M</button>
         <button class="stem-tog stem-tog-solo" id="stem-solo-${i}" onclick="toggleSolo(${i})" title="${t('sepSolo')}">S</button>
         <div class="stem-knob-group" title="${t('sepVolume')}">
           <input type="range" class="stem-vol" id="stem-vol-${i}" min="0" max="1.2" step="0.01" value="1"
@@ -8524,7 +8660,11 @@ function setMasterPlayIcon(isPlaying) {
 }
 
 // ---------- Per-stem controls ----------
-function toggleMute(i) {
+// Renamed from toggleMute: it collided with the player's own mute, and
+// because function declarations hoist, this one silently won. Clicking
+// mute in the player called this with no index, found nothing in
+// sepAudioMap and returned - so the button did nothing at all.
+function toggleStemMute(i) {
   const e = sepAudioMap[i];
   if (!e) return;
   e.muted = !e.muted;
@@ -9975,6 +10115,12 @@ const T = {
     doctorName:'Library doctor',
     doctorDesc:'Scan for corrupted downloads - tracks whose file contains a DIFFERENT track\'s audio (a bug fixed in 0.4.3 could cause this in bulk grabs). Offers one-click re-download of the real audio.',
     doctorBtn:'Scan library',
+    doctorStuckTitle:'Tracks the analyzer gave up on',
+    doctorStuckDesc:'{n} track(s) failed analysis 3 times and will not be retried automatically. This is usually a corrupt or unusual file. Fix the file or reinstall engines, then retry below.',
+    doctorRetry:'Retry',
+    doctorRetrying:'Retrying...',
+    doctorRetryQueued:'Queued for another analysis attempt',
+    doctorRetryFailed:'Could not retry',
     doctorTitle:'Library doctor',
     doctorScanning:'Scanning your library for mismatched audio...',
     doctorClean:'All clear - {n} fingerprinted tracks scanned, no title/audio mismatches found.',
@@ -10032,6 +10178,9 @@ const T = {
     enginesReady:'Python engine ready. Background analysis resumed.',
 
     // ── Settings sections ──
+    settingsSearchPh:'Search settings',
+    settingsNoMatch:'Nothing matches that. Try a shorter word.',
+    clearWord:'Clear',
     settingsSec_general:'General',
     settingsSec_generalDesc:'Language and library location',
     settingsSec_library:'Library',
@@ -10540,6 +10689,12 @@ const T = {
     doctorName:'Docteur de bibliothèque',
     doctorDesc:'Détecte les téléchargements corrompus - pistes dont le fichier contient l\'audio d\'une AUTRE piste (bug corrigé en 0.4.3 lors des téléchargements en masse). Propose un re-téléchargement en un clic.',
     doctorBtn:'Analyser la bibliothèque',
+    doctorStuckTitle:'Pistes abandonnées par l\'analyseur',
+    doctorStuckDesc:'{n} piste(s) ont échoué à l\'analyse 3 fois et ne seront plus retentées automatiquement. C\'est généralement un fichier corrompu ou inhabituel. Réparez le fichier ou réinstallez les moteurs, puis relancez ci-dessous.',
+    doctorRetry:'Relancer',
+    doctorRetrying:'Nouvelle tentative...',
+    doctorRetryQueued:'Nouvelle tentative d\'analyse mise en file',
+    doctorRetryFailed:'Impossible de relancer',
     doctorTitle:'Docteur de bibliothèque',
     doctorScanning:'Analyse de votre bibliothèque en cours...',
     doctorClean:'Tout est bon - {n} pistes analysées, aucune discordance titre/audio trouvee.',
@@ -10598,6 +10753,9 @@ const T = {
     enginesReady:"Moteur Python prêt. L'analyse en arrière-plan a repris.",
 
     // ── Sections de parametres ──
+    settingsSearchPh:'Rechercher dans les paramètres',
+    settingsNoMatch:'Aucun résultat. Essayez un mot plus court.',
+    clearWord:'Effacer',
     settingsSec_general:'Général',
     settingsSec_generalDesc:'Langue et emplacement de la bibliothèque',
     settingsSec_library:'Bibliotheque',
@@ -11314,10 +11472,63 @@ function refreshEnginesDiagRow() {
   }).catch(() => {});
 }
 
+// Ten sections and thirty controls is a lot to scan when you only half
+// remember what a thing was called. Typing filters rows by name and
+// description, opens whichever sections still hold matches and hides
+// the rest, so the panel collapses to just the relevant part.
+function filterSettings(query) {
+  const q = String(query || '').trim().toLowerCase();
+  const clear = document.getElementById('settings-search-clear');
+  if (clear) clear.style.display = q ? 'flex' : 'none';
+  let total = 0;
+  document.querySelectorAll('.settings-section').forEach(sec => {
+    const rows = sec.querySelectorAll('.setting-row');
+    // A section title can match on its own: searching "privacy" should
+    // reveal that whole section even if no single row says the word.
+    const secTitle = (sec.querySelector('.settings-section-title')?.textContent || '').toLowerCase();
+    const sectionMatch = !!q && secTitle.includes(q);
+    let hits = 0;
+    rows.forEach(row => {
+      const name = row.querySelector('.setting-name')?.textContent || '';
+      const desc = row.querySelector('.setting-desc')?.textContent || '';
+      const match = !q || sectionMatch || (name + ' ' + desc).toLowerCase().includes(q);
+      row.style.display = match ? '' : 'none';
+      if (match) hits++;
+    });
+    sec.style.display = (!q || hits) ? '' : 'none';
+    total += hits;
+    if (q && hits) {
+      const body = sec.querySelector('.settings-section-body');
+      const header = sec.querySelector('.settings-section-header');
+      if (body) body.classList.remove('collapsed');
+      if (header) header.setAttribute('aria-expanded', 'true');
+      sec.classList.remove('collapsed');
+    }
+  });
+  const none = document.getElementById('settings-no-match');
+  if (none) none.style.display = (q && total === 0) ? 'block' : 'none';
+}
+
+function clearSettingsSearch() {
+  const el = document.getElementById('settings-search');
+  if (el) { el.value = ''; el.focus(); }
+  filterSettings('');
+}
+
 function renderSettings() {
   const el = document.getElementById('settings-content');
   if (!el) return;
   el.innerHTML = `
+    <div class="settings-search-wrap">
+      <svg class="settings-search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <input type="search" id="settings-search" autocomplete="off"
+             placeholder="${t('settingsSearchPh')}" oninput="filterSettings(this.value)"
+             aria-label="${t('settingsSearchPh')}"/>
+      <button type="button" id="settings-search-clear" onclick="clearSettingsSearch()" aria-label="${t('clearWord')}">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
+      </button>
+    </div>
+    <div class="settings-no-match" id="settings-no-match">${t('settingsNoMatch')}</div>
     <div class="settings-section" data-section="general">
       <button class="settings-section-header" type="button" onclick="toggleSettingsSection('general')" aria-expanded="true" aria-controls="settings-body-general">
         <span class="settings-section-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></svg></span>
@@ -11442,13 +11653,6 @@ function renderSettings() {
             </div>
         <div class="setting-row">
               <div class="setting-info">
-                <div class="setting-name">${t('liteName')}</div>
-                <div class="setting-desc">${t('liteDesc')}</div>
-              </div>
-              <label class="switch"><input type="checkbox" id="lite-toggle" onchange="setLiteMode(this.checked)"/><span class="slider"></span></label>
-            </div>
-        <div class="setting-row">
-              <div class="setting-info">
                 <div class="setting-name">${t('verifyName')}</div>
                 <div class="setting-desc">${t('verifyDesc')}</div>
               </div>
@@ -11516,6 +11720,14 @@ function renderSettings() {
         <div class="setting-row">
               <div class="setting-info">
                 <div class="setting-name">${t('cpuOnlyName')}</div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('liteName')}</div>
+                <div class="setting-desc">${t('liteDesc')}</div>
+              </div>
+              <label class="switch"><input type="checkbox" id="lite-toggle" onchange="setLiteMode(this.checked)"/><span class="slider"></span></label>
+            </div>
+
                 <div class="setting-desc">${t('cpuOnlyDesc')}</div>
               </div>
               <label class="switch">

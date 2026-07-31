@@ -128,4 +128,160 @@ if fails:
     print('✗ PASS 10 FAILED'); [print('   -', f) for f in fails]; sys.exit(1)
 print('✓ PASS 10  animation loops idle when paused')
 PY
-echo "════════ ALL 10 GREEN ════════"
+python3 - <<'PY'
+import re, sys
+fails = []
+si = open('sentry-init.js').read()
+sv = open('server.js').read()
+ap = open('renderer/app.js').read()
+# Crash reporting is only useful if it stays connected. Each of these
+# was a real blind spot at some point.
+for name, cond in [
+    ('breadcrumb helper exported', 'addTrail' in si and 'addBreadcrumb' in si),
+    ('server log feeds breadcrumbs', "sentry.addTrail('node'" in sv),
+    ('install id on every event', 'setUser' in si and 'getInstallId' in si),
+    ('live app state attached', 'setStateProvider' in si and 'sentry.setStateProvider' in sv),
+    ('searchable tags set', "setTag('os_release'" in si),
+    ('renderer crashes captured', 'unhandledrejection' in ap and '/client-error' in ap),
+    ('renderer endpoint exists', "app.post('/client-error'" in sv),
+    ('rate limit present', '_isRateLimited' in si),
+]:
+    if not cond: fails.append(name)
+if fails:
+    print('✗ PASS 11 FAILED'); [print('   -', f) for f in fails]; sys.exit(1)
+print('✓ PASS 11  crash reporting fully wired')
+PY
+python3 - <<'PY'
+import re, collections, sys
+fails = []
+app = open('renderer/app.js').read()
+html = open('renderer/index.html').read()
+
+# Two functions with the same name: the later silently wins. This is how
+# the player's mute button was dead - it collided with the stem mute.
+fns = re.findall(r'^(?:async\s+)?function\s+(\w+)\s*\(', app, re.M)
+dupes = {f: n for f, n in collections.Counter(fns).items() if n > 1}
+if dupes: fails.append(f'functions declared twice: {dupes}')
+
+# Duplicate element ids make getElementById return whichever came first.
+ids = re.findall(r'\sid="([^"]+)"', html)
+idup = [i for i, n in collections.Counter(ids).items() if n > 1]
+if idup: fails.append(f'duplicate element ids: {idup}')
+
+# A t() key with no definition renders as empty text.
+P = r"(\w+)\s*:\s*('(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\")"
+en = {m.group(1) for m in re.finditer(P, re.search(r'^\s*en:\s*\{(.*?)^\s*\},\s*$\s*fr:', app, re.S|re.M).group(1))}
+used = {m.group(1) for m in re.finditer(r"\bt\(\s*'([A-Za-z_]\w*)'\s*\)", app)}
+if used - en: fails.append(f't() keys with no definition: {sorted(used - en)[:6]}')
+
+# Text colours must clear WCAG AA against the lightest surface in use.
+def lin(c):
+    c = c / 255
+    return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+def lum(h):
+    h = h.lstrip('#'); r, g, b = (int(h[i:i+2], 16) for i in (0, 2, 4))
+    return 0.2126*lin(r) + 0.7152*lin(g) + 0.0722*lin(b)
+def ratio(a, b):
+    la, lb = lum(a), lum(b); hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+m = re.search(r'--hint:(#[0-9a-fA-F]{6})', html)
+if m and ratio(m.group(1), '#181818') < 4.5:
+    fails.append(f'--hint {m.group(1)} is {ratio(m.group(1), "#181818"):.2f}:1, below 4.5')
+
+# Dialogues must announce themselves and hold keyboard focus.
+for mid in ['doctor-modal', 'smart-folder-modal']:
+    seg = app[app.find("modal.id = '" + mid + "'"):][:4000]
+    if "aria-modal" not in seg: fails.append(f'{mid} is not announced as a dialogue')
+    if 'trapFocus' not in seg: fails.append(f'{mid} does not trap focus')
+
+if fails:
+    print('✗ PASS 12 FAILED'); [print('   -', f) for f in fails]; sys.exit(1)
+print('✓ PASS 12  no name collisions, no blank strings, text contrast passes AA')
+PY
+python3 - <<'PY'
+import re, sys
+html = open('renderer/index.html').read()
+fails = []
+
+# Layers are assigned from a named scale. A raw number is how a
+# confirmation ended up underneath the dialogue that raised it.
+raw = re.findall(r'z-index:\s*(\d{4,})', html)
+if raw: fails.append(f'hard-coded stacking values outside the scale: {sorted(set(raw))}')
+
+# The scale itself must stay in the right order, or naming it achieves
+# nothing.
+order = ['--z-player', '--z-dialog', '--z-menu', '--z-confirm', '--z-toast', '--z-splash']
+vals = []
+for tok in order:
+    m = re.search(re.escape(tok) + r':\s*(\d+)', html)
+    if not m: fails.append(f'{tok} is missing from the scale'); break
+    vals.append(int(m.group(1)))
+else:
+    if vals != sorted(vals):
+        fails.append(f'scale is out of order: {list(zip(order, vals))}')
+
+# The two that matter most: a confirmation must outrank every dialogue.
+if 'z-index:var(--z-confirm)' not in html: fails.append('confirmations are not on the confirm layer')
+if 'z-index:var(--z-dialog)' not in html: fails.append('dialogues are not on the dialog layer')
+
+if fails:
+    print('✗ PASS 13 FAILED'); [print('   -', f) for f in fails]; sys.exit(1)
+print('✓ PASS 13  stacking order is named and correctly ranked')
+PY
+python3 - <<'PY'
+import re, sys
+LAYOUT = {'width','height','top','left','right','bottom','margin','padding','max-height',
+          'min-height','font-size','line-height','gap','flex','border-width'}
+# Paint is acceptable in a one-shot; in an infinite loop it is a repaint
+# on every frame for as long as the element exists.
+PAINT = {'box-shadow','background-position','filter','backdrop-filter','text-shadow','border-radius'}
+ALLOW_PAINT = {'skeleton-shimmer'}   # off under lite mode, sweeps a gradient
+
+fails = []
+for path in ['renderer/index.html', 'renderer/updater/updater.html']:
+    src = open(path).read()
+    for name, body in re.findall(r'@keyframes\s+([\w-]+)\s*\{((?:[^{}]|\{[^{}]*\})*)\}', src):
+        infinite = re.search(re.escape(name) + r'[^;{}]*infinite', src) is not None
+        if not infinite:
+            continue
+        props = set(re.findall(r'([a-z-]+)\s*:', body)) - {'animation-timing-function'}
+        bad_layout = props & LAYOUT
+        bad_paint = (props & PAINT) - (PAINT if name in ALLOW_PAINT else set())
+        if bad_layout:
+            fails.append(f'{name}: animates layout every frame ({sorted(bad_layout)})')
+        if bad_paint:
+            fails.append(f'{name}: repaints every frame ({sorted(bad_paint)})')
+
+        # A loop that ends on a different value than it starts snaps on
+        # every repeat - unless it is invisible at both ends.
+        stops = dict(re.findall(r'(\d+)%\s*\{([^}]*)\}', body))
+        if '0' in stops and '100' in stops:
+            norm = lambda t: re.sub(r'\s+', '', t)
+            if norm(stops['0']) != norm(stops['100']):
+                def invisible(t):
+                    # Transparent, or moved off-stage: a shimmer that
+                    # sweeps past its container is invisible at both
+                    # ends, so restarting there is not a snap.
+                    m = re.search(r'opacity:\s*([\d.]+)', t)
+                    if m is not None and float(m.group(1)) == 0: return True
+                    for off in re.findall(r'translateX\(\s*(-?[\d.]+)%', t):
+                        if abs(float(off)) >= 100: return True
+                    for pos in re.findall(r'background-position:\s*(-?[\d.]+)%', t):
+                        if abs(float(pos)) >= 100: return True
+                    return False
+                if not (invisible(stops['0']) and invisible(stops['100'])):
+                    fails.append(f'{name}: loop restarts on a different value (visible snap)')
+
+# Motion must be defeatable two ways: the OS setting, and lite mode.
+html = open('renderer/index.html').read()
+if 'prefers-reduced-motion' not in html: fails.append('no reduced-motion support')
+if not re.search(r'@media \(prefers-reduced-motion[^{]*\{\s*\*', html):
+    fails.append('reduced-motion does not apply app-wide')
+if '.lite #boot-splash .bs-ring{display:none}' not in html:
+    fails.append('lite mode no longer trims decorative motion')
+
+if fails:
+    print('✗ PASS 14 FAILED'); [print('   -', f) for f in fails]; sys.exit(1)
+print('✓ PASS 14  animations are compositor-only, seamless and defeatable')
+PY
+echo "════════ ALL 14 GREEN ════════"

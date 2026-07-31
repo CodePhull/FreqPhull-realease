@@ -4,6 +4,208 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
+## 0.7.11 (2026-07-30)
+
+Every animation in the app audited against four questions: does it force
+layout, does it repaint, does it snap when it repeats, and can a slow
+machine escape it.
+
+**The update screen's pulse had the same seam the opening screen used to
+have.** Its loop ended on a different value than it began, so each beat
+opened with the mark snapping back to full size and the halo jumping from
+dim to bright. The fix from 0.7.6 never reached it. Both now carry the
+attack inside the loop and return exactly to where they started, with the
+same envelope easing as the opening screen.
+
+**The loading shimmer no longer runs on lite machines.** It repaints a
+gradient across every placeholder on every frame, which is real work for
+pure decoration on hardware already short of cores. Capable machines keep
+it.
+
+Audited and found clean: no infinite animation forces layout, none
+multiplies across a long list (the worst case is a handful of concurrent
+download rows), there is not a single `transition: all` anywhere in 280
+transition declarations, and reduced motion is handled app-wide rather
+than animation by animation.
+
+A release check now fails the build if an endlessly repeating animation
+touches a layout property, repaints every frame, restarts on a different
+value while visible, or if either escape hatch - the system reduced-motion
+setting or lite mode - stops working. It distinguishes a real snap from a
+loop whose endpoints are simply off-stage, which is why sweeping
+highlights still pass.
+
+## 0.7.10 (2026-07-30)
+
+**Confirmations appeared underneath the thing they were asking about.**
+Deleting duplicates put the "are you sure" prompt behind the duplicate
+list, leaving a dimmed screen with no visible way forward. The cause was
+layering assigned ad hoc over time: the list sat at 9999 and the
+confirmation at 9000, so the question was a thousand layers below the
+question it was about.
+
+Stacking is now a named scale rather than scattered numbers, ordered by
+what interrupts what: docked player, then dialogues, then context menus,
+then confirmations, then notifications, then the boot and update screens
+above everything. A confirmation outranks every dialogue by definition,
+so this particular fault cannot come back regardless of which dialogue
+raises it.
+
+Every layer in the app was moved onto the scale - the loading screen,
+update banner, tamper notice, scroll-to-top button and full-screen panes
+included. None remain on a hard-coded number.
+
+A release check fails the build on any raw stacking value, on the scale
+being out of order, or on confirmations and dialogues not sitting on
+their own layers.
+
+## 0.7.9 (2026-07-30)
+
+An audit pass. One real bug, two accessibility failures, and the checks
+to stop them recurring.
+
+**The player's mute button did nothing.** Two functions were both named
+`toggleMute` - one for the player, one for the stem separator - and
+because function declarations hoist, the later one silently won. Every
+click on the player's mute called the stem version with no index, found
+nothing, and returned. The stem one is now `toggleStemMute`.
+
+**Setting descriptions and row metadata were too faint to read.** The
+colour they use measured 3.09:1 against the lightest surface in the app,
+below the 4.5:1 that normal-size text needs, and it carries exactly the
+small explanatory text that has to be legible. It now clears the
+threshold on every surface while staying clearly quieter than the text
+above it.
+
+**Dialogues were invisible to assistive software and leaked keyboard
+focus.** The library doctor and smart folder windows had no dialogue
+role, so a screen reader had no way to know a dialogue had opened, and
+nothing stopped Tab walking straight out of the overlay into the page
+behind it. Both now announce themselves, keep focus inside while open,
+and hand it back to whatever opened them.
+
+Audited and found clean: no duplicate element ids, no translation keys
+that would render blank, no forced layout from reading geometry straight
+after writing style, and every drag handler removing the listeners it
+adds. The reduced-motion setting already covers everything added since
+it was written, because it disables motion app-wide rather than naming
+individual animations.
+
+A release check now fails the build on any of it: two functions sharing a
+name, a duplicate element id, a translation key with no definition, text
+colour below the contrast threshold, or a dialogue that does not announce
+itself and hold focus.
+
+## 0.7.8 (2026-07-30)
+
+Crash reports were accurate snapshots of a single moment. They now carry
+what is needed to diagnose from a distance.
+
+**Breadcrumbs.** Every server log line becomes a breadcrumb, so a report
+arrives with the sequence that led to it - which request ran, which file,
+what the engine decided - rather than only the instant of failure.
+Health-check polling is filtered out, since a hundred identical lines
+would push the useful trail off the end.
+
+**Crashes in the window are captured at all.** The renderer is a browser
+context with no Sentry of its own, so an exception in the interface left
+no trace anywhere: no log, no report, just a screen that stopped
+responding. Unhandled errors and rejections now post to the backend with
+the trail the interface collected, and are reported with the same detail
+as a server fault. Capped at five per session, because a fault inside a
+render loop can fire every frame.
+
+**An anonymous installation id**, so one machine reporting four hundred
+times can be told apart from four hundred machines reporting once - the
+difference between a nuisance and an emergency. A random identifier
+stored beside the app's data: no name, no account, nothing tied to a
+person.
+
+**Live application state on every event:** version, uptime, whether it is
+packaged, which Python is in use and whether it is the embedded one,
+engine health and the reason if broken, analysis queue depth, active
+downloads, library size, connected windows, last verification result.
+
+**Searchable tags:** OS build, architecture, cores, memory, locale,
+engine source, Python version, lite mode. Sentry filters and aggregates
+on tags, so "is this only on four-core machines?" or "only with the
+system Python?" is answerable from the dashboard instead of by reading
+events one at a time.
+
+A release check fails the build if any of this comes disconnected - each
+piece was a real blind spot at some point.
+
+## 0.7.7 (2026-07-29)
+
+**A bad file no longer re-reports to Sentry on every restart, forever.**
+The background analyzer's retry cap (3 attempts) lived only in memory,
+so it reset on every launch - a file that genuinely cannot be analysed
+(corrupt audio, a decode failure Python cannot recover from) crashed,
+got reported, and came right back on the very next startup, endlessly.
+The give-up is now persisted on the row (`analysis_gave_up`), so a
+stuck file stays stuck instead of retrying forever, across all three
+failure paths: a Python crash, a bad result the worker cannot parse,
+and an ffmpeg failure before Python even runs. A missing file gives up
+immediately rather than being rediscovered on every restart.
+
+Given up isn't invisible, either. Library doctor now opens with a
+"Tracks the analyzer gave up on" section listing anything permanently
+stuck, each with a Retry button - for after fixing engines, replacing a
+bad file, or just wanting one more shot. New endpoints:
+`GET /history/analysis-stuck`, `POST /history/:id/retry-analysis`.
+
+**"analyze.py exit 1" now says what went wrong.**
+
+The same blind spot the tag writer had: analyze.py reports failures as
+JSON on stdout, while the crash report only carried stderr - so every
+one of these events arrived saying "exit 1" and nothing else. Reports now
+extract the real exception, use it as the event's message, and carry the
+Python traceback alongside it. Distinct exceptions form distinct issues
+rather than merging into one, with numbers and file paths stripped from
+the grouping key so one bad file per user does not become one issue per
+user.
+
+The specific failure was reproducible: a zero-byte audio file throws
+deep inside the WAV reader with a blank message, which is why the event
+was empty. Both ends are fixed. analyze.py names the condition - empty,
+truncated, or not a readable WAV - instead of raising an unnamed error,
+and the server checks the converted audio before spawning Python at all,
+so a damaged file produces a clear message telling the user to
+re-download rather than a crash report. ffmpeg exits cleanly on some
+damaged inputs while writing nothing usable, which is how these reached
+Python in the first place.
+
+Likely origin for existing libraries: tracks left half-written by the
+duplicate-download loop fixed in 0.7.2. Those files are still on disk -
+the Library doctor and a re-download will clear them.
+
+## 0.7.6 (2026-07-29)
+
+**History scrolls properly on a large library.** Three rules were
+competing to describe how tall an off-screen row is, and the one that
+won - added in 0.4.3 - was both the least accurate and the only one
+without layout containment. It reserved 64px for rows that actually
+measure about 94px, so every row scrolled into view corrected the page
+height underneath the scrollbar. That constant correction is what made
+fast scrolling stutter on a couple of thousand tracks. The duplicate is
+gone, the estimate matches reality, and the browser now remembers each
+row's true height after its first pass.
+
+**The opening animation is smoother.** Every loop ended on a different
+value than it started, so each beat began with an instant jump: the mark
+snapping back up to full scale, the halo popping from dim to bright, the
+rings appearing at full strength on their first frame. The attack is now
+part of the animation rather than the seam between repeats, and each
+loop returns exactly to where it began. The hold is 3.2 seconds.
+
+**Settings are findable.** Lite mode was sitting under Maintenance
+rather than Performance, where anyone looking to make the app run better
+would go. More usefully, the panel now opens with a search box: typing
+filters controls by name and description, opens the sections that still
+hold matches and hides the rest, so thirty controls across ten sections
+collapse to just the part you came for. Searching a section's own name
+reveals that whole section.
+
 ## 0.7.5 (2026-07-29)
 
 **The accent is white.** Primary buttons were always white on dark, so

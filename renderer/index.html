@@ -39,13 +39,36 @@
 <style>
 :root {
   --bg:#080808;--bg2:#101010;--bg3:#181818;--bg4:#202020;--bg5:#2c2c2c;
-  --white:#ffffff;--off:#e8e8e8;--muted:#aaaaaa;--hint:#666666;
+  --white:#ffffff;--off:#e8e8e8;--muted:#aaaaaa;--hint:#858585;
+  /* --hint was #666666, which measures 3.09:1 against the lightest
+     surface the app uses - below the 4.5:1 needed for text at normal
+     size, and it carries setting descriptions and row metadata, so it
+     is exactly the small text that has to be readable. #858585 clears
+     it on every surface while staying clearly quieter than --muted. */
   /* The accent. Primary buttons were always white on dark, so a second
      coloured accent was competing with the app's own language rather
      than supporting it. One token now: change it here, everywhere
      follows. --accent-dim is for hairlines and fills that would shout
      at full white. */
   --accent:#ffffff; --accent-dim:#c8c8c8;
+
+  /* ── Stacking order ───────────────────────────────────────────────
+     Layers were assigned ad hoc, which is how a confirmation ended up
+     beneath the dialogue that raised it. The rule is simple: anything
+     that interrupts you must sit above whatever it interrupts.
+       player   docked transport, always under dialogues
+       dialog   modals and full-screen overlays
+       menu     context menus, which open from a dialogue
+       confirm  "are you sure" - above every dialogue by definition
+       toast    notifications, readable over anything
+       splash   boot and update, above the entire app          */
+  --z-player: 8000;
+  --z-dialog: 9000;
+  --z-menu:   9400;
+  --z-confirm:9600;
+  --z-toast:  9800;
+  --z-skip:   99990;
+  --z-splash: 100000;
   --border:#1e1e1e;--border2:#2a2a2a;--border3:#3a3a3a;
   --wbg:#161616;--wbg2:#1e1e1e;
   --red:#e84040;--green:#4caf50;--r:6px;--rl:10px;
@@ -118,7 +141,7 @@ body > *{position:relative;z-index:1;}
 #loading{
   position:fixed;inset:0;background:var(--bg);
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
-  z-index:9999;transition:opacity .4s ease;
+  z-index:var(--z-splash);transition:opacity .4s ease;
 }
 #loading.hide{opacity:0;pointer-events:none}
 .load-logo{width:140px;height:140px;object-fit:contain;border-radius:10px;animation:loadpulse 2s ease-in-out infinite}
@@ -724,7 +747,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
    * The titlebar's -webkit-app-region:drag works at the element bounding-
    * box level, not z-stacking, so covering it with the DAW would also
    * hide the OS-level chrome controls. Easier to just not cover it. */
-  position:fixed;top:46px;right:0;bottom:0;left:0;z-index:9500;
+  position:fixed;top:46px;right:0;bottom:0;left:0;z-index:var(--z-dialog);
   background:#080808;
   display:flex;flex-direction:column;
   transform:translateY(0);opacity:1;
@@ -1015,7 +1038,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
  * Uses transform + opacity for GPU-accelerated entrance — same easing as
  * the mini player compact transition (Material's decelerate curve). */
 .update-banner{
-  position:fixed;top:48px;right:14px;z-index:9999; /* above the toast stack (9998) — Install must never be covered */
+  position:fixed;top:48px;right:14px;z-index:calc(var(--z-toast) + 10); /* above the toast stack (9998) — Install must never be covered */
   background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);
   padding:12px 14px;display:flex;align-items:center;gap:12px;
   box-shadow:0 12px 36px rgba(0,0,0,.55);
@@ -1073,7 +1096,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .update-banner-btn:focus{outline:none;box-shadow:none}
 
 /* Mini player — single-row Spotify-bar style with thumbnail */
-.sp-fv-mini-player{position:fixed;bottom:14px;right:14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:8px 12px;display:flex;align-items:center;gap:8px;box-shadow:0 8px 32px rgba(0,0,0,.45);z-index:8000;width:760px;max-width:calc(100vw - 28px);height:56px;
+.sp-fv-mini-player{position:fixed;bottom:14px;right:14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:8px 12px;display:flex;align-items:center;gap:8px;box-shadow:0 8px 32px rgba(0,0,0,.45);z-index:var(--z-player);width:760px;max-width:calc(100vw - 28px);height:56px;
   /* Animate width changes for the compact-mode swap (Analyze tab vs others).
    * cubic-bezier(.4,0,.2,1) is Material's standard decelerate curve —
    * the same one Spotify, YouTube Music, and Apple Music use for player
@@ -1230,7 +1253,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .hist-tag-add:hover{border-color:var(--accent);color:var(--accent)}
 
 /* Modal overlay (reused for new folder + tag picker popup) */
-.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.65);z-index:9000;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.65);z-index:var(--z-confirm);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
 .modal-overlay.hidden{display:none}
 .modal-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:24px;width:min(440px,92vw);box-shadow:0 16px 60px rgba(0,0,0,.5)}
 .modal-title{font-size:16px;font-weight:600;color:var(--white);margin-bottom:16px}
@@ -1257,7 +1280,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .tag-picker-empty{text-align:center;color:var(--muted);font-size:12px;padding:16px}
 
 /* Build-tamper banner — shown at top of app if integrity check fails */
-.tamper-banner{position:sticky;top:0;left:0;right:0;z-index:9999;display:flex;align-items:center;gap:14px;padding:10px 18px;background:linear-gradient(90deg,rgba(232,64,64,0.16),rgba(232,64,64,0.08));border-bottom:1px solid rgba(232,64,64,0.45);color:#ffb4b4;font-size:13px;backdrop-filter:blur(8px)}
+.tamper-banner{position:sticky;top:0;left:0;right:0;z-index:var(--z-confirm);display:flex;align-items:center;gap:14px;padding:10px 18px;background:linear-gradient(90deg,rgba(232,64,64,0.16),rgba(232,64,64,0.08));border-bottom:1px solid rgba(232,64,64,0.45);color:#ffb4b4;font-size:13px;backdrop-filter:blur(8px)}
 .tamper-banner.soft{background:linear-gradient(90deg,rgba(255,200,80,0.10),rgba(255,200,80,0.04));border-bottom-color:rgba(255,200,80,0.35);color:#ffd99a}
 .tamper-banner.soft strong{color:#ffc864}
 .tamper-banner strong{color:#ff6464;font-weight:700;flex-shrink:0}
@@ -1568,7 +1591,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .sep-hist-meta{font-size:12px;color:var(--muted)}
 
 /* ── First-launch engines setup modal ── */
-.setup-modal{position:fixed;inset:0;background:rgba(8,8,8,0.96);backdrop-filter:blur(6px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px;-webkit-app-region:no-drag;cursor:default}
+.setup-modal{position:fixed;inset:0;background:rgba(8,8,8,0.96);backdrop-filter:blur(6px);z-index:var(--z-dialog);display:flex;align-items:center;justify-content:center;padding:24px;-webkit-app-region:no-drag;cursor:default}
 .setup-card{background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:32px 30px;width:100%;max-width:480px;box-shadow:0 20px 60px rgba(0,0,0,0.5);-webkit-app-region:no-drag}
 .setup-logo{display:flex;justify-content:center;margin-bottom:18px}
 .setup-logo img{width:56px;height:56px;border-radius:10px;opacity:0.92}
@@ -1641,7 +1664,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .bs-db{margin-left:auto;color:var(--hint);font-size:11px;font-variant-numeric:tabular-nums}
 
 .app-notif-stack{
-  position:fixed;top:62px;right:14px;z-index:9998;
+  position:fixed;top:62px;right:14px;z-index:var(--z-toast);
   display:flex;flex-direction:column;gap:10px;
   max-width:380px;width:calc(100vw - 28px);
   pointer-events:none;
@@ -1944,7 +1967,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible{outline:2px so
 /* Background analysis pill (0.2.2) — floats bottom-right, fades in/out
  * gently, never blocks the underlying UI. Click to retry. */
 .bg-pill{
-  position:fixed;bottom:18px;right:18px;z-index:7000;
+  position:fixed;bottom:18px;right:18px;z-index:var(--z-player);
   display:flex;align-items:center;gap:8px;
   padding:8px 14px;border-radius:999px;
   background:var(--bg2);border:1px solid var(--border2);
@@ -1973,7 +1996,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible{outline:2px so
  * Off-screen by default, jumps into view when keyboard-focused. The
  * very first thing a screen-reader user hits on the page. */
 .skip-link{
-  position:absolute;top:-40px;left:8px;z-index:99999;
+  position:absolute;top:-40px;left:8px;z-index:var(--z-skip);
   background:var(--white);color:var(--bg);
   padding:8px 14px;border-radius:6px;
   font-size:13px;font-weight:600;text-decoration:none;
@@ -2268,8 +2291,12 @@ body{
    * placeholder height (contain-intrinsic-size) and skip ALL paint
    * work. Scrolling stays buttery even at 10,000+ rows. */
   content-visibility: auto;
-  contain-intrinsic-size: 0 78px;
-  /* Force own composite layer so transitions don't repaint neighbors */
+  /* Measured at ~94px including the border, excluding the 7px margin.
+     The `auto` keyword lets the browser remember each row's real height
+     once it has been rendered, so the estimate stops mattering after
+     the first pass; the number is only the opening guess. */
+  contain-intrinsic-size: auto 94px;
+  /* Own composite layer so transitions don't repaint neighbours */
   contain: layout style paint;
 }
 
@@ -2476,7 +2503,7 @@ img.thumb-fallback {
   color:rgba(255,255,255,.78);
   cursor:pointer;
   display:flex; align-items:center; justify-content:center;
-  z-index:9000;
+  z-index:var(--z-dialog);
   opacity:0; pointer-events:none;
   transform:translateY(8px) scale(.9);
   transition:
@@ -2822,7 +2849,7 @@ button > .ic:only-child,
 #hist-search-clear:hover{background:var(--bg3,#222);color:var(--off,#ddd)}
 
 .hist-ctx-menu{
-  position:fixed; z-index:9999; min-width:200px;
+  position:fixed; z-index:var(--z-menu); min-width:200px;
   background:var(--bg2,#161616); border:1px solid var(--border2,#2c2c2c);
   border-radius:8px; padding:6px; box-shadow:0 8px 28px rgba(0,0,0,.45);
   font-family:'Inter',system-ui,sans-serif; font-size:12.5px;
@@ -2881,7 +2908,6 @@ button > .ic:only-child,
 .url-paste-hint-close:hover{color:var(--off,#ddd); background:var(--bg3,#222)}
 
 /* ── v0.4.3 perf: skip layout/paint of offscreen history rows ───── */
-.hist-row{content-visibility:auto; contain-intrinsic-size:auto 64px}
 
 /* ── v0.5.0 timeline scrubber ───────────────────────────────────── */
 .bs-timeline{position:relative; cursor:pointer; z-index:0}
@@ -2917,6 +2943,37 @@ button:focus:not(:focus-visible){outline:none}
 
 /* ── v0.4.3 boot splash ─────────────────────────────────────────── */
 
+
+/* ── Settings search ───────────────────────────────────────────────
+   Ten sections is enough that scanning stops being viable, so the
+   panel opens with a way to jump straight to what you came for. */
+.settings-search-wrap{
+  position:relative; margin:0 0 16px;
+}
+.settings-search-wrap input{
+  width:100%; height:42px; padding:0 40px 0 38px;
+  background:var(--bg2); border:1px solid var(--border2);
+  border-radius:var(--r); color:var(--off); font-size:13.5px;
+  font-family:inherit;
+}
+.settings-search-wrap input:focus{ border-color:var(--accent-dim); outline:none }
+.settings-search-wrap input::-webkit-search-cancel-button{-webkit-appearance:none;display:none}
+.settings-search-icon{
+  position:absolute; left:13px; top:50%; transform:translateY(-50%);
+  color:var(--hint); pointer-events:none;
+}
+#settings-search-clear{
+  position:absolute; right:8px; top:50%; transform:translateY(-50%);
+  display:none; align-items:center; justify-content:center;
+  width:26px; height:26px; border:0; border-radius:4px;
+  background:transparent; color:var(--muted); cursor:pointer;
+}
+#settings-search-clear:hover{ background:var(--bg3); color:var(--off) }
+.settings-no-match{
+  display:none; padding:26px 4px; text-align:center;
+  color:var(--hint); font-size:13px;
+}
+
 /* ── Lite mode ──────────────────────────────────────────────────────
    Applied automatically on machines with few cores or little memory,
    and available as a manual switch. It removes cost, not character:
@@ -2940,6 +2997,10 @@ button:focus:not(:focus-visible){outline:none}
 /* The splash keeps its beat, but the transient rings are the one part
    that is pure decoration. */
 .lite #boot-splash .bs-ring{display:none}
+/* The skeleton shimmer repaints a gradient across every placeholder on
+   every frame. On a machine already short of cores that is real work for
+   pure decoration, so lite mode holds the placeholder still instead. */
+.lite .skeleton, .lite [class*="skeleton"]{ animation:none !important; }
 
 /* ── Boot splash ────────────────────────────────────────────────────
    The mark pulses on a beat grid rather than an arbitrary sine: a kick
@@ -2949,7 +3010,7 @@ button:focus:not(:focus-visible){outline:none}
 #boot-splash{
   --bs-beat:600ms;          /* 100 BPM */
   --bs-bar:2400ms;          /* four beats */
-  position:fixed; inset:0; z-index:100000;
+  position:fixed; inset:0; z-index:var(--z-splash);
   display:flex; flex-direction:column;
   align-items:center; justify-content:center;
   background:#080808;
@@ -2965,21 +3026,23 @@ button:focus:not(:focus-visible){outline:none}
   position:absolute; width:132px; height:132px;
   border-radius:50%; border:1px solid #e8e8e8;
   opacity:0; will-change:transform,opacity;
-  animation:bsTransient var(--bs-beat) linear infinite;
+  animation:bsTransient var(--bs-beat) cubic-bezier(.15,.7,.3,1) infinite;
 }
 #boot-splash .bs-ring.bar{
   border-color:#ffffff;
-  animation:bsTransientBar var(--bs-bar) linear infinite;
+  animation:bsTransientBar var(--bs-bar) cubic-bezier(.15,.7,.3,1) infinite;
 }
 @keyframes bsTransient{
-  0%{transform:scale(.86); opacity:.42}
+  0%{transform:scale(.86); opacity:0}
+  8%{opacity:.40}
   70%{opacity:0}
   100%{transform:scale(1.62); opacity:0}
 }
 @keyframes bsTransientBar{
-  0%{transform:scale(.86); opacity:.30}
-  18%{opacity:0}
-  25%{transform:scale(2.15); opacity:0}
+  0%{transform:scale(.86); opacity:0}
+  4%{opacity:.30}
+  20%{opacity:0}
+  26%{transform:scale(2.15); opacity:0}
   100%{transform:scale(2.15); opacity:0}
 }
 #boot-splash .bs-mark{
@@ -2990,24 +3053,26 @@ button:focus:not(:focus-visible){outline:none}
      the ones being dropped. The pulse below is transform-only, which the
      compositor runs off-thread. */
   filter:drop-shadow(0 0 14px rgba(255,255,255,.14));
-  animation:bsKick var(--bs-beat) cubic-bezier(.32,.72,0,1) infinite;
+  animation:bsKick var(--bs-beat) cubic-bezier(.22,.61,.36,1) infinite;
 }
 @keyframes bsKick{
-  0%{transform:scale(1.055)}
-  46%{transform:scale(1)}
-  100%{transform:scale(1)}
+  0%{transform:scale(1)}
+  7%{transform:scale(1.045)}     /* attack, fast but not instant */
+  55%{transform:scale(1)}        /* release */
+  100%{transform:scale(1)}       /* rest, matching 0% so the loop is seamless */
 }
 /* The breathing part of the glow, as its own compositor layer. */
 #boot-splash .bs-glow{
   position:absolute; width:190px; height:190px; border-radius:50%;
   background:radial-gradient(circle, rgba(255,255,255,.16) 0%, rgba(255,255,255,0) 62%);
   opacity:.35; pointer-events:none; will-change:opacity;
-  animation:bsGlow var(--bs-beat) cubic-bezier(.32,.72,0,1) infinite;
+  animation:bsGlow var(--bs-beat) cubic-bezier(.22,.61,.36,1) infinite;
 }
 @keyframes bsGlow{
-  0%{opacity:.85}
-  46%{opacity:.32}
-  100%{opacity:.28}
+  0%{opacity:.30}
+  7%{opacity:.80}
+  55%{opacity:.32}
+  100%{opacity:.30}
 }
 /* Held back so a fast boot shows the mark alone - the line only earns
    its place if there is actually a wait. */

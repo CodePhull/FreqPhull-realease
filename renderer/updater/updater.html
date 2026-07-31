@@ -239,24 +239,26 @@
     position:relative;
     filter:drop-shadow(0 0 14px rgba(255,255,255,0.13));
     will-change:transform;
-    animation: install-kick var(--beat) var(--e-out) infinite;
+    animation: install-kick var(--beat) cubic-bezier(.22,.61,.36,1) infinite;
   }
   .install-mark img { width:100%; height:100%; object-fit:contain; display:block; }
   .install-mark::after {
     content:''; position:absolute; inset:-34px; border-radius:50%;
     background:radial-gradient(circle, rgba(255,255,255,0.14) 0%, rgba(255,255,255,0) 62%);
     pointer-events:none; will-change:opacity;
-    animation: install-glow var(--beat) var(--e-out) infinite;
+    animation: install-glow var(--beat) cubic-bezier(.22,.61,.36,1) infinite;
   }
   @keyframes install-kick {
-    0%   { transform:scale(1.055) }
-    46%  { transform:scale(1) }
-    100% { transform:scale(1) }
+    0%   { transform:scale(1) }
+    7%   { transform:scale(1.045) }   /* attack lives inside the loop */
+    55%  { transform:scale(1) }
+    100% { transform:scale(1) }       /* ends where it began: no snap */
   }
   @keyframes install-glow {
-    0%   { opacity:.85 }
-    46%  { opacity:.32 }
-    100% { opacity:.28 }
+    0%   { opacity:.30 }
+    7%   { opacity:.80 }
+    55%  { opacity:.32 }
+    100% { opacity:.30 }
   }
   .install-progress {
     width:100%; max-width:360px; height:2px;

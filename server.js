@@ -17,6 +17,28 @@ const _sentryClient = sentry.init('node', _serverVersion, {
   userOptOut: process.env.FREQPHULL_NO_CRASH_REPORT === '1',
 });
 const report = (category, err, ctx) => sentry.reportSoftError('node', category, err, ctx);
+// Whatever state matters when reading a report later. Registered once,
+// evaluated at the moment an event is captured, so it reflects the app
+// as it was rather than as it started.
+try {
+  sentry.setStateProvider(() => {
+    const st = { version: _serverVersion, uptime_s: Math.round(process.uptime()) };
+    try { st.packaged = !!process.resourcesPath && /app\.asar/.test(__dirname); } catch {}
+    try {
+      const cmd = _cachedPythonCmd || '';
+      st.python_path_tail = cmd ? String(cmd).split(/[\\/]/).slice(-3).join('/') : '(none)';
+      st.engine_source = /freqphull[\\/]engines[\\/]python/.test(cmd) ? 'embedded'
+        : cmd ? 'system' : 'none';
+    } catch {}
+    try { st.engines_ok = !_enginesBrokenBreaker; st.engines_reason = _enginesBrokenReason || null; } catch {}
+    try { st.analysis_queue = analyzeWorker ? analyzeWorker.queueSize : null; } catch {}
+    try { st.downloads_active = _activeDownloads ? _activeDownloads.size : null; } catch {}
+    try { st.history_rows = dbAll('SELECT COUNT(*) AS c FROM history')[0].c; } catch {}
+    try { st.event_clients = eventClients ? eventClients.size : null; } catch {}
+    try { st.last_verify = _lastVerifyResult ? (_lastVerifyResult.ok ? 'ok' : 'broken') : 'never'; } catch {}
+    return st;
+  });
+} catch {}
 
 // ── Engine verification + self-healing ──────────────────────────────
 // verify_engines.py import-checks every tier and reports exactly which
@@ -231,6 +253,9 @@ function slog(msg) {
     line = '[' + new Date().toISOString() + '] [server] <unprintable log message>';
   }
   if (!_stdoutDead) _safeWrite(process.stdout, line);
+  try {
+    if (!/^Health check hit/.test(msg)) sentry.addTrail('node', msg);
+  } catch {}
   _logBuf += line + '\n';
   if (!_logFlushTimer) {
     _logFlushTimer = setTimeout(() => { _logFlushTimer = null; _flushLog(); }, 200);
@@ -410,6 +435,12 @@ async function initDB() {
       db.run(`ALTER TABLE history ADD COLUMN analysis_json TEXT`);
       db.run(`ALTER TABLE history ADD COLUMN analysis_mtime REAL`);
       db.run(`ALTER TABLE history ADD COLUMN analysis_used_at REAL`);
+      // The in-memory retry cap (analyzeWorker.failed) resets on every
+      // restart, so a file that genuinely cannot be analysed - corrupt
+      // audio, a decode failure Python cannot recover from - kept
+      // re-crashing and re-reporting to Sentry on every single launch
+      // forever. This persists the give-up across restarts.
+      db.run(`ALTER TABLE history ADD COLUMN analysis_gave_up INTEGER DEFAULT 0`);
     } catch (e) { /* columns exist */ }
       // Column already exists - that's fine, sqlite errors loudly otherwise
     }
@@ -2041,6 +2072,38 @@ app.post('/history/fix-id-titles', async (req, res) => {
   }
   slog('fix-id-titles: retitled ' + fixed + '/' + rows.length);
   broadcastEvent('id-titles-fixed', { fixed, total: rows.length });
+});
+
+// Tracks the background worker permanently gave up on (3 failed
+// analysis attempts, persisted so it survives restarts - see
+// analysis_gave_up). Surfaced so a stuck file is visible and fixable
+// instead of silently sitting with no BPM/key forever.
+app.get('/history/analysis-stuck', (req, res) => {
+  try {
+    const rows = dbAll(`
+      SELECT id, title, file_path, created_at FROM history
+      WHERE analysis_gave_up=1 ORDER BY created_at DESC LIMIT 500
+    `);
+    res.json({ ok: true, tracks: rows, count: rows.length });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Clear the give-up flag so the worker will try again - e.g. after the
+// user repairs engines, replaces a corrupt file, or just wants one more
+// shot. The in-memory retry counter is cleared too, or the worker would
+// immediately re-trip the persisted flag on the very next failure.
+app.post('/history/:id/retry-analysis', (req, res) => {
+  const id = req.params.id;
+  try {
+    dbRun('UPDATE history SET analysis_gave_up=0 WHERE id=?', [id]);
+    analyzeWorker.failed.delete(parseInt(id, 10));
+    nudgeAnalysisWorker();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 app.get('/history/doctor', (req, res) => {
@@ -3713,6 +3776,33 @@ app.post('/engines/repair', async (req, res) => {
   res.json(r);
 });
 
+// Crashes in the window itself had nowhere to go: the renderer is a
+// browser context with no Sentry of its own, so an exception in the UI
+// left no trace anywhere. It posts them here instead, along with the
+// breadcrumbs it collected, and they are reported like any other fault.
+app.post('/client-error', (req, res) => {
+  try {
+    const b = req.body || {};
+    const err = new Error(String(b.message || 'renderer error').slice(0, 300));
+    if (b.stack) err.stack = String(b.stack).slice(0, 4000);
+    // Replay the window's own trail so the report reads in order.
+    if (Array.isArray(b.trail)) {
+      for (const line of b.trail.slice(-40)) sentry.addTrail('node', '[ui] ' + String(line).slice(0, 200));
+    }
+    report('renderer.' + (b.kind === 'rejection' ? 'unhandled-rejection' : 'crash'), err, {
+      _group: String(b.message || '').replace(/[0-9]+/g, 'N').slice(0, 70),
+      source: b.source || '(unknown)',
+      line: b.line ?? null,
+      column: b.column ?? null,
+      tab: b.tab || '(unknown)',
+      userAgentTail: String(b.ua || '').slice(-60),
+    });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.get('/sentry-status', (_, res) => {
   // Re-resolve the DSN at request time so the user sees the same state
   // the sentry-init module sees. Extract host + project ID so the user
@@ -4858,7 +4948,7 @@ function nextAnalysisCandidate() {
   const exclude = failedIds.length ? (' AND id NOT IN (' + failedIds.join(',') + ')') : '';
   const rows = dbAll(
     'SELECT id, title, file_path FROM history' +
-    ' WHERE bpm IS NULL AND file_path IS NOT NULL' + exclude +
+    ' WHERE bpm IS NULL AND file_path IS NOT NULL AND analysis_gave_up=0' + exclude +
     ' ORDER BY id DESC LIMIT 1');
   return rows.length ? rows[0] : null;
 }
@@ -4873,7 +4963,12 @@ function refreshAnalysisQueueSize() {
 function analyzeOneInBackground(row) {
   return new Promise(function(resolve){
     if (!fs.existsSync(row.file_path)) {
-      slog('bg-analyze: file missing, marking failed: ' + row.file_path);
+      // A missing file is a different problem than a bad one - the
+      // library doctor / repair-history tools are what fix this, not
+      // more analysis attempts. Give up immediately and persist it so
+      // restarts don't keep rediscovering the same missing file.
+      slog('bg-analyze: file missing, giving up: ' + row.file_path);
+      try { dbRun('UPDATE history SET analysis_gave_up=1 WHERE id=?', [row.id]); } catch (e) {}
       analyzeWorker.failed.set(row.id, 3);
       return resolve(false);
     }
@@ -4919,15 +5014,42 @@ function analyzeOneInBackground(row) {
               // Genuine Python crash with engines installed - track it.
               let fsize = null;
               try { fsize = Math.round(fs.statSync(row.file_path).size / 1048576 * 10) / 10; } catch {}
-              report('bg-analyze.python-crash', new Error('analyze.py exit ' + code), {
+              const attempt = (analyzeWorker.failed.get(row.id) || 0) + 1;
+              // analyze.py reports failures as JSON on stdout, not stderr:
+              // {"error": "...", "traceback": "..."}. Reporting stderr
+              // alone meant every one of these events arrived saying
+              // "exit 1" and nothing more. Pull the real reason out and
+              // use it as the exception message so Sentry groups by what
+              // actually broke instead of by the exit code.
+              let pyError = null, pyTrace = null;
+              try {
+                const parsed = JSON.parse(String(stdout || '').trim().split('\n').pop());
+                if (parsed && parsed.error) { pyError = String(parsed.error); pyTrace = parsed.traceback || null; }
+              } catch {}
+              report('bg-analyze.python-crash',
+                new Error(pyError ? ('analyze.py: ' + pyError.slice(0, 160)) : ('analyze.py exit ' + code)), {
                 historyId: row.id,
                 exitCode: code,
+                attempt,
                 fileExt: path.extname(row.file_path || '').toLowerCase(),
                 fileSizeMb: fsize,
                 durationS: row.duration || null,
                 classifierReason: cls.reason || '(none)',
+                // Distinct exceptions deserve distinct issues, so the
+                // reason refines the grouping. Numbers and paths are
+                // stripped out or one file per user becomes one issue.
+                _group: pyError
+                  ? pyError.replace(/[0-9]+/g, 'N').replace(/[A-Za-z]:\\[^\s]+/g, 'PATH').slice(0, 70)
+                  : 'exit-' + code,
+                pythonError: pyError || '(none reported)',
+                pythonTraceback: pyTrace ? pyTrace.slice(-1600) : '(none)',
+                stdoutTail: (stdout || '').slice(-600) || '(empty)',
                 stderrTail: (stderr || '').slice(-1200) || '(empty)',
               });
+              if (attempt >= 3) {
+                try { dbRun('UPDATE history SET analysis_gave_up=1 WHERE id=?', [row.id]); } catch (e) {}
+                slog('bg-analyze id=' + row.id + ' gave up after 3 crashes - will not retry on restart');
+              }
             }
             analyzeWorker.failed.set(row.id, (analyzeWorker.failed.get(row.id) || 0) + 1);
             return resolve(false);
@@ -4979,12 +5101,18 @@ function analyzeOneInBackground(row) {
             resolve(true);
           } catch (e) {
             slog('bg-analyze id=' + row.id + ' parse error: ' + e.message);
+            const parseAttempt = (analyzeWorker.failed.get(row.id) || 0) + 1;
             report('bg-analyze.parse-failure', e, {
               historyId: row.id,
+              attempt: parseAttempt,
               stdoutTail: (stdout || '').slice(-1000) || '(empty)',
               stderrTail: (stderr || '').slice(-600) || '(empty)',
               fileExt: path.extname(row.file_path || '').toLowerCase(),
             });
+            if (parseAttempt >= 3) {
+              try { dbRun('UPDATE history SET analysis_gave_up=1 WHERE id=?', [row.id]); } catch (e2) {}
+              slog('bg-analyze id=' + row.id + ' gave up after 3 parse failures - will not retry on restart');
+            }
             analyzeWorker.failed.set(row.id, (analyzeWorker.failed.get(row.id) || 0) + 1);
             resolve(false);
           }
@@ -4996,12 +5124,18 @@ function analyzeOneInBackground(row) {
         {
           let fsize = null;
           try { fsize = Math.round(fs.statSync(row.file_path).size / 1048576 * 10) / 10; } catch {}
+          const ffmpegAttempt = (analyzeWorker.failed.get(row.id) || 0) + 1;
           report('bg-analyze.ffmpeg-failure', e, {
             historyId: row.id,
+            attempt: ffmpegAttempt,
             fileExt: path.extname(row.file_path || '').toLowerCase(),
             fileSizeMb: fsize,
             fileExists: (() => { try { return fs.existsSync(row.file_path); } catch { return false; } })(),
           });
+          if (ffmpegAttempt >= 3) {
+            try { dbRun('UPDATE history SET analysis_gave_up=1 WHERE id=?', [row.id]); } catch (e2) {}
+            slog('bg-analyze id=' + row.id + ' gave up after 3 ffmpeg failures - will not retry on restart');
+          }
         }
         try { fs.unlinkSync(wavTmp); } catch (e2) {}
         analyzeWorker.failed.set(row.id, (analyzeWorker.failed.get(row.id) || 0) + 1);
@@ -5133,6 +5267,25 @@ app.get('/analyze', async (req, res) => {
   try {
     await run(ffmpegBin, ['-y', '-i', ffmpegInputForAnalyze, '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2', wavTmp]);
     slog('WAV ready: ' + wavTmp);
+    // ffmpeg exits cleanly on some damaged inputs while writing nothing
+    // usable. Handing that to Python produced a crash report rather than
+    // an answer, so the condition is caught here and told to the user in
+    // terms they can act on.
+    try {
+      const wavSize = fs.statSync(wavTmp).size;
+      if (wavSize < 1024) {
+        slog('analyze: converted WAV is only ' + wavSize + ' bytes - treating as unreadable source');
+        sse('error', {
+          message: 'This file could not be read as audio - it is empty or the download was cut short.',
+          hint: 'Re-download the track, then run it again.',
+          code: 'unreadable_audio',
+        });
+        return res.end();
+      }
+    } catch (e) {
+      sse('error', { message: 'Could not read the converted audio: ' + e.message });
+      return res.end();
+    }
     // Clean up the input copy as soon as ffmpeg is done with it - we
     // don't need it past this point.
     if (analyzeTempCopy) { try { fs.unlinkSync(analyzeTempCopy); } catch {} }
