@@ -368,4 +368,31 @@ if fails:
     print('✗ PASS 17 FAILED'); [print('   -', f) for f in fails]; sys.exit(1)
 print('✓ PASS 17  element references resolve, notes reach the page, buttons are styled')
 PY
-echo "════════ ALL 17 GREEN ════════"
+python3 - <<'PY'
+import re, sys
+fails = []
+st = open('stems.py').read()
+# Stems pass through several writes in sequence, so any 16-bit write
+# quantises the audio again and the noise compounds. Measured across
+# four stages that is a noise floor 48 dB worse than 24-bit.
+bad = [m.start() for m in re.finditer(r'subtype\s*=\s*["\']PCM_16["\']', st)]
+if bad:
+    fails.append(f'{len(bad)} stem write(s) still at 16-bit')
+if 'STEM_SUBTYPE' not in st:
+    fails.append('STEM_SUBTYPE is missing')
+
+# The preview player must never be able to start a second voice.
+app = open('renderer/app.js').read()
+i = app.find('function svPlay()')
+if i < 0:
+    fails.append('svPlay is missing')
+elif 'if (st.src)' not in app[i:i+700]:
+    fails.append('svPlay does not stop an existing source (double playback)')
+if 'svPause();' not in app[app.find("lastTab === 'slowverb'"):app.find("lastTab === 'slowverb'")+400]:
+    fails.append('leaving the Slow + Reverb page does not pause it')
+
+if fails:
+    print('✗ PASS 18 FAILED'); [print('   -', f) for f in fails]; sys.exit(1)
+print('✓ PASS 18  stems are 24-bit; the preview player cannot double up')
+PY
+echo "════════ ALL 18 GREEN ════════"

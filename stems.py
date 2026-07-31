@@ -153,6 +153,21 @@ def progress_msg(step, progress, **extra):
     emit(payload)
 
 
+# Stems are written at 24-bit throughout.
+#
+# Every write in this pipeline used PCM_16, and a stem can pass through
+# several of them in sequence: ensemble averaging, fullness restoration,
+# bleed cleaning, the lead and backing split. Each write quantises to 16
+# bits and each one adds its own quantisation noise, so the losses
+# compound across the chain rather than being paid once.
+#
+# 24-bit removes that entirely. It costs 50% more disk and nothing in CPU
+# or processing time, and it is what a DAW expects to receive: a stem is
+# raw material for a mix, not a listening copy, and it will be processed
+# further by whoever loads it.
+STEM_SUBTYPE = "PCM_24"
+
+
 # Quality presets — tuned for realistic CPU wait times on a 5-min track
 #   fast  ~30s per stage on GPU, ~1-2 min on CPU. Lower quality, demo-grade.
 #   high  ~1-2 min per stage on GPU, ~5-8 min on CPU. Production-ready.
@@ -249,7 +264,7 @@ def _ensemble_average_harmonic_stems(primary_paths, secondary_paths, work_dir):
             avg_path = os.path.join(
                 work_dir, "ensemble_" + os.path.basename(p_primary)
             )
-            sf.write(avg_path, mean, sr1, subtype="PCM_16")
+            sf.write(avg_path, mean, sr1, subtype=STEM_SUBTYPE)
             out_paths[i] = avg_path
         except Exception:
             # Per-stem failure shouldn't break ensemble for the others;
@@ -465,7 +480,7 @@ def ai_stem_recovery(stems_by_name, work_dir):
             clipped = np.clip(audio, -1.0, 1.0)
             new_path = os.path.join(work_dir,
                                     "recovered_" + os.path.basename(original_path))
-            sf.write(new_path, clipped, sr_ref, subtype="PCM_16")
+            sf.write(new_path, clipped, sr_ref, subtype=STEM_SUBTYPE)
             out_paths[original_path] = new_path
         except Exception:
             # If writing fails, keep the original — don't break the pipeline
@@ -867,7 +882,7 @@ def restore_stem_fullness(stems_by_name, work_dir, intensity=None):
             audio = np.clip(audio, -1.0, 1.0).astype(np.float32)
             out_path = os.path.join(work_dir,
                                     "fullness_" + os.path.basename(stem_path))
-            sf.write(out_path, audio, sr, subtype="PCM_16")
+            sf.write(out_path, audio, sr, subtype=STEM_SUBTYPE)
             out_paths[stem_path] = out_path
         except Exception:
             # Per-stem failure shouldn't kill the others
@@ -1073,7 +1088,7 @@ def cleanup_back_vocal(stems_by_name, work_dir):
         back = np.clip(back, -1.0, 1.0).astype(np.float32)
         out_path = os.path.join(work_dir,
                                 "cleaned_" + os.path.basename(back_path))
-        sf.write(out_path, back, sr, subtype="PCM_16")
+        sf.write(out_path, back, sr, subtype=STEM_SUBTYPE)
         out_paths[back_path] = out_path
         return out_paths
     except Exception:
@@ -1200,9 +1215,9 @@ def clean_stem_bleeds(stems_by_name, work_dir):
             except Exception:
                 pass
             cleaned = os.path.join(work_dir, "cleaned_" + os.path.basename(p))
-            # Write as 16-bit PCM, not float. The audio-separator engine
+            # Write as PCM, not float. The audio-separator engine
             # outputs PCM WAV for all the regular stems, and the renderer's
-            # peaksFromWAV() reader only has branches for 8/16/24/32-bit PCM.
+            # peaksFromWAV() reader has branches for 16/24/32-bit PCM only.
             # Writing this cleanup pass as float WAV produced files that
             # were "valid" but unreadable to the renderer — peak values
             # came out roughly uniform across the whole track because
@@ -1216,7 +1231,7 @@ def clean_stem_bleeds(stems_by_name, work_dir):
             # the int16 scaling and clipping internally too, but explicit
             # is safer.
             out_clipped = np.clip(out, -1.0, 1.0)
-            sf.write(cleaned, out_clipped, sr_s, subtype="PCM_16")
+            sf.write(cleaned, out_clipped, sr_s, subtype=STEM_SUBTYPE)
             cleaned_paths[p] = cleaned
         except Exception:
             # Keep original on any failure
@@ -1527,8 +1542,8 @@ def main():
                                 # Overwrite in place: same path, averaged
                                 # content. Downstream pipeline picks it up
                                 # without any path changes.
-                                sf.write(vocals_path, v_mean, sr1, subtype="PCM_16")
-                                sf.write(instrumental_path, i_mean, sri1, subtype="PCM_16")
+                                sf.write(vocals_path, v_mean, sr1, subtype=STEM_SUBTYPE)
+                                sf.write(instrumental_path, i_mean, sri1, subtype=STEM_SUBTYPE)
                                 progress_msg("vocal_ensemble_complete", 35,
                                              processing_time=round(ve_time, 1))
                             else:

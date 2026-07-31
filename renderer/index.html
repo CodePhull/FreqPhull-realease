@@ -2982,7 +2982,6 @@ button:focus:not(:focus-visible){outline:none}
    page has no render state to design around until you save. */
 .sv-track-name{ font-size:12.5px; color:var(--muted); margin-left:4px; overflow:hidden;
   text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0 }
-.sv-disabled{ opacity:.4; pointer-events:none }
 .sv-transport{ display:flex; align-items:center; gap:14px; margin-top:6px }
 .sv-seek{ flex:1; height:8px; background:var(--bg3); border-radius:4px; cursor:pointer; position:relative; overflow:hidden }
 .sv-seek-fill{ height:100%; width:0%; background:var(--accent); border-radius:4px }
@@ -3006,6 +3005,42 @@ button:focus:not(:focus-visible){outline:none}
 .sv-export-status.ok{ color:var(--accent) }
 .sv-export-status.err{ color:#ff8a8a }
 
+
+/* Nothing loaded: the controls are hidden rather than dimmed. A wall of
+   sliders that cannot do anything is worse than an empty space that
+   says what to do. */
+.sv-hidden{ display:none }
+.sv-empty{
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:10px; padding:52px 20px 46px; text-align:center; color:var(--hint);
+}
+.sv-empty svg{ width:34px; height:34px; opacity:.45; margin-bottom:2px }
+.sv-empty-title{ font-size:14px; color:var(--muted); font-weight:600; letter-spacing:.01em }
+.sv-empty-sub{ font-size:12px; max-width:340px; line-height:1.55 }
+
+/* Sliders should feel grabbable. */
+.sv-ctl input[type=range]{ cursor:grab }
+.sv-ctl input[type=range]:active{ cursor:grabbing }
+.sv-ctl input[type=range]::-webkit-slider-thumb{ cursor:grab }
+.sv-ctl input[type=range]:active::-webkit-slider-thumb{ cursor:grabbing }
+.sv-seek{ cursor:pointer }
+
+/* A little more room to breathe, and a clearer division between the
+   part that makes sound and the part that writes a file. */
+.sv-grid{ padding-top:4px }
+.sv-ctl{
+  background:var(--bg2); border:1px solid var(--border);
+  border-radius:8px; padding:14px 15px 13px;
+}
+.sv-ctl-head{ margin-bottom:9px }
+.sv-actions{
+  padding-top:18px; margin-top:22px;
+  border-top:1px solid var(--border);
+}
+.sv-transport{
+  background:var(--bg2); border:1px solid var(--border);
+  border-radius:8px; padding:12px 14px; margin-top:4px;
+}
 .sv-formats{ display:flex; flex-wrap:wrap; gap:8px }
 .sv-fmt{ display:flex; flex-direction:column; align-items:flex-start; gap:2px;
   padding:9px 14px; background:var(--bg2); border:1px solid var(--border2);
@@ -3826,7 +3861,13 @@ button:focus:not(:focus-visible){outline:none}
           <div id="sv-track-name" class="sv-track-name">Nothing loaded</div>
         </div>
 
-        <div id="sv-body" class="sv-disabled">
+        <div id="sv-empty" class="sv-empty">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+          <div class="sv-empty-title" id="sv-empty-title">Load a track to start</div>
+          <div class="sv-empty-sub" id="sv-empty-sub">Choose one from your library, or open a file from anywhere on your machine.</div>
+        </div>
+
+        <div id="sv-body" class="sv-hidden">
           <div class="sv-transport">
             <button class="btn pri" id="sv-play" onclick="svTogglePlay()" disabled>
               <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="7,5 7,19 19,12"/></svg>

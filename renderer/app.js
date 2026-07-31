@@ -281,6 +281,10 @@ function svRefreshLabels() {
   if (hint) hint.textContent = st.keepPitch ? t('svHintKeep') : t('svHintTape');
   const vh = document.getElementById('sv-volume-hint');
   if (vh) vh.textContent = t('svVolumeHint');
+  const et = document.getElementById('sv-empty-title');
+  if (et) et.textContent = t('svEmptyTitle');
+  const es = document.getElementById('sv-empty-sub');
+  if (es) es.textContent = t('svEmptySub');
 }
 
 function svApplyPreset(id) {
@@ -456,7 +460,9 @@ async function svDecode(arrayBuf, name, path, historyId) {
   const nm = document.getElementById('sv-track-name');
   if (nm) nm.textContent = name;
   const body = document.getElementById('sv-body');
-  if (body) body.classList.remove('sv-disabled');
+  if (body) body.classList.remove('sv-hidden');
+  const empty = document.getElementById('sv-empty');
+  if (empty) empty.style.display = 'none';
   const play = document.getElementById('sv-play');
   if (play) play.disabled = false;
   const dur = document.getElementById('sv-dur');
@@ -477,6 +483,15 @@ function svPlay() {
   if (!st.buffer) return;
   const ctx = svEnsureCtx();
   if (ctx.state === 'suspended') ctx.resume();
+  // Never start a second voice. A source already running means the state
+  // and the audio had drifted apart, and starting another one is what
+  // made the track play over itself after leaving the page and coming
+  // back.
+  if (st.src) {
+    try { st.src.onended = null; st.src.stop(); } catch {}
+    try { st.src.disconnect(); } catch {}
+    st.src = null;
+  }
   st.src = ctx.createBufferSource();
   st.src.buffer = st.buffer;
   st.src.connect(st.bassNode);
@@ -493,16 +508,22 @@ function svPause() {
   const st = svState;
   if (st.src) {
     st.offset += (st.ctx.currentTime - st.startedAt) * (st.speed / 100);
-    try { st.src.stop(); } catch {}
+    try { st.src.onended = null; st.src.stop(); } catch {}
+    try { st.src.disconnect(); } catch {}
     st.src = null;
   }
   st.playing = false;
+  if (st.raf) { cancelAnimationFrame(st.raf); st.raf = null; }
   svUpdateTransport();
 }
 
 function svStop() {
   const st = svState;
-  if (st.src) { try { st.src.stop(); } catch {} st.src = null; }
+  if (st.src) {
+    try { st.src.onended = null; st.src.stop(); } catch {}
+    try { st.src.disconnect(); } catch {}
+    st.src = null;
+  }
   st.playing = false; st.offset = 0;
   if (st.raf) { cancelAnimationFrame(st.raf); st.raf = null; }
 }
@@ -937,6 +958,12 @@ function showTab(btn) {
   document.getElementById('tab-' + btn.dataset.tab).classList.add('on');
 
   const newTab = btn.dataset.tab;
+  // Pause Slow + Reverb when navigating away: its transport is on that
+  // page, so audio continuing from it leaves the user no way to stop
+  // the sound. The position is kept, so returning resumes where it was.
+  if (lastTab === 'slowverb' && newTab !== 'slowverb') {
+    try { if (typeof svPause === 'function' && svState && svState.playing) svPause(); } catch {}
+  }
   lastTab = newTab;
   // Track this in the tab history stack (skips if invoked from back/forward)
   pushTabHistory(newTab);
@@ -11144,6 +11171,11 @@ const T = {
     // History tab
     histTitle:'History', histSub:'Every track downloaded - BPM and key saved automatically',
     svTitle:'Slow + Reverb',
+    svEmptyTitle:'Load a track to start',
+    svPickBtn:'Choose from library',
+    svOpenBtn:'Open a file',
+    svResetBtn:'Reset',
+    svEmptySub:'Choose one from your library, or open a file from anywhere on your machine.',
     svConvolution:'convolution reverb',
     svVolumeHint:'Listening level only - the saved copy keeps the track\'s own level',
     svPlay:'Play', svPause:'Pause',
@@ -11745,6 +11777,11 @@ const T = {
     // History tab
     histTitle:'Historique', histSub:'Toutes les pistes téléchargées - BPM et tonalité enregistrés automatiquement',
     svTitle:'Ralenti + Réverbe',
+    svEmptyTitle:'Chargez une piste pour commencer',
+    svPickBtn:'Choisir dans la bibliothèque',
+    svOpenBtn:'Ouvrir un fichier',
+    svResetBtn:'Réinitialiser',
+    svEmptySub:'Choisissez-en une dans votre bibliothèque, ou ouvrez un fichier depuis n\'importe où sur votre machine.',
     svConvolution:'réverbe à convolution',
     svVolumeHint:'Niveau d\'écoute seulement - la copie enregistrée garde le niveau de la piste',
     svPlay:'Lecture', svPause:'Pause',
@@ -11924,6 +11961,14 @@ function applyLang() {
   const spRootHint = document.getElementById('sp-root-hint');
   if (spRootHint) spRootHint.innerHTML = t('spDestHint');
   $set('sp-folders-title', 'spStyleFolders');
+  // Slow + Reverb. The empty state is on screen before any track is
+  // loaded, so it cannot wait for the label refresh that runs on decode.
+  $set('sv-empty-title', 'svEmptyTitle');
+  $set('sv-empty-sub', 'svEmptySub');
+  $set('sv-pick-lbl', 'svPickBtn');
+  $set('sv-file-lbl', 'svOpenBtn');
+  $set('sv-reset-lbl', 'svResetBtn');
+  $set('sv-export-lbl', 'svExportLbl');
   $set('sp-new-lbl', 'spNewFolderBtn');
   $set('sp-smart-lbl', 'smartBtn');
   const spSmartBtn = document.getElementById('btn-sp-smart');

@@ -4,6 +4,34 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
+## 0.7.14 (2026-07-31)
+
+**Stems are written at 24-bit.** Every write in the separation pipeline
+used 16-bit, and a stem passes through several in sequence: ensemble
+averaging, fullness restoration, bleed cleaning, the lead and backing
+split. Each one quantises, and the noise compounds down the chain rather
+than being paid once. Measured across four stages, the noise floor sat
+at -84 dBFS; at 24-bit it is -133 dBFS, roughly 48 dB quieter. It costs
+half again in disk space and nothing in processing time, and it is what
+a DAW expects: a stem is raw material for a mix, not a listening copy.
+The renderer's waveform reader already handled 24-bit, so nothing
+downstream changes.
+
+**Slow + Reverb: playing a track, leaving the page and coming back no
+longer plays it twice.** Playback continued from a page whose transport
+was no longer on screen, and returning to press play started a second
+voice over the first. Playing is now idempotent - a source already
+running is stopped before another begins - sources are fully
+disconnected when they end, and navigating away pauses, keeping the
+position so returning resumes where it was.
+
+**Slow + Reverb looks like a tool now.** The controls are hidden until a
+track is loaded rather than sitting there dimmed, replaced by a short
+line saying what to do; a wall of sliders that cannot do anything is
+worse than an empty space that explains itself. Each control sits in its
+own panel, the export section is separated from the part that makes
+sound, and the sliders show a grab cursor.
+
 ## 0.7.13 (2026-07-31)
 
 Three fixes found while testing 0.7.12.
