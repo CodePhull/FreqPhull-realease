@@ -290,7 +290,18 @@ import json, re, sys, os
 # it was once installed by hand, and is silently missing everywhere else -
 # including a clean CI build. Crash reporting shipped that way.
 pkg = json.load(open('package.json'))
-declared = set(pkg.get('dependencies', {})) | set(pkg.get('devDependencies', {}))
+blocks = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']
+declared = set()
+for b in blocks: declared |= set(pkg.get(b, {}))
+# The same package declared in two blocks can resolve to two versions in
+# one tree, which is how two majors of the Sentry SDK ended up sharing a
+# core and calling APIs the other did not have.
+seen = {}
+for b in blocks:
+    for k in pkg.get(b, {}):
+        if k in seen:
+            print(f'✗ PASS 15 FAILED\n   - {k} is declared in both {seen[k]} and {b}'); sys.exit(1)
+        seen[k] = b
 BUILTIN = {'fs','path','os','http','https','child_process','crypto','events','stream','util',
            'url','zlib','net','readline','assert','buffer','timers','worker_threads','electron',
            'string_decoder','tty','dns','querystring','module','process','v8','perf_hooks'}

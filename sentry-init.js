@@ -132,8 +132,9 @@ function init(processKind, release, opts = {}) {
 
   try {
     let Sentry;
-    if (processKind === 'main') Sentry = require('@sentry/electron/main');
-    else if (processKind === 'renderer') Sentry = require('@sentry/electron/renderer');
+    // One Sentry package, one version. See the note above _requireSentry.
+    if (processKind === 'main') Sentry = require('@sentry/node');
+    else if (processKind === 'renderer') Sentry = null;
     else if (processKind === 'node') Sentry = require('@sentry/node');
     else return null;
 
@@ -177,8 +178,14 @@ function _isRateLimited(category) {
 
 function _requireSentry(processKind) {
   try {
-    if (processKind === 'main') return require('@sentry/electron/main');
-    if (processKind === 'renderer') return require('@sentry/electron/renderer');
+    // The main process is a Node process, so @sentry/node serves it.
+    // Having @sentry/electron here as well put two majors of the SDK in
+    // one tree sharing a single @sentry/core, and whichever lost the
+    // resolution called an API the other did not have.
+    if (processKind === 'main') return require('@sentry/node');
+    // The renderer has no SDK of its own by design: it posts faults to
+    // /client-error and the backend reports them.
+    if (processKind === 'renderer') return null;
     if (processKind === 'node') return require('@sentry/node');
   } catch { /* package not installed */ }
   return null;
@@ -244,8 +251,18 @@ function reportSoftError(processKind, category, error, context) {
 
   // Bail if Sentry didn't initialize successfully.
   try {
-    const hub = Sentry.getCurrentHub && Sentry.getCurrentHub();
-    if (!hub || !hub.getClient || !hub.getClient()) return;
+    // getCurrentHub is v7; getClient is v8+. Accept either, and only
+    // bail when neither reports a live client - otherwise a version
+    // bump silently turns reporting off with nothing to show for it.
+    let client = null;
+    try {
+      if (typeof Sentry.getClient === 'function') client = Sentry.getClient();
+      else if (typeof Sentry.getCurrentHub === 'function') {
+        const hub = Sentry.getCurrentHub();
+        client = hub && hub.getClient && hub.getClient();
+      }
+    } catch {}
+    if (!client) return;
   } catch { return; }
 
   if (_isRateLimited(category)) return;

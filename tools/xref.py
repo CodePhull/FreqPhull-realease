@@ -1,6 +1,6 @@
 import re, sys, os
 FILES = ['server.js','main.js','updater.js','sentry-init.js','preload.js',
-         'updater-preload.js','lib/impulse.js','renderer/app.js']
+         'updater-preload.js','lib/impulse.js','renderer/app.js','renderer/daw.js']
 KEYWORDS = set('if for while switch catch return typeof do else try function new delete void in of'.split())
 GLOBALS = set("""require module exports process console setTimeout setInterval clearTimeout
 clearInterval Promise JSON Math Date Object Array String Number Boolean Error RegExp Map Set
@@ -53,7 +53,13 @@ for f, src in bodies.items():
         if re.search(r'\b' + name + r'\b\s*[:=]', code[:m.start()]): continue
         # `get() { ... }` is a method or getter definition, not a call.
         if re.match(r'[^)]*\)\s*\{', code[m.end():m.end() + 120]): continue
-        elsewhere = [g for g in defined_in if g != f and name in defined_in[g]]
+        # Classic scripts in the same page share one global scope, so a
+        # helper in app.js is genuinely reachable from daw.js. Only calls
+        # that cross a real module boundary are faults.
+        SAME_SCOPE = {'renderer/app.js', 'renderer/daw.js'}
+        peers = SAME_SCOPE if f in SAME_SCOPE else set()
+        if any(name in defined_in.get(p, set()) for p in peers if p != f): continue
+        elsewhere = [g for g in defined_in if g != f and name in defined_in[g] and g not in peers]
         if elsewhere:
             line = src[:m.start()].count('\n') + 1
             fails.append(f'{f}: calls {name}() which is defined only in {elsewhere[0]}')

@@ -4,7 +4,41 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
-## 0.7.15 (2026-08-01)
+## 0.7.16 (2026-08-01)
+
+**"core.hasSpansEnabled is not a function".** Two majors of the Sentry
+SDK were in the tree at once. The packages were declared twice - once
+under dependencies and again under optionalDependencies, at different
+ranges - and one of those declarations pulled a newer @sentry/node
+underneath it. Both then shared a single @sentry/core, so whichever lost
+the resolution called an API the other did not have.
+
+The duplicate block is gone and there is now one Sentry package at one
+version. @sentry/electron was only ever used for the main process, which
+is a Node process that @sentry/node serves perfectly well, and renderer
+faults already report through the backend. Removing it also takes the
+vulnerable OpenTelemetry chain out of the shipped tree: the runtime
+dependencies now audit clean, down from twenty moderate advisories.
+
+One thing is given up with it: native crash dumps from the renderer, the
+kind that identified the decodeAudioData fault. JavaScript errors are
+still reported. If those dumps prove worth having, the package can come
+back pinned to a version built against the same SDK major.
+
+A release check now fails the build if a package is declared in more than
+one dependency block, since that is what allowed two versions of the same
+library to be installed side by side.
+
+**"log is not defined" when checking for updates.** Two faults stacked.
+The updater called a function that lives in a different module, which
+throws. Worse, it called it from an event listener - and because
+electron-updater emits that event from inside the promise the check
+returns, the fault replaced the real error, so every update problem was
+reported as "log is not defined" whatever had actually gone wrong. The
+call is corrected, every listener is now isolated so a fault in one
+cannot hide the error that triggered it, and update failures are
+reported in plain terms, since the usual cause is simply that nothing
+has been published yet.
 
 Includes everything built as 0.7.14, which was tested but never
 published.

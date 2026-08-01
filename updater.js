@@ -105,6 +105,17 @@ function setupUpdater(opts) {
     mainLog('[updater] dev mode — skipping auto-update setup');
     // Still register IPC handlers so renderer doesn't break on missing
     // channels. They just respond with "not available".
+// Isolate a listener so a fault inside it cannot replace the error that
+// triggered it. autoUpdater emits 'error' synchronously from inside the
+// promise that checkForUpdates() returns, so a throw here surfaced as
+// the rejection message and hid what actually went wrong.
+function safeOn(emitter, event, fn) {
+  emitter.on(event, function () {
+    try { return fn.apply(this, arguments); }
+    catch (e) { try { mainLog('[updater] handler for "' + event + '" threw: ' + e.message); } catch {} }
+  });
+}
+
     ipcMain.handle('updater:check', () => ({ available: false, reason: 'dev' }));
     ipcMain.handle('updater:download', () => ({ ok: false, reason: 'dev' }));
     ipcMain.handle('updater:install', () => ({ ok: false, reason: 'dev' }));
@@ -127,10 +138,10 @@ function setupUpdater(opts) {
   autoUpdater.autoInstallOnAppQuit = true;
 
   // ── Event wiring → renderer IPC ──────────────────────────────────────────
-  autoUpdater.on('checking-for-update', () => {
+  safeOn(autoUpdater, 'checking-for-update', () => {
     send('update-checking', {});
   });
-  autoUpdater.on('update-available', (info) => {
+  safeOn(autoUpdater, 'update-available', (info) => {
     mainLog('[updater] update available: ' + info.version);
     bootCheckGotResult = true;
     lastAvailableInfo = {
@@ -141,14 +152,14 @@ function setupUpdater(opts) {
     };
     send('update-available', lastAvailableInfo);
   });
-  autoUpdater.on('update-not-available', (info) => {
+  safeOn(autoUpdater, 'update-not-available', (info) => {
     bootCheckGotResult = true;
     lastAvailableInfo = null;
     mainLog('[updater] up to date: ' + (info && info.version));
     send('update-not-available', { version: info && info.version });
     manualCheckInProgress = false;
   });
-  autoUpdater.on('error', (err) => {
+  safeOn(autoUpdater, 'error', (err) => {
     // benign errors get downgraded to "up to date" so users
     // don't see scary red toasts for things that aren't actionable
     // (missing latest.yml, offline, dev-mode no-releases). Still
@@ -162,11 +173,11 @@ function setupUpdater(opts) {
     }
     manualCheckInProgress = false;
   });
-  autoUpdater.on('error', (err) => {
+  safeOn(autoUpdater, 'error', (err) => {
     mainLog('autoUpdater error: ' + (err && err.message));
     send('update-error', { message: (err && err.message) || 'Unknown error' });
   });
-  autoUpdater.on('download-progress', (p) => {
+  safeOn(autoUpdater, 'download-progress', (p) => {
     // p has .percent (0-100), .transferred, .total, .bytesPerSecond
     send('update-download-progress', {
       percent: p.percent,
@@ -175,7 +186,7 @@ function setupUpdater(opts) {
       total: p.total
     });
   });
-  autoUpdater.on('update-downloaded', (info) => {
+  safeOn(autoUpdater, 'update-downloaded', (info) => {
     mainLog('[updater] downloaded: ' + info.version);
     send('update-downloaded', {
       version: info.version,
@@ -196,7 +207,15 @@ function setupUpdater(opts) {
       };
     } catch (e) {
       mainLog('[updater] manual check failed: ' + e.message);
-      return { ok: false, error: e.message };
+      // electron-updater's own wording is aimed at developers. The
+      // usual cause is simply that nothing has been published yet.
+      const raw = String(e.message || 'unknown');
+      const friendly = /404|No published versions|Cannot find latest/i.test(raw)
+        ? 'No release published yet to update to'
+        : /ENOTFOUND|EAI_AGAIN|ETIMEDOUT|network/i.test(raw)
+        ? 'Could not reach the update server'
+        : raw;
+      return { ok: false, error: friendly, raw };
     }
   });
   ipcMain.handle('updater:download', async () => {
