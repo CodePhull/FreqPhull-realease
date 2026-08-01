@@ -95,16 +95,6 @@ function bridgeToUpdaterWindow(channel, payload) {
   }
 }
 
-function setupUpdater(opts) {
-  if (opts && opts.log) mainLog = opts.log;
-  if (opts && opts.win) mainWin = opts.win;
-
-  // Don't run in dev/unpackaged mode - there's nothing to update.
-  // electron-updater would throw on missing app-update.yml otherwise.
-  if (!require('electron').app.isPackaged) {
-    mainLog('[updater] dev mode — skipping auto-update setup');
-    // Still register IPC handlers so renderer doesn't break on missing
-    // channels. They just respond with "not available".
 // Isolate a listener so a fault inside it cannot replace the error that
 // triggered it. autoUpdater emits 'error' synchronously from inside the
 // promise that checkForUpdates() returns, so a throw here surfaced as
@@ -116,6 +106,16 @@ function safeOn(emitter, event, fn) {
   });
 }
 
+function setupUpdater(opts) {
+  if (opts && opts.log) mainLog = opts.log;
+  if (opts && opts.win) mainWin = opts.win;
+
+  // Don't run in dev/unpackaged mode - there's nothing to update.
+  // electron-updater would throw on missing app-update.yml otherwise.
+  if (!require('electron').app.isPackaged) {
+    mainLog('[updater] dev mode — skipping auto-update setup');
+    // Still register IPC handlers so renderer doesn't break on missing
+    // channels. They just respond with "not available".
     ipcMain.handle('updater:check', () => ({ available: false, reason: 'dev' }));
     ipcMain.handle('updater:download', () => ({ ok: false, reason: 'dev' }));
     ipcMain.handle('updater:install', () => ({ ok: false, reason: 'dev' }));

@@ -53,7 +53,10 @@ function openUpdaterWindow(initialState) {
     },
   });
   updaterWindow.removeMenu();
-  updaterWindow.loadFile('renderer/updater/updater.html');
+  // Absolute, like the main window above. A relative path resolves
+  // against the working directory rather than the app, which is not the
+  // same place once packaged.
+  updaterWindow.loadFile(path.join(__dirname, 'renderer', 'updater', 'updater.html'));
   updaterWindow.once('ready-to-show', () => {
     try { updaterWindow.show(); } catch {}
     if (initialState) {

@@ -407,4 +407,21 @@ if fails:
 print('✓ PASS 18  stems are 24-bit; the preview player cannot double up')
 PY
 python3 tools/xref.py || exit 1
-echo "════════ ALL 19 GREEN ════════"
+python3 - <<'PY'
+import re, sys
+fails = []
+for f in ['updater.js','main.js','server.js','sentry-init.js']:
+    src = open(f).read()
+    depth = 0
+    for line in src.split('\n'):
+        stripped = line.strip()
+        if re.match(r'function\s+\w+\s*\(', line) and depth > 0 and not line.startswith(' '):
+            fails.append(f'{f}: "{stripped[:46]}" is declared inside a block - '
+                         'block-scoped, so calls from outside it throw')
+        if not stripped.startswith('//'):
+            depth += line.count('{') - line.count('}')
+if fails:
+    print('\u2717 PASS 20 FAILED'); [print('   -', x) for x in fails]; sys.exit(1)
+print('\u2713 PASS 20  no top-level-looking function is trapped inside a block')
+PY
+echo "════════ ALL 20 GREEN ════════"

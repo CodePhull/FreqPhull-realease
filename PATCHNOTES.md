@@ -4,7 +4,22 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
-## 0.7.16 (2026-08-01)
+## 0.7.17 (2026-08-01)
+
+**The updater stopped registering any of its handlers.** A helper added
+in the previous version landed inside an if-block rather than at module
+level. Function declarations in a block are scoped to that block, so
+every call from outside it threw - which stopped setup part-way through,
+before a single IPC handler was registered. That is why the check
+reported no handler and why the version disappeared from About: both ask
+the updater for something, and there was nothing listening. The helper is
+at module scope now, and a release check fails the build if a function
+that looks top-level is trapped inside a block.
+
+The updater window also loaded its page by a relative path, unlike the
+main window beside it. A relative path resolves against the working
+directory rather than the application, which is not the same place once
+packaged. It is absolute now.
 
 **"core.hasSpansEnabled is not a function".** Two majors of the Sentry
 SDK were in the tree at once. The packages were declared twice - once
