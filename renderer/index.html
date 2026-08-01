@@ -4393,7 +4393,13 @@ button:focus:not(:focus-visible){outline:none}
   </svg>
 </button>
 
-<script src="app.js"></script>
-<script src="daw.js"></script>
+<!-- Deferred so the opening screen paints before 780KB of script is
+     parsed. Loaded synchronously, the browser blocked on that parse
+     before its first composite, so the splash's animations sometimes
+     had not started by the time it was dismissed - the intro appeared
+     not to play at all. Defer keeps execution order and still runs
+     before DOMContentLoaded, so nothing else changes. -->
+<script src="app.js" defer></script>
+<script src="daw.js" defer></script>
 </body>
 </html>

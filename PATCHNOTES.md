@@ -4,7 +4,31 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
-## 0.7.14 (2026-07-31)
+## 0.7.15 (2026-08-01)
+
+Includes everything built as 0.7.14, which was tested but never
+published.
+
+**"log is not defined".** The updater called `log()`, which is defined
+in main.js, from updater.js. Separate modules do not share scope, so the
+call threw every time the update check hit an error. The rest of that
+file already used the right name. A release check now fails the build if
+any module calls a helper that only exists in another file.
+
+**Tracks stuck on "pending" forever.** The queue counter and the worker
+were built from different rules: the worker skipped tracks that had given
+up after repeated failures, and the counter counted them anyway. So the
+badge reported work the worker would never pick up, the loop found
+nothing eligible and stopped, and the count sat there. Both now come from
+one query. The badge also said "click to retry" while having nothing
+bound to it - clicking did nothing at all. It now clears every reason a
+track stopped being eligible and wakes the worker.
+
+**The opening screen sometimes did not animate.** The main script is
+780KB and was loaded synchronously, so the browser blocked on parsing it
+before its first composite - the splash's animations had not started by
+the time it was dismissed. Both scripts are deferred now, which lets the
+window paint first. Execution order and timing are otherwise unchanged.
 
 **Stems are written at 24-bit.** Every write in the separation pipeline
 used 16-bit, and a stem passes through several in sequence: ensemble

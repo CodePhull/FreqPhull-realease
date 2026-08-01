@@ -306,6 +306,21 @@ function svMarkPresetActive(id) {
   document.querySelectorAll('.sv-preset').forEach(b => b.classList.toggle('on', !!id && b.dataset.id === id));
 }
 
+// Clear every reason a track stopped being eligible and wake the worker.
+async function retryStuckAnalysis() {
+  try {
+    const r = await fetch(API + '/history/retry-all-analysis', { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'failed');
+    showAppNotification(
+      j.retried ? t('bgRetryStarted').replace('{n}', j.retried) : t('bgNothingStuck'),
+      'done', null, 5000
+    );
+  } catch (e) {
+    showAppNotification(t('bgRetryFailed') + ': ' + e.message, 'err', null, 6000);
+  }
+}
+
 function svRestoreVolume() {
   try {
     const v = parseFloat(localStorage.getItem('freqphull.svVolume'));
@@ -6286,6 +6301,10 @@ function renderBgAnalyzePill(d) {
       // Worker stopped but rows still pending - usually all hit retry cap
       pill.classList.add('active');
       pill.classList.remove('hidden');
+      // The pill says "click to retry" and has a pointer cursor, but
+      // nothing was ever bound to it - clicking did nothing at all.
+      pill.onclick = retryStuckAnalysis;
+      pill.title = t('bgPendingTitle');
       pill.innerHTML = '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01"/></svg> ' + d.remaining + ' ' + t('bgPending');
     } else {
       pill.classList.add('done');
@@ -10843,6 +10862,10 @@ const T = {
     // ── Background analysis pill (0.2.2) ──
     bgAnalyzing:'Analyzing',
     bgPending:'tracks pending - click to retry',
+    bgPendingTitle:'Retry the tracks that could not be analysed',
+    bgRetryStarted:'Retrying {n} tracks',
+    bgNothingStuck:'Nothing is stuck - the queue is working through them',
+    bgRetryFailed:'Could not retry',
     bgCaughtUp:'All tracks analyzed',
 
     // ── Auto-tag opt-out (0.2.2) ──
@@ -11450,6 +11473,10 @@ const T = {
     // ── Bandeau d'analyse en arrière-plan (0.2.2) ──
     bgAnalyzing:'Analyse de',
     bgPending:'pistes en attente - cliquez pour relancer',
+    bgPendingTitle:'Relancer les pistes qui n\'ont pas pu être analysées',
+    bgRetryStarted:'{n} pistes relancées',
+    bgNothingStuck:'Rien n\'est bloqué - la file avance',
+    bgRetryFailed:'Impossible de relancer',
     bgCaughtUp:'Toutes les pistes sont analysées',
 
     // ── Désactivation auto-étiquetage (0.2.2) ──

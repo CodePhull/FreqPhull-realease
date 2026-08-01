@@ -395,4 +395,5 @@ if fails:
     print('✗ PASS 18 FAILED'); [print('   -', f) for f in fails]; sys.exit(1)
 print('✓ PASS 18  stems are 24-bit; the preview player cannot double up')
 PY
-echo "════════ ALL 18 GREEN ════════"
+python3 tools/xref.py || exit 1
+echo "════════ ALL 19 GREEN ════════"

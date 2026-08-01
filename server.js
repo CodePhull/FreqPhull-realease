@@ -2106,6 +2106,24 @@ app.post('/history/:id/retry-analysis', (req, res) => {
   }
 });
 
+// Retry every track that stopped being eligible for analysis: the ones
+// that gave up after repeated failures, plus this session's failure
+// counts. The queue pill offers this, so it needs to act on all of them
+// at once rather than one at a time.
+app.post('/history/retry-all-analysis', (_, res) => {
+  try {
+    const stuck = dbAll('SELECT id FROM history WHERE analysis_gave_up=1 AND bpm IS NULL AND file_path IS NOT NULL');
+    dbRun('UPDATE history SET analysis_gave_up=0 WHERE analysis_gave_up=1 AND bpm IS NULL');
+    const inMemory = analyzeWorker.failed.size;
+    analyzeWorker.failed.clear();
+    nudgeAnalysisWorker();
+    slog('retry-all-analysis: cleared ' + stuck.length + ' gave-up + ' + inMemory + ' in-session failures');
+    res.json({ ok: true, retried: stuck.length + inMemory });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.get('/history/doctor', (req, res) => {
   const threshold = Math.min(Math.max(parseInt(req.query.threshold || '25', 10), 1), 128);
   try {
@@ -5140,22 +5158,30 @@ const analyzeWorker = {
   nudgeTimer: null,
 };
 
-function nextAnalysisCandidate() {
+// What the worker will actually pick up. The count and the candidate
+// query have to be built from the same rule: when they disagree, the
+// counter reports work that will never be done, and the queue sits at
+// "2 pending" forever because the worker looks, finds nothing eligible
+// and stops.
+function analysisCandidateWhere() {
   // bpm IS NULL is the trust signal - anything with bpm set is "done"
   // even if other fields are partial. Exclude failures at the cap.
   const failedIds = Array.from(analyzeWorker.failed.entries())
     .filter(function(e){ return e[1] >= 3; }).map(function(e){ return e[0]; });
   const exclude = failedIds.length ? (' AND id NOT IN (' + failedIds.join(',') + ')') : '';
+  return ' WHERE bpm IS NULL AND file_path IS NOT NULL AND analysis_gave_up=0' + exclude;
+}
+
+function nextAnalysisCandidate() {
   const rows = dbAll(
-    'SELECT id, title, file_path FROM history' +
-    ' WHERE bpm IS NULL AND file_path IS NOT NULL AND analysis_gave_up=0' + exclude +
+    'SELECT id, title, file_path FROM history' + analysisCandidateWhere() +
     ' ORDER BY id DESC LIMIT 1');
   return rows.length ? rows[0] : null;
 }
 
 function refreshAnalysisQueueSize() {
   try {
-    const r = dbAll('SELECT COUNT(*) AS n FROM history WHERE bpm IS NULL AND file_path IS NOT NULL');
+    const r = dbAll('SELECT COUNT(*) AS n FROM history' + analysisCandidateWhere());
     analyzeWorker.queueSize = r[0] ? r[0].n : 0;
   } catch (e) { analyzeWorker.queueSize = 0; }
 }

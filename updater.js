@@ -163,7 +163,7 @@ function setupUpdater(opts) {
     manualCheckInProgress = false;
   });
   autoUpdater.on('error', (err) => {
-    log('autoUpdater error: ' + (err && err.message));
+    mainLog('autoUpdater error: ' + (err && err.message));
     send('update-error', { message: (err && err.message) || 'Unknown error' });
   });
   autoUpdater.on('download-progress', (p) => {
