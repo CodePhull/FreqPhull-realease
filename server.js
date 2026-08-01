@@ -5156,6 +5156,9 @@ const analyzeWorker = {
   queueSize: 0,            // last known size (for status endpoint)
   failed: new Map(),       // historyId -> fail count
   nudgeTimer: null,
+  // Set when a wake-up arrives while the loop is already running, so
+  // the request is honoured instead of discarded.
+  rerun: false,
 };
 
 // What the worker will actually pick up. The count and the candidate
@@ -5371,8 +5374,15 @@ function analyzeOneInBackground(row) {
 }
 
 async function analysisWorkerLoop() {
-  if (analyzeWorker.running) return;
+  // A nudge that arrives while the worker is busy used to be dropped on
+  // the floor: this returned, and nothing re-checked afterwards. So a
+  // track downloaded while another was being analysed was never picked
+  // up - which is why downloading three at once left some unanalysed.
+  // Record the request instead, and the running loop takes another pass
+  // before it finishes.
+  if (analyzeWorker.running) { analyzeWorker.rerun = true; return; }
   analyzeWorker.running = true;
+  analyzeWorker.rerun = false;
   try {
     while (true) {
       refreshAnalysisQueueSize();
@@ -5387,7 +5397,18 @@ async function analysisWorkerLoop() {
   } finally {
     analyzeWorker.running = false;
     refreshAnalysisQueueSize();
-    broadcastEvent('bg-analyze', { state: 'idle', remaining: analyzeWorker.queueSize });
+    // Anything that arrived mid-run gets its pass now. The queue query
+    // is the authority, so this is also a safety net: if work remains,
+    // keep going rather than reporting idle with tracks outstanding.
+    if (analyzeWorker.rerun || analyzeWorker.queueSize > 0) {
+      analyzeWorker.rerun = false;
+      setTimeout(function () {
+        analysisWorkerLoop().catch(function (e) { slog('analysis worker re-run failed: ' + e.message); });
+      }, 400);
+      broadcastEvent('bg-analyze', { state: 'progress', current: null, remaining: analyzeWorker.queueSize });
+    } else {
+      broadcastEvent('bg-analyze', { state: 'idle', remaining: analyzeWorker.queueSize });
+    }
   }
 }
 
@@ -5403,7 +5424,11 @@ function nudgeAnalysisWorker() {
   // shows a confusing "engines missing" toast WHILE setup is making
   // progress in the modal next door.
   if (setupRunning) return;
-  if (analyzeWorker.nudgeTimer) clearTimeout(analyzeWorker.nudgeTimer);
+  if (analyzeWorker.running) { analyzeWorker.rerun = true; return; }
+  // Coalesce a burst into one start, but never let a steady stream of
+  // downloads keep pushing that start further away: the first nudge
+  // fixes when the loop begins.
+  if (analyzeWorker.nudgeTimer) return;
   analyzeWorker.nudgeTimer = setTimeout(function(){
     analyzeWorker.nudgeTimer = null;
     analysisWorkerLoop().catch(function(e){ slog('analysis worker loop crashed: ' + e.message); });

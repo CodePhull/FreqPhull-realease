@@ -4,7 +4,23 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
-## 0.7.17 (2026-08-01)
+## 0.7.18 (2026-08-01)
+
+**Downloading several tracks at once left some unanalysed.** The
+background worker ignored any wake-up that arrived while it was already
+running, and nothing re-checked afterwards - so a track that finished
+downloading during another track's analysis was never picked up. With
+three downloads landing together, the first would start the worker and
+the other two would be dropped. Requests are now recorded rather than
+discarded, and the worker takes another pass before it reports itself
+idle, with the queue count as the authority: if work remains, it keeps
+going. Verified against the exact case, with two tracks arriving
+mid-analysis.
+
+To be clear about the setting, since the two are easy to confuse: the
+auto-analyse option only controls whether the app jumps to the Analyzer
+page. Every downloaded track is analysed in the background regardless,
+so BPM and key are ready when the track is opened.
 
 **The updater stopped registering any of its handlers.** A helper added
 in the previous version landed inside an if-block rather than at module
