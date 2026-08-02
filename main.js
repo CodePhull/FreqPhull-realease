@@ -287,9 +287,17 @@ function createTray() {
   // generated from the full-size logo with the strokes thickened first,
   // and carries every size Windows asks for (16 through 64 for high
   // DPI), so the shell picks the right one instead of us downsampling.
-  const trayIconPath = process.platform === 'win32'
-    ? path.join(__dirname, 'assets', 'tray.ico')
-    : path.join(__dirname, 'assets', 'logo.png');
+  // Read it from resources first. Inside app.asar there is no real file
+  // on disk, and the Windows shell cannot open a path into an archive -
+  // it just renders nothing, with no error anywhere. The same trap hid
+  // the Python scripts in 0.6.6.
+  const trayName = process.platform === 'win32' ? 'tray.ico' : 'logo.png';
+  const trayCandidates = [
+    process.resourcesPath ? path.join(process.resourcesPath, 'assets', trayName) : null,
+    path.join(__dirname, 'assets', trayName),
+  ].filter(Boolean);
+  let trayIconPath = trayCandidates.find(p => { try { return fs.existsSync(p); } catch { return false; } })
+    || trayCandidates[trayCandidates.length - 1];
   let trayIcon;
   try {
     trayIcon = nativeImage.createFromPath(trayIconPath);
@@ -300,7 +308,15 @@ function createTray() {
   } catch {
     trayIcon = nativeImage.createEmpty();
   }
-  if (trayIcon.isEmpty()) log('tray: icon could not be loaded from ' + trayIconPath);
+  // Say what happened either way: a tray icon that silently fails to
+  // load looks identical to one that was never set.
+  if (trayIcon.isEmpty()) {
+    log('tray: icon EMPTY after loading ' + trayIconPath +
+        ' (exists=' + (() => { try { return fs.existsSync(trayIconPath); } catch { return '?'; } })() + ')');
+  } else {
+    const sz = trayIcon.getSize();
+    log('tray: icon loaded from ' + trayIconPath + ' (' + sz.width + 'x' + sz.height + ')');
+  }
 
   tray = new Tray(trayIcon);
   tray.setToolTip('Freq.Phull');

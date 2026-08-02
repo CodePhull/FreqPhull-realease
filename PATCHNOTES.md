@@ -4,7 +4,16 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
-## 0.7.31 (2026-08-02)
+## 0.7.32 (2026-08-02)
+
+**The tray icon was inside the archive.** Generating it properly in
+0.7.31 was necessary but not sufficient: the file was packed into
+app.asar, and Windows cannot read an icon from inside an archive. There
+is no error for this - the shell is handed a path it cannot open and
+draws nothing, which looks exactly like no icon having been set. It is
+now shipped unpacked alongside the Python scripts, which hit the same
+trap in 0.6.6, and the app looks there first. The result is written to
+the log either way, so a silent failure cannot happen twice.
 
 **The tray icon was invisible.** It was the application icon shrunk to
 sixteen pixels at runtime, and the mark is thin strokes on transparency -

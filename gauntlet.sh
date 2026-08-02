@@ -578,7 +578,16 @@ else:
     for _want in (16, 20, 32):
         if _want not in _have:
             fails.append(f'tray.ico has no {_want}px frame (has {sorted(_have)})')
+# Anything the OS opens by path must exist outside app.asar. Windows
+# cannot read an icon from inside the archive, and fails silently.
+_pkg = json.load(open('package.json'))
+_extra = {r.get('from') for r in _pkg['build'].get('extraResources', []) if isinstance(r, dict)}
+for _need in ('assets/tray.ico', 'assets/icon.ico'):
+    if _need not in _extra:
+        fails.append(f'{_need} is not in extraResources - the shell cannot read it inside app.asar')
 _mj = open('main.js').read()
+if 'process.resourcesPath' not in _mj[_mj.find('trayCandidates') - 400:_mj.find('trayCandidates') + 400] if 'trayCandidates' in _mj else True:
+    fails.append('main.js does not look for the tray icon in resources')
 if "'tray.ico'" not in _mj:
     fails.append('main.js no longer uses tray.ico for the tray')
 if re.search(r'trayIcon\s*=\s*trayIcon\.resize', _mj):

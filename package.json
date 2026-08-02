@@ -1,6 +1,6 @@
 {
   "name": "freqphull",
-  "version": "0.7.31",
+  "version": "0.7.32",
   "description": "Freq.Phull",
   "main": "main.js",
   "scripts": {
@@ -144,6 +144,14 @@
       {
         "from": "mastering.py",
         "to": "mastering.py"
+      },
+      {
+        "from": "assets/tray.ico",
+        "to": "assets/tray.ico"
+      },
+      {
+        "from": "assets/icon.ico",
+        "to": "assets/icon.ico"
       }
     ],
     "compression": "maximum",
