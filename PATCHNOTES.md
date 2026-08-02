@@ -4,7 +4,16 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
-## 0.7.32 (2026-08-02)
+## 0.7.33 (2026-08-02)
+
+**Correct marks in the right places.** The application icon is now the
+gothic monogram, and the tray uses the interlocked mark - which is the
+better shape for it, since it stays legible at sixteen pixels where fine
+gothic strokes cannot. Both are generated at every size the shell asks
+for rather than resized at runtime, and both are cropped and squared
+first so nothing is stretched or floats in leftover padding. The window
+chrome, the opening screen and the installer artwork are regenerated
+from the same source, so no old mark is left anywhere.
 
 **The tray icon was inside the archive.** Generating it properly in
 0.7.31 was necessary but not sufficient: the file was packed into
