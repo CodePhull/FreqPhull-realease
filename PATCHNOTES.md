@@ -4,7 +4,25 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
-## 0.7.29 (2026-08-02)
+## 0.7.30 (2026-08-02)
+
+**Downloads gave up on analysis instead of running it.** Filing a track
+into the stockpile moves the file and rewrites its path, and that was
+happening after analysis had already been queued. The worker then looked
+at where the file used to be, found nothing, and concluded it was gone -
+which is treated as permanent, because a genuinely missing file is a job
+for the library doctor rather than more attempts. So the very feature
+that files tracks automatically was disqualifying them from analysis.
+
+Two changes. Filing now happens before analysis is queued, so the path
+is settled first. And a file that appears to be missing is no longer
+taken at face value: the worker re-reads the row and follows the move if
+the path simply changed. Either fix alone would have solved it; together
+they hold even if something else moves a file mid-queue.
+
+Tracks already marked as given up by this are cleared on the next launch,
+provided their file is where the library says it is. Anything genuinely
+missing keeps its mark and stays out of the queue.
 
 **The installer build failed on a warning.** electron-builder compiles
 the installer and the uninstaller in two separate passes, and the dark

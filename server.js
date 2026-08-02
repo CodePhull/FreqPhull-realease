@@ -1870,13 +1870,17 @@ app.get('/download', async (req, res) => {
     // extension) that history gained a row, so their History tab can
     // refresh + pulse the new entry without a manual reload.
     broadcastEvent('history-changed', { reason: 'download', historyId });
-    nudgeAnalysisWorker();
-    // File it into the stockpile if the user asked for that. The desktop
+    // File it into the stockpile BEFORE queueing analysis. The desktop
     // already did this for its own downloads, but the extension and the
     // watch folder did not, so the same setting behaved differently
-    // depending on where a track came from. Doing it here covers every
-    // source at once.
+    // depending on where a track came from.
+    //
+    // Order matters: filing moves the file and rewrites the row's path.
+    // Queueing first left a window where the worker could read the old
+    // path, find nothing there, and give up permanently on a track that
+    // was perfectly fine.
     try { autoFileIntoStockpile(historyId); } catch (e) { slog('auto-file failed: ' + e.message); }
+    nudgeAnalysisWorker();
     res.end();
   });
   }  // end attachListeners
@@ -5251,14 +5255,23 @@ function refreshAnalysisQueueSize() {
 function analyzeOneInBackground(row) {
   return new Promise(function(resolve){
     if (!fs.existsSync(row.file_path)) {
-      // A missing file is a different problem than a bad one - the
-      // library doctor / repair-history tools are what fix this, not
-      // more analysis attempts. Give up immediately and persist it so
-      // restarts don't keep rediscovering the same missing file.
-      slog('bg-analyze: file missing, giving up: ' + row.file_path);
-      try { dbRun('UPDATE history SET analysis_gave_up=1 WHERE id=?', [row.id]); } catch (e) {}
-      analyzeWorker.failed.set(row.id, 3);
-      return resolve(false);
+      // The path may simply have moved since this row was queued -
+      // filing into the stockpile rewrites it - so re-read the row
+      // before concluding anything is wrong.
+      let fresh = null;
+      try { fresh = dbAll('SELECT file_path FROM history WHERE id=?', [row.id])[0]; } catch {}
+      if (fresh && fresh.file_path && fresh.file_path !== row.file_path
+          && fs.existsSync(fresh.file_path)) {
+        slog('bg-analyze: path moved, following it: ' + fresh.file_path);
+        row.file_path = fresh.file_path;
+      } else {
+        // Genuinely gone. The library doctor and repair tools fix this,
+        // not more analysis attempts, so persist it and stop.
+        slog('bg-analyze: file missing, giving up: ' + row.file_path);
+        try { dbRun('UPDATE history SET analysis_gave_up=1 WHERE id=?', [row.id]); } catch (e) {}
+        analyzeWorker.failed.set(row.id, 3);
+        return resolve(false);
+      }
     }
     const scriptSrc = getResourcePath('analyze.py');
     if (!scriptSrc) { slog('bg-analyze: analyze.py not found, worker stopping'); return resolve(false); }
@@ -7194,6 +7207,33 @@ setInterval(() => {
     slog('temp-sweep periodic failed: ' + e.message);
   }
 }, 6 * 3600 * 1000).unref();
+
+// One-time correction for tracks marked as given up by a path race that
+// was fixed in 0.7.30: filing into the stockpile moved the file after
+// analysis had been queued, so the worker looked at the old location,
+// found nothing there, and gave up permanently. Anything whose file is
+// present becomes eligible again; anything genuinely missing keeps its
+// mark and stays out of the queue.
+setTimeout(function () {
+  try {
+    const rows = dbAll('SELECT id, file_path FROM history ' +
+      'WHERE analysis_gave_up=1 AND bpm IS NULL AND file_path IS NOT NULL');
+    let cleared = 0;
+    for (const r of rows) {
+      try {
+        if (r.file_path && fs.existsSync(r.file_path)) {
+          dbRun('UPDATE history SET analysis_gave_up=0 WHERE id=?', [r.id]);
+          cleared++;
+        }
+      } catch {}
+    }
+    if (cleared) {
+      saveDB();
+      slog('recovered ' + cleared + ' track(s) that gave up while their file was being moved');
+      nudgeAnalysisWorker();
+    }
+  } catch (e) { slog('gave-up correction failed: ' + e.message); }
+}, 12000);
 
 // ── Automatic recovery for tracks left unanalysed ──────────────────
 //
