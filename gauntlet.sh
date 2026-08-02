@@ -563,35 +563,41 @@ if os.path.exists('assets/installer.nsh'):
 
 if fails:
     print('\u2717 PASS 21 FAILED'); [print('   -', x) for x in fails]; sys.exit(1)
-# The tray icon is thin strokes on transparency, so it has to be
-# generated at each size rather than downsampled - a resized 16px frame
-# left about a quarter of its pixels visible, which reads as nothing on
-# a dark tray.
+# Windows cannot read a path inside app.asar, so the tray icon must ship
+# unpacked. That, not the artwork, is what left the tray blank.
+_pkg = json.load(open('package.json'))
+_extra = {r.get('from') for r in _pkg['build'].get('extraResources', []) if isinstance(r, dict)}
+if 'assets/icon.ico' not in _extra:
+    fails.append('assets/icon.ico is not in extraResources - the shell cannot read it inside app.asar')
+_mj = open('main.js').read()
+if 'process.resourcesPath' not in _mj[max(0, _mj.find('trayCandidates') - 500):_mj.find('trayCandidates') + 500]:
+    fails.append('main.js does not look for the tray icon in resources')
+if fails:
+    print('\u2717 PASS 21 FAILED'); [print('   -', x) for x in fails]; sys.exit(1)
 import struct as _st
-_tp = 'assets/tray.ico'
-if not os.path.exists(_tp):
-    fails.append('assets/tray.ico is missing - the tray would fall back to a shrunk app icon')
+_ip = 'assets/icon.ico'
+if not os.path.exists(_ip):
+    fails.append('assets/icon.ico is missing')
 else:
-    _d = open(_tp, 'rb').read()
+    _d = open(_ip, 'rb').read()
     _n = _st.unpack('<H', _d[4:6])[0]
     _have = {(_d[6 + i * 16] or 256) for i in range(_n)}
-    for _want in (16, 20, 32):
+    for _want in (16, 32, 256):
         if _want not in _have:
-            fails.append(f'tray.ico has no {_want}px frame (has {sorted(_have)})')
+            fails.append(f'icon.ico has no {_want}px frame (has {sorted(_have)})')
 # Anything the OS opens by path must exist outside app.asar. Windows
 # cannot read an icon from inside the archive, and fails silently.
 _pkg = json.load(open('package.json'))
 _extra = {r.get('from') for r in _pkg['build'].get('extraResources', []) if isinstance(r, dict)}
-for _need in ('assets/tray.ico', 'assets/icon.ico'):
-    if _need not in _extra:
-        fails.append(f'{_need} is not in extraResources - the shell cannot read it inside app.asar')
+# Windows cannot read a path inside app.asar, so the icon the tray loads
+# must ship unpacked. That, rather than the artwork, is what left the
+# tray blank in 0.7.29 through 0.7.33.
+if 'assets/icon.ico' not in _extra:
+    fails.append('assets/icon.ico is not in extraResources - the shell cannot read it inside app.asar')
 _mj = open('main.js').read()
-if 'process.resourcesPath' not in _mj[_mj.find('trayCandidates') - 400:_mj.find('trayCandidates') + 400] if 'trayCandidates' in _mj else True:
-    fails.append('main.js does not look for the tray icon in resources')
-if "'tray.ico'" not in _mj:
-    fails.append('main.js no longer uses tray.ico for the tray')
-if re.search(r'trayIcon\s*=\s*trayIcon\.resize', _mj):
-    fails.append('main.js resizes the tray icon, which is what made it invisible')
+_i = _mj.find('trayCandidates')
+if _i < 0 or 'process.resourcesPath' not in _mj[max(0, _i - 600):_i + 600]:
+    fails.append('main.js does not look for the tray icon in resources first')
 if fails:
     print('\u2717 PASS 21 FAILED'); [print('   -', x) for x in fails]; sys.exit(1)
 print('\u2713 PASS 21  installer wizard valid; tray icon generated at native sizes')

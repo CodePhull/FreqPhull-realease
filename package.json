@@ -1,6 +1,6 @@
 {
   "name": "freqphull",
-  "version": "0.7.33",
+  "version": "0.7.34",
   "description": "Freq.Phull",
   "main": "main.js",
   "scripts": {
@@ -144,10 +144,6 @@
       {
         "from": "mastering.py",
         "to": "mastering.py"
-      },
-      {
-        "from": "assets/tray.ico",
-        "to": "assets/tray.ico"
       },
       {
         "from": "assets/icon.ico",

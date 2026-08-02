@@ -279,40 +279,33 @@ app.on('before-quit', () => {
 
 // ── System Tray ───────────────────────────────────────────────────────────────
 function createTray() {
-  // A dedicated tray icon, not the app icon shrunk down.
+  // The 0.7.12 setup, which worked: the app icon, resized to 16.
   //
-  // The mark is thin strokes on transparency. Taking one frame out of
-  // icon.ico and resizing it to 16 pixels left about a quarter of the
-  // pixels visible, which on a dark tray is nothing at all. tray.ico is
-  // generated from the full-size logo with the strokes thickened first,
-  // and carries every size Windows asks for (16 through 64 for high
-  // DPI), so the shell picks the right one instead of us downsampling.
-  // Read it from resources first. Inside app.asar there is no real file
-  // on disk, and the Windows shell cannot open a path into an archive -
-  // it just renders nothing, with no error anywhere. The same trap hid
-  // the Python scripts in 0.6.6.
-  const trayName = process.platform === 'win32' ? 'tray.ico' : 'logo.png';
+  // The one change kept from the attempts since is reading it from
+  // resources first. Windows cannot open a path inside app.asar, so in a
+  // packaged build there is no file there to load and the tray renders
+  // nothing - which is what the last few versions were actually hitting,
+  // not the artwork.
+  const trayName = process.platform === 'win32' ? 'icon.ico' : 'logo.png';
   const trayCandidates = [
     process.resourcesPath ? path.join(process.resourcesPath, 'assets', trayName) : null,
     path.join(__dirname, 'assets', trayName),
   ].filter(Boolean);
-  let trayIconPath = trayCandidates.find(p => { try { return fs.existsSync(p); } catch { return false; } })
-    || trayCandidates[trayCandidates.length - 1];
+  const trayIconPath = trayCandidates.find(p => {
+    try { return fs.existsSync(p); } catch { return false; }
+  }) || trayCandidates[trayCandidates.length - 1];
+
   let trayIcon;
   try {
     trayIcon = nativeImage.createFromPath(trayIconPath);
-    if (trayIcon.isEmpty()) {
-      // Fall back rather than showing nothing.
-      trayIcon = nativeImage.createFromPath(path.join(__dirname, 'assets', 'icon.ico'));
-    }
+    trayIcon = trayIcon.resize({ width: 16, height: 16 });
   } catch {
     trayIcon = nativeImage.createEmpty();
   }
-  // Say what happened either way: a tray icon that silently fails to
-  // load looks identical to one that was never set.
+  // Say what happened either way: a tray icon that fails to load looks
+  // exactly like one that was never set.
   if (trayIcon.isEmpty()) {
-    log('tray: icon EMPTY after loading ' + trayIconPath +
-        ' (exists=' + (() => { try { return fs.existsSync(trayIconPath); } catch { return '?'; } })() + ')');
+    log('tray: icon EMPTY from ' + trayIconPath);
   } else {
     const sz = trayIcon.getSize();
     log('tray: icon loaded from ' + trayIconPath + ' (' + sz.width + 'x' + sz.height + ')');

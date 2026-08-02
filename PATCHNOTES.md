@@ -4,7 +4,16 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
-## 0.7.33 (2026-08-02)
+## 0.7.34 (2026-08-02)
+
+**Icons restored to the 0.7.12 artwork.** Several versions of trying to
+improve them made things worse, and the artwork was never the problem:
+the icon was packed inside app.asar, which Windows cannot read a path
+into, so nothing rendered regardless of what the file contained. The
+original icon is back, byte for byte, along with the window and
+installer artwork drawn from it. The one change kept is reading it from
+resources rather than the archive, which is the fix that was actually
+needed.
 
 **Correct marks in the right places.** The application icon is now the
 gothic monogram, and the tray uses the interlocked mark - which is the
