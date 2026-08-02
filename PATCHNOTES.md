@@ -4,7 +4,16 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
-## 0.7.30 (2026-08-02)
+## 0.7.31 (2026-08-02)
+
+**The tray icon was invisible.** It was the application icon shrunk to
+sixteen pixels at runtime, and the mark is thin strokes on transparency -
+after that resize only about a quarter of the pixels carried any colour,
+which on a dark tray amounts to nothing. There is now a tray icon
+generated from the full-size logo with the strokes thickened before
+shrinking, carrying every size Windows asks for, so the shell chooses a
+frame rather than us downsampling one. Coverage at sixteen pixels went
+from a quarter to two thirds.
 
 **Downloads gave up on analysis instead of running it.** Filing a track
 into the stockpile moves the file and rewrites its path, and that was

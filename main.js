@@ -279,17 +279,28 @@ app.on('before-quit', () => {
 
 // ── System Tray ───────────────────────────────────────────────────────────────
 function createTray() {
-  const iconPath = process.platform === 'win32'
-    ? path.join(__dirname, 'assets', 'icon.ico')
+  // A dedicated tray icon, not the app icon shrunk down.
+  //
+  // The mark is thin strokes on transparency. Taking one frame out of
+  // icon.ico and resizing it to 16 pixels left about a quarter of the
+  // pixels visible, which on a dark tray is nothing at all. tray.ico is
+  // generated from the full-size logo with the strokes thickened first,
+  // and carries every size Windows asks for (16 through 64 for high
+  // DPI), so the shell picks the right one instead of us downsampling.
+  const trayIconPath = process.platform === 'win32'
+    ? path.join(__dirname, 'assets', 'tray.ico')
     : path.join(__dirname, 'assets', 'logo.png');
   let trayIcon;
   try {
-    trayIcon = nativeImage.createFromPath(iconPath);
-    // Resize to 16x16 for tray
-    trayIcon = trayIcon.resize({ width: 16, height: 16 });
+    trayIcon = nativeImage.createFromPath(trayIconPath);
+    if (trayIcon.isEmpty()) {
+      // Fall back rather than showing nothing.
+      trayIcon = nativeImage.createFromPath(path.join(__dirname, 'assets', 'icon.ico'));
+    }
   } catch {
     trayIcon = nativeImage.createEmpty();
   }
+  if (trayIcon.isEmpty()) log('tray: icon could not be loaded from ' + trayIconPath);
 
   tray = new Tray(trayIcon);
   tray.setToolTip('Freq.Phull');

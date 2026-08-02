@@ -563,7 +563,29 @@ if os.path.exists('assets/installer.nsh'):
 
 if fails:
     print('\u2717 PASS 21 FAILED'); [print('   -', x) for x in fails]; sys.exit(1)
-print('\u2713 PASS 21  installer wizard is enabled with valid NSIS artwork')
+# The tray icon is thin strokes on transparency, so it has to be
+# generated at each size rather than downsampled - a resized 16px frame
+# left about a quarter of its pixels visible, which reads as nothing on
+# a dark tray.
+import struct as _st
+_tp = 'assets/tray.ico'
+if not os.path.exists(_tp):
+    fails.append('assets/tray.ico is missing - the tray would fall back to a shrunk app icon')
+else:
+    _d = open(_tp, 'rb').read()
+    _n = _st.unpack('<H', _d[4:6])[0]
+    _have = {(_d[6 + i * 16] or 256) for i in range(_n)}
+    for _want in (16, 20, 32):
+        if _want not in _have:
+            fails.append(f'tray.ico has no {_want}px frame (has {sorted(_have)})')
+_mj = open('main.js').read()
+if "'tray.ico'" not in _mj:
+    fails.append('main.js no longer uses tray.ico for the tray')
+if re.search(r'trayIcon\s*=\s*trayIcon\.resize', _mj):
+    fails.append('main.js resizes the tray icon, which is what made it invisible')
+if fails:
+    print('\u2717 PASS 21 FAILED'); [print('   -', x) for x in fails]; sys.exit(1)
+print('\u2713 PASS 21  installer wizard valid; tray icon generated at native sizes')
 PY
 python3 - <<'PY'
 import re, sys, collections
