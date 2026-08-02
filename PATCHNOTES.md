@@ -4,7 +4,174 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
-## 0.7.18 (2026-08-01)
+## 0.7.29 (2026-08-02)
+
+**The installer build failed on a warning.** electron-builder compiles
+the installer and the uninstaller in two separate passes, and the dark
+theming put uninstaller code in a file both passes read. During the
+installer pass NSIS found uninstaller code with nothing to write it into
+and warned about it, which electron-builder treats as an error. That
+half now compiles only in the pass that owns it.
+
+**Tracks left unanalysed now recover on their own.** Anything with no
+tempo and a file on disk is outstanding work, whatever the reason - the
+app closed mid-queue, the engines were missing at the time, or a fault
+stopped the worker. Asking the user to press a button to recover from
+that is asking them to clean up after the app.
+
+There are three moments where it now catches up by itself: shortly after
+startup, every half hour, and the moment the engines come back after
+being unavailable. That last one matters most, since tracks that failed
+during an outage failed because of the outage rather than anything wrong
+with the files.
+
+The retry stays bounded. Each sweep clears the in-session failure counts,
+so a transient problem cannot permanently disqualify a track, but a file
+that is genuinely unreadable fails its three attempts and settles back
+out of the queue - verified as three retries per half hour rather than a
+loop. The pending badge still responds to a click for anyone who wants it
+sooner, but it no longer instructs: it reports what is waiting.
+
+**Downloads were never analysed in the background.** The function that
+wakes the analysis worker checks a flag saying whether engine setup is
+running. That flag was declared with `let` thousands of lines below the
+function that reads it, and `let` is not hoisted - so every call threw a
+ReferenceError before it could look at the queue. Nothing was ever
+queued, no error surfaced anywhere, and opening a track worked because
+that is a different path entirely. The declaration now sits above every
+reader.
+
+This is the fourth fault of this exact shape, so the release check now
+verifies that the variables gating real work are declared before the
+functions that read them, rather than relying on review to catch it.
+
+**The installer build failed on the uninstaller.** NSIS keeps the
+installer and the uninstaller in separate namespaces and requires every
+uninstaller function to carry an "un." prefix. The dark theming used one
+shared callback for both, so building the uninstaller aborted with "Call
+must be used with function names starting with un.". There are now two
+callbacks with identical bodies, one per namespace. A page-level hook
+that would have had the same problem was removed with it - it binds to
+whichever page is declared next, which in a shared include can be an
+uninstaller page.
+
+The release check now knows the rule: an uninstaller callback must be
+prefixed, an installer callback must not be, and the page-level hook has
+no place in a shared include.
+
+**The stockpile can be where downloads land, not where they are sent
+afterwards.** A new setting points downloads at the stockpile instead of
+the Downloads folder. Filing a track then becomes a move within one
+folder tree rather than a haul across drives, and anything the matcher
+cannot place waits in an _Inbox beside the style folders instead of
+mixing in with ordinary downloads. The switch refuses to turn on until a
+stockpile folder exists, since otherwise it would appear to do nothing.
+
+**Automatic filing now covers every download.** The desktop app asked
+the server to tag and file its own downloads, but the Chrome extension
+and the watch folder did not - so the same setting behaved differently
+depending on where a track came from. That decision now lives on the
+server, in one place, and applies to all three.
+
+**The installer is dark.** It built and ran, but NSIS ships a light grey
+wizard, so a dark application was arriving inside a white window that
+looked like it belonged to something else. The page surface, the header
+strip, both header labels and the branding line are now painted in the
+app's own colours. The header controls need repainting as each page is
+shown rather than once at startup, because MUI creates them with system
+colours already baked in.
+
+**The updater window had no icon in the taskbar.** It set one, but by a
+relative path, which resolves against the working directory rather than
+the application - so once packaged it fell back to Electron's default.
+The main window beside it already used an absolute path. This is the
+third fault of that exact shape; a sweep found no others remaining.
+
+The release check now validates the installer script's structure -
+balanced blocks, callbacks that exist, valid colour values - because a
+mistake in any of them aborts the build several minutes in.
+
+**The installer still would not build.** The wizard script reads its
+header image through NSIS's build-resources variable, which resolves to
+whatever `directories.buildResources` is set to - and that defaults to a
+`build` folder this project does not have. The bitmaps live in `assets`,
+alongside the icon and the script itself, so the setting now points
+there. Nothing moved; one line was wrong.
+
+The release check now resolves every path the installer depends on, both
+the ones read through that variable and the ones named directly in the
+config, so a wrong folder fails here rather than several minutes into a
+build.
+
+**The installer would not build.** Two faults in the wizard work.
+
+electron-builder writes its own NSIS symbols from the config before
+including the custom script, so the script setting the same sidebar
+bitmap and icons made makensis abort with "already defined" and no
+installer was produced at all. The script now sets only what the config
+cannot express - the header image and the page copy - and guards every
+definition so a future version of electron-builder claiming one of them
+cannot break the build again.
+
+The integrity manifest was also missing. It is generated by the prebuild
+step, which npm runs automatically before `npm run build` but not before
+a direct `npx electron-builder` call. There is now a `publish-win`
+script that carries its own prebuild, so publishing cannot skip it.
+
+A release check fails the build if the installer script redefines
+anything electron-builder already sets, or defines anything without a
+guard.
+
+**Three translation keys were defined twice.** JavaScript keeps only the
+last of two identical keys in an object literal, silently - so two of
+these were showing the wrong text, and editing the first definition
+changed nothing at all. "Engines ready" showed a shorter message than
+the one written for it, and a stockpile label and a confirmation toast
+were sharing a single key while meaning different things. Each now has
+one definition, and a release check fails the build on any duplicate.
+
+**The installer has a proper wizard.** It was set to one-click, which
+skips straight to a progress dialog - so the first thing anyone saw of
+Freq.Phull was a bar with no explanation, and the welcome text sitting in
+the installer script had been silently discarded for months.
+
+Three pages now: what the app does, the install itself, and a finish page
+that says the engine download is coming. That last one matters most -
+without it, being asked for a large download moments after installing
+feels like a second, unannounced installer.
+
+No download size is quoted anywhere. A number reads as a cost before
+anyone knows what they are getting, and the figure would be wrong for
+anyone who skips the optional engines.
+
+The sidebar and header artwork are generated from the app's own logo at
+the sizes NSIS requires, rather than drawn by hand, so they stay correct
+if the mark changes. A release check verifies the wizard is still
+enabled, that the artwork is a real BMP at the right dimensions, that the
+script stays ASCII with CRLF endings as NSIS needs, and that no size has
+crept back into the copy.
+
+**Engine setup shows what it is doing.** A single bar for a ten minute
+install cannot say whether four still minutes are progress or a hang,
+which is when people force-quit an install that was working. The stages
+are now listed - runtime, numerical libraries, PyTorch, separation
+models, transcription, verification - each showing whether it is done,
+running or waiting, with the running one carrying its own bar. A long
+pause now has a name.
+
+The overall bar is weighted by how long each stage actually takes rather
+than by how many there are. PyTorch alone is a third of the wait, so
+counting steps would park the bar and leave it there; the time remaining
+comes from the same weights. Failure marks the stage it stopped on
+instead of clearing the list, so it is clear how far it got.
+
+**Hiding the setup window no longer looks like cancelling it.** Setup
+keeps running when hidden, which it always did, but reopening the window
+offered to begin a fresh install rather than rejoining the one in
+progress - and hiding it said nothing at all. It now rejoins, and hiding
+leaves a note that says so and brings the window back when clicked.
+Fixed alongside: a variable read before its declaration in that path,
+which would have thrown.
 
 **Downloading several tracks at once left some unanalysed.** The
 background worker ignored any wake-up that arrived while it was already

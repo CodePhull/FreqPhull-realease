@@ -46,7 +46,11 @@ function openUpdaterWindow(initialState) {
     alwaysOnTop: isInstalling,
     center: true,
     show: false, frame: false, titleBarStyle: 'hidden',
-    backgroundColor: '#0a0a0a', icon: 'assets/icon.ico',
+    backgroundColor: '#0a0a0a',
+    // Absolute, like the main window. A relative path resolves against
+    // the working directory rather than the app, so once packaged the
+    // window fell back to the default Electron icon.
+    icon: path.join(__dirname, 'assets', 'icon.ico'),
     webPreferences: {
       preload: require('path').join(__dirname, 'updater-preload.js'),
       contextIsolation: true, nodeIntegration: false, sandbox: false,

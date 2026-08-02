@@ -1611,6 +1611,55 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .setup-buttons{display:flex;flex-direction:column;gap:0}
 .setup-fineprint{font-size:11px;color:var(--hint);text-align:center;margin-top:14px;line-height:1.5}
 .setup-step{font-size:14px;font-weight:500;color:var(--white);margin-bottom:14px;text-align:center}
+
+/* ── Engine setup stages ───────────────────────────────────────────
+   A single bar for a five to ten minute install says nothing useful:
+   at forty percent you cannot tell two minutes from eight, and a long
+   still moment reads as a hang. Naming the stages gives every wait a
+   position in a sequence. */
+.setup-stages{ display:flex; flex-direction:column; gap:2px; margin-bottom:18px }
+.setup-stage{
+  display:grid; grid-template-columns:22px 1fr auto; align-items:center;
+  gap:11px; padding:9px 11px; border-radius:var(--r);
+  transition:background 200ms var(--e-out);
+}
+.setup-stage.active{ background:var(--bg3) }
+.setup-stage-icon{
+  width:22px; height:22px; display:grid; place-items:center; border-radius:50%;
+  border:1.5px solid var(--border2); color:var(--hint);
+  font-size:10px; font-variant-numeric:tabular-nums;
+  transition:all 220ms var(--e-out);
+}
+.setup-stage.done .setup-stage-icon{ border-color:var(--accent-dim); color:var(--accent) }
+.setup-stage.active .setup-stage-icon{ border-color:var(--accent); color:var(--accent) }
+.setup-stage.failed .setup-stage-icon{ border-color:var(--red); color:var(--red) }
+.setup-stage-icon svg{ width:12px; height:12px }
+.setup-stage-name{ font-size:13px; color:var(--hint); transition:color 200ms var(--e-out) }
+.setup-stage.done .setup-stage-name{ color:var(--muted) }
+.setup-stage.active .setup-stage-name{ color:var(--off); font-weight:600 }
+.setup-stage.failed .setup-stage-name{ color:#ff9d9d }
+.setup-stage-meta{ font-size:11px; color:var(--hint); font-variant-numeric:tabular-nums }
+.setup-stage-bar{
+  grid-column:2 / -1; height:3px; background:var(--bg4); border-radius:2px;
+  overflow:hidden; margin-top:7px; display:none;
+}
+.setup-stage.active .setup-stage-bar{ display:block }
+.setup-stage-bar-fill{
+  height:100%; width:0%; background:var(--accent); border-radius:2px;
+  transition:width 400ms var(--e-out);
+}
+/* No real percentage yet, so sweep rather than invent one. */
+.setup-stage-bar.indeterminate .setup-stage-bar-fill{
+  width:35%; animation:setupSweep 1.5s ease-in-out infinite;
+}
+@keyframes setupSweep{ 0%{transform:translateX(-100%)} 100%{transform:translateX(320%)} }
+.setup-spin{ animation:setupSpin 900ms linear infinite; transform-origin:center }
+@keyframes setupSpin{ to{ transform:rotate(360deg) } }
+.setup-overall{ border-top:1px solid var(--border); padding-top:15px }
+.setup-overall-row{ display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px }
+.setup-overall-label{ font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--hint) }
+.setup-eta{ font-size:11.5px; color:var(--hint); margin-top:9px; text-align:center; font-variant-numeric:tabular-nums }
+
 .setup-prog-track{height:6px;background:var(--bg4);border-radius:3px;overflow:hidden;margin-bottom:6px}
 .setup-prog-fill{height:100%;background:var(--white);border-radius:3px;width:0%;transition:width .35s ease}
 .setup-prog-row{display:flex;justify-content:space-between;align-items:center;margin-top:4px}
@@ -4229,12 +4278,20 @@ button:focus:not(:focus-visible){outline:none}
 
     <!-- Progress card (shown during setup) -->
     <div id="setup-progress" class="hidden">
-      <div class="setup-step" id="setup-step-msg">Starting…</div>
-      <div class="setup-prog-track"><div class="setup-prog-fill" id="setup-prog-fill" style="width:0%"></div></div>
-      <div class="setup-prog-row">
-        <span id="setup-prog-detail" style="font-size:12px;color:var(--hint)"></span>
-        <span id="setup-prog-pct" style="font-variant-numeric:tabular-nums;font-size:13px;color:var(--muted)">0%</span>
+      <!-- The stages, so a long pause has a name and a place in a
+           sequence. A single bar for a ten-minute install cannot say
+           whether four still minutes are progress or a hang. -->
+      <div class="setup-stages" id="setup-stages"></div>
+      <div class="setup-overall">
+        <div class="setup-overall-row">
+          <span class="setup-overall-label" id="setup-overall-label">Overall</span>
+          <span id="setup-prog-pct" style="font-variant-numeric:tabular-nums;font-size:13px;color:var(--muted)">0%</span>
+        </div>
+        <div class="setup-prog-track"><div class="setup-prog-fill" id="setup-prog-fill" style="width:0%"></div></div>
+        <div class="setup-eta" id="setup-eta"></div>
       </div>
+      <div class="setup-step" id="setup-step-msg" style="display:none"></div>
+      <span id="setup-prog-detail" style="display:none"></span>
       <div class="setup-fineprint" style="margin-top:18px">Downloading engines and AI models. Setup keeps running even if you close this dialog — you can reopen and rejoin from Settings.</div>
       <div style="margin-top:14px">
         <button class="btn xs" onclick="hideSetupModal()" style="width:100%">Hide window (setup keeps running)</button>

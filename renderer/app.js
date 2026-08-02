@@ -4984,6 +4984,7 @@ function syncPrefsToServer() {
       body: JSON.stringify({
         stockpile_root: stockpileFolder || '',
         auto_send: localStorage.getItem('freqphull.autoSend') === '1' ? '1' : '0',
+        download_to_stockpile: localStorage.getItem('freqphull.downloadToStockpile') === '1' ? '1' : '0',
         watch_folder: localStorage.getItem('freqphull.watchFolder') === '1' ? '1' : '0',
         // '1' or '0'; absent in localStorage means ON (default)
         auto_tag: autoTagEnabled() ? '1' : '0',
@@ -7705,6 +7706,27 @@ function toggleAutoTag(checked) {
 // Single source of truth - every gate uses this helper.
 function autoTagEnabled() { return localStorage.getItem('freqphull.autoTag') !== '0'; }
 
+// Make the stockpile the download destination rather than Downloads.
+//
+// Two things follow from this. Tracks land inside the stockpile from the
+// start, so filing them is a move within one folder tree instead of a
+// copy across drives. And anything the matcher cannot place still ends
+// up somewhere deliberate - an _Inbox beside the style folders - rather
+// than mixed in with the user's ordinary downloads.
+function toggleDownloadToStockpile(checked) {
+  if (checked && !stockpileFolder) {
+    // Without a stockpile root there is nowhere to put anything, and
+    // silently doing nothing would look like the switch is broken.
+    const el = document.getElementById('dl-to-stock-toggle');
+    if (el) el.checked = false;
+    showAppNotification(t('dlToStockNeedsRoot'), 'warn', () => showTab(document.querySelector('[data-tab=\"stockpile\"]')), 6000);
+    return;
+  }
+  localStorage.setItem('freqphull.downloadToStockpile', checked ? '1' : '0');
+  syncPrefsToServer();
+  showAppNotification(checked ? t('dlToStockOn') : t('dlToStockOff'), 'info', null, 4000);
+}
+
 function toggleAutoSend(checked) {
   localStorage.setItem('freqphull.autoSend', checked ? '1' : '0');
   syncPrefsToServer(); // extension downloads + watch folder honor it too
@@ -10364,12 +10386,23 @@ async function checkEnginesStatus() {
   }
 }
 
+// Polling state used when EventSource drops mid-install. Declared
+// here rather than further down because showSetupModal reads it to
+// decide whether an install is already running, and `let` is not
+// hoisted - reading it earlier would throw.
+let setupPollTimer = null;
+
 function showSetupModal() {
   const modal = document.getElementById('setup-modal');
   if (!modal) return;
   modal.style.display = 'flex';
-  document.getElementById('setup-confirm').classList.remove('hidden');
-  document.getElementById('setup-progress').classList.add('hidden');
+  // Rejoin an install that is already running rather than offering to
+  // start one. Hiding the window leaves setup running by design, so
+  // reopening it to a "Begin setup" button both misrepresents the state
+  // and invites a second run on top of the first.
+  const running = !!setupEvtSource || !!setupPollTimer;
+  document.getElementById('setup-confirm').classList.toggle('hidden', running);
+  document.getElementById('setup-progress').classList.toggle('hidden', !running);
   document.getElementById('setup-error').classList.add('hidden');
   document.getElementById('setup-done').classList.add('hidden');
 }
@@ -10377,6 +10410,11 @@ function showSetupModal() {
 function hideSetupModal() {
   const modal = document.getElementById('setup-modal');
   if (modal) modal.style.display = 'none';
+  // Closing the window during an install looks exactly like cancelling
+  // it unless something says otherwise.
+  if (setupEvtSource || setupPollTimer) {
+    showAppNotification(t('setupHiddenStillRunning'), 'info', () => showSetupModal(), 7000);
+  }
 }
 
 function skipEnginesSetup() {
@@ -10387,13 +10425,18 @@ function skipEnginesSetup() {
   showAppNotification(t('setupRunningLater'), 'info');
 }
 
-// Polling state used when EventSource drops mid-install
-let setupPollTimer = null;
 let setupFinished = false; // local flag set on done/error so polling stops
 
 // Double-click guard for the Run Setup button.
 let setupStartInFlight = false;
 function startEnginesSetup() {
+  // Reset the stage list, or a retry resumes from wherever the last
+  // attempt stopped and shows earlier stages as already done.
+  _setupStageIndex = 0;
+  _setupStageFrac = 0;
+  _setupFailedStage = -1;
+  try { renderSetupStages(); } catch {}
+
   if (setupStartInFlight) return;
   setupStartInFlight = true;
   setTimeout(() => { setupStartInFlight = false; }, 1500);
@@ -10515,6 +10558,10 @@ function startSetupPolling() {
 
 function showSetupError(msg, hint, logTail, logPath) {
   if (typeof _stopSetupTrickle === 'function') _stopSetupTrickle();
+  // Mark the stage it stopped on, so the list shows how far it got
+  // rather than losing that on failure.
+  _setupFailedStage = _setupStageIndex;
+  try { renderSetupStages(); } catch {}
   try {
     window.reportSoftError('renderer.setup-error-shown', new Error(msg), {
       hint, hasLogTail: !!logTail,
@@ -10572,6 +10619,79 @@ const SETUP_STEP_ETA = {
   installing_torch: 320, installing_separator: 120, installing_whisper: 90,
   downloading_models: 180, verifying: 25, repairing: 120,
 };
+
+// The stages shown to the user. Several backend steps fold into one
+// line, because "upgrading pip" is not a thing anyone is waiting for -
+// they are waiting for the numerical libraries it precedes.
+//
+// The weights are the measured durations above, and the overall bar is
+// weighted by them rather than by step count. That distinction matters
+// here: PyTorch alone is nearly half the wait, so counting steps would
+// put the bar at a third and leave it there for four minutes.
+const SETUP_STAGES = [
+  { id: 'runtime',   weight: 155, steps: ['starting', 'provisioning_runtime', 'checking_python', 'downloading_python', 'installing_python'] },
+  { id: 'numerical', weight: 110, steps: ['upgrading_pip', 'installing_numerical'] },
+  { id: 'torch',     weight: 320, steps: ['installing_torch'] },
+  { id: 'separator', weight: 300, steps: ['installing_separator', 'downloading_models'] },
+  { id: 'whisper',   weight: 90,  steps: ['installing_whisper'] },
+  { id: 'verify',    weight: 25,  steps: ['verifying', 'repairing', 'done'] },
+];
+const SETUP_TOTAL_WEIGHT = SETUP_STAGES.reduce((a, s) => a + s.weight, 0);
+let _setupStageIndex = 0;
+let _setupStageFrac = 0;
+let _setupFailedStage = -1;
+
+function _setupStageForStep(step) {
+  const i = SETUP_STAGES.findIndex(s => s.steps.includes(step));
+  return i < 0 ? _setupStageIndex : i;
+}
+
+function _fmtSetupSecs(sec) {
+  sec = Math.max(0, Math.round(sec));
+  if (sec < 60) return sec + ' ' + t('setupSecondsWord');
+  const m = Math.round(sec / 60);
+  return m + ' ' + (m === 1 ? t('setupMinuteWord') : t('setupMinutesWord'));
+}
+
+function renderSetupStages() {
+  const el = document.getElementById('setup-stages');
+  if (!el) return;
+  const CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><polyline points="20 6 9 17 4 12"/></svg>';
+  const SPIN = '<svg class="setup-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg>';
+  const CROSS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>';
+  el.innerHTML = SETUP_STAGES.map((st, i) => {
+    let cls = '', icon = String(i + 1);
+    if (_setupFailedStage === i) { cls = 'failed'; icon = CROSS; }
+    else if (i < _setupStageIndex) { cls = 'done'; icon = CHECK; }
+    else if (i === _setupStageIndex) { cls = 'active'; icon = SPIN; }
+    const meta = i < _setupStageIndex ? t('setupStageDone')
+      : i === _setupStageIndex ? (_setupStageFrac > 0.01 ? Math.round(_setupStageFrac * 100) + '%' : '')
+      : '~' + _fmtSetupSecs(st.weight);
+    const frac = i === _setupStageIndex ? _setupStageFrac : 0;
+    return '<div class="setup-stage ' + cls + '">' +
+      '<div class="setup-stage-icon">' + icon + '</div>' +
+      '<div class="setup-stage-name">' + t('setupStage_' + st.id) + '</div>' +
+      '<div class="setup-stage-meta">' + meta + '</div>' +
+      '<div class="setup-stage-bar' + (frac > 0.01 ? '' : ' indeterminate') + '">' +
+        '<div class="setup-stage-bar-fill" style="width:' + (frac * 100).toFixed(1) + '%"></div>' +
+      '</div></div>';
+  }).join('');
+
+  // Overall progress and the time left, both from the same weights.
+  const doneW = SETUP_STAGES.slice(0, _setupStageIndex).reduce((a, x) => a + x.weight, 0)
+    + (SETUP_STAGES[_setupStageIndex] ? SETUP_STAGES[_setupStageIndex].weight * _setupStageFrac : 0);
+  const pct = Math.min(100, doneW / SETUP_TOTAL_WEIGHT * 100);
+  const fill = document.getElementById('setup-prog-fill');
+  const pctEl = document.getElementById('setup-prog-pct');
+  const eta = document.getElementById('setup-eta');
+  if (fill) fill.style.width = pct + '%';
+  if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+  if (eta) {
+    eta.textContent = pct < 3 ? t('setupEstimating')
+      : pct >= 99.5 ? ''
+      : t('setupTimeLeft').replace('{t}', _fmtSetupSecs(SETUP_TOTAL_WEIGHT - doneW));
+  }
+}
 let _setupTrickle = { timer: null, cur: 0, target: 0, rate: 0 };
 
 function _stopSetupTrickle() {
@@ -10600,6 +10720,25 @@ function _startSetupTrickle(fromPct, step) {
 }
 
 function setSetupProgress(pct, msg, detail, step) {
+  // Track which stage we are in, and how far through it. The step name
+  // is the authority for the stage; the percentage the script reports
+  // gives the position inside it.
+  if (step) {
+    const idx = _setupStageForStep(step);
+    if (idx > _setupStageIndex) { _setupStageIndex = idx; _setupStageFrac = 0; }
+  }
+  if (typeof pct === 'number') {
+    const before = SETUP_STAGES.slice(0, _setupStageIndex).reduce((a, x) => a + x.weight, 0);
+    const cur = SETUP_STAGES[_setupStageIndex];
+    if (cur) {
+      // The script reports overall percentage; convert it back to a
+      // position within the current stage.
+      const overallW = (pct / 100) * SETUP_TOTAL_WEIGHT;
+      _setupStageFrac = Math.max(0, Math.min(1, (overallW - before) / cur.weight));
+    }
+  }
+  renderSetupStages();
+
   const fill = document.getElementById('setup-prog-fill');
   const pctEl = document.getElementById('setup-prog-pct');
   const stepEl = document.getElementById('setup-step-msg');
@@ -10861,8 +11000,8 @@ const T = {
 
     // ── Background analysis pill (0.2.2) ──
     bgAnalyzing:'Analyzing',
-    bgPending:'tracks pending - click to retry',
-    bgPendingTitle:'Retry the tracks that could not be analysed',
+    bgPending:'tracks waiting to be analysed',
+    bgPendingTitle:'These retry by themselves - click to try again now',
     bgRetryStarted:'Retrying {n} tracks',
     bgNothingStuck:'Nothing is stuck - the queue is working through them',
     bgRetryFailed:'Could not retry',
@@ -10953,6 +11092,11 @@ const T = {
     cleanTempName:'Clean temp files',
     cleanTempDesc:"Removes Freq.Phull's leftover WAV files from Windows Temp (older than 1 hour). Only touches files starting with <code>freqphull_</code> — never the app's own runtime folders. Runs automatically every 6 hours; use this for a manual sweep.<br><strong>Do NOT use <code>del Temp\\*</code> manually</strong> — it will delete the portable build's ffmpeg/yt-dlp binaries and break downloads until you relaunch.",
     btnCleanNow:'Clean now',
+    dlToStockName:'Download into the stockpile',
+    dlToStockDesc:'New tracks land in your stockpile instead of your Downloads folder, so filing them is a move within one tree rather than a haul across drives. Anything the matcher cannot place waits in an _Inbox beside your style folders.',
+    dlToStockOn:'Downloads now land in your stockpile',
+    dlToStockOff:'Downloads go to your Downloads folder again',
+    dlToStockNeedsRoot:'Choose a stockpile folder first - click to open Stockpile',
     autoSendName:'Auto-send to detected folder',
     autoSendDesc:"When a new download matches a Stockpile folder's artist seeds, don't just tag it — automatically make that folder the track's primary and move the file into <code>StockpileRoot/FolderName/</code> right away. Tracks with no confident match stay where they land and can be sorted later with Auto-organize.",
     autoSendOnNotif:'New downloads will be moved into their detected folder',
@@ -11065,7 +11209,7 @@ const T = {
     sep4Stems:'4 Stems', sep6Stems:'6 Stems',
     sepFast:'Fast', sepHigh:'High', sepUltra:'Ultra',
     sepStart:'Separate Stems', sepResults:'Separated Stems',
-    sepOpenFolder:'Open Folder', sepSendToSeparator:'Send to Separator',
+    sepSendToSeparator:'Send to Separator',
     sepHistory:'Separator History', sepEmpty:'No separations yet',
     sepMode4Desc:'Vocals · Drums · Bass · Other',
     sepMode6Desc:'Vocals · Drums · Bass · Guitar · Piano · Other',
@@ -11081,7 +11225,7 @@ const T = {
     spStyleFolders:'Style Folders', spNewFolderBtn:'+ New folder',
     spNoFolders:'No folders yet.',
     spNoFoldersHint:"Create your first style folder — Cali Trap, Detroit, Atlanta Trap, Drill, whatever scenes you work in.",
-    spUntagged:'Untagged', spAllTagged:'All tracks tagged.',
+    spAllTagged:'All tracks tagged.',
     spLoadingSugs:'Loading suggestions…',
     spTrack:'track', spTracks:'tracks',
     spMore:'more',
@@ -11241,10 +11385,22 @@ const T = {
     setupBegin:'Begin Setup', setupSkip:'Continue without engines',
     setupHide:'Hide window (setup keeps running)', setupCancel:'Cancel setup',
     setupRetry:'Retry', setupAllSet:'All set',
+    setupStage_runtime:'Python runtime',
+    setupStage_numerical:'Numerical libraries',
+    setupStage_torch:'PyTorch',
+    setupStage_separator:'Separation models',
+    setupStage_whisper:'Transcription model',
+    setupStage_verify:'Verifying',
+    setupStageDone:'done',
+    setupEstimating:'Estimating...',
+    setupTimeLeft:'About {t} left',
+    setupSecondsWord:'seconds',
+    setupMinuteWord:'minute',
+    setupMinutesWord:'minutes',
+    setupHiddenStillRunning:'Setup is still running - click to watch it again',
     setupRunningLater:'You can run setup later from Settings → Engines',
     setupCancelled:'Setup cancelled',
     setupNotInstalled:'AI engines are not installed. Run setup now?',
-    enginesReady:'AI engines ready',
     enginesInstalled:'Installed',
     enginesNotInstalled:'Not installed - stem separator and transcription unavailable',
     enginesStale:'Setup is out-of-date - re-run setup to fix',
@@ -11472,8 +11628,8 @@ const T = {
 
     // ── Bandeau d'analyse en arrière-plan (0.2.2) ──
     bgAnalyzing:'Analyse de',
-    bgPending:'pistes en attente - cliquez pour relancer',
-    bgPendingTitle:'Relancer les pistes qui n\'ont pas pu être analysées',
+    bgPending:'pistes en attente d\'analyse',
+    bgPendingTitle:'Elles se relancent seules - cliquez pour réessayer maintenant',
     bgRetryStarted:'{n} pistes relancées',
     bgNothingStuck:'Rien n\'est bloqué - la file avance',
     bgRetryFailed:'Impossible de relancer',
@@ -11564,6 +11720,11 @@ const T = {
     cleanTempName:'Nettoyer les fichiers temporaires',
     cleanTempDesc:"Supprime les fichiers WAV résiduels de Freq.Phull dans le dossier Temp de Windows (plus d'une heure). Ne touche que les fichiers commençant par <code>freqphull_</code> — jamais les dossiers d'exécution de l'application. S'exécute automatiquement toutes les 6 heures ; utilisez ceci pour un nettoyage manuel.<br><strong>N'utilisez PAS <code>del Temp\\*</code> manuellement</strong> — cela supprimerait les binaires ffmpeg/yt-dlp de la version portable et casserait les téléchargements jusqu'au redémarrage.",
     btnCleanNow:'Nettoyer',
+    dlToStockName:'Télécharger dans le stockpile',
+    dlToStockDesc:'Les nouvelles pistes arrivent dans votre stockpile plutôt que dans Téléchargements, donc les classer devient un déplacement dans une seule arborescence. Ce que le classement automatique ne peut pas placer attend dans un dossier _Inbox à côté de vos dossiers de style.',
+    dlToStockOn:'Les téléchargements arrivent maintenant dans votre stockpile',
+    dlToStockOff:'Les téléchargements retournent dans Téléchargements',
+    dlToStockNeedsRoot:'Choisissez d\'abord un dossier stockpile - cliquez pour ouvrir Stockpile',
     autoSendName:'Envoi auto vers le dossier détecté',
     autoSendDesc:"Quand un nouveau téléchargement correspond aux artistes d'un dossier Stockpile, ne pas seulement l'étiqueter — faire de ce dossier le principal et déplacer le fichier dans <code>RacineStockpile/NomDossier/</code> immédiatement. Les pistes sans correspondance fiable restent en place et pourront être triées plus tard avec Auto-organiser.",
     autoSendOnNotif:'Les nouveaux téléchargements seront déplacés vers leur dossier détecté',
@@ -11676,7 +11837,7 @@ const T = {
     sep4Stems:'4 stems', sep6Stems:'6 stems',
     sepFast:'Rapide', sepHigh:'Haute', sepUltra:'Ultra',
     sepStart:'Séparer les stems', sepResults:'Stems séparés',
-    sepOpenFolder:'Ouvrir le dossier', sepSendToSeparator:'Envoyer au séparateur',
+    sepSendToSeparator:'Envoyer au séparateur',
     sepHistory:'Historique du séparateur', sepEmpty:'Aucune séparation pour l\'instant',
     sepMode4Desc:'Voix · Batterie · Basse · Autre',
     sepMode6Desc:'Voix · Batterie · Basse · Guitare · Piano · Autre',
@@ -11701,7 +11862,7 @@ const T = {
     spStyleFolders:'Dossiers de style', spNewFolderBtn:'+ Nouveau dossier',
     spNoFolders:'Aucun dossier pour l\'instant.',
     spNoFoldersHint:'Créez votre premier dossier de style - Cali Trap, Detroit, Atlanta Trap, Drill, peu importe la scène.',
-    spUntagged:'Sans étiquette', spAllTagged:'Toutes les pistes sont étiquetées.',
+    spAllTagged:'Toutes les pistes sont étiquetées.',
     spLoadingSugs:'Chargement des suggestions…',
     spTrack:'piste', spTracks:'pistes',
     spMore:'autres',
@@ -11851,10 +12012,22 @@ const T = {
     setupBegin:'Lancer l\'installation', setupSkip:'Continuer sans les moteurs',
     setupHide:'Masquer (l\'installation continue en arrière-plan)', setupCancel:'Annuler l\'installation',
     setupRetry:'Réessayer', setupAllSet:'Tout est prêt',
+    setupStage_runtime:'Environnement Python',
+    setupStage_numerical:'Bibliothèques numériques',
+    setupStage_torch:'PyTorch',
+    setupStage_separator:'Modèles de séparation',
+    setupStage_whisper:'Modèle de transcription',
+    setupStage_verify:'Vérification',
+    setupStageDone:'terminé',
+    setupEstimating:'Estimation...',
+    setupTimeLeft:'Environ {t} restant',
+    setupSecondsWord:'secondes',
+    setupMinuteWord:'minute',
+    setupMinutesWord:'minutes',
+    setupHiddenStillRunning:'L\'installation continue - cliquez pour la revoir',
     setupRunningLater:'Vous pouvez lancer l\'installation plus tard depuis Paramètres → Moteurs',
     setupCancelled:'Installation annulée',
     setupNotInstalled:'Les moteurs IA ne sont pas installés. Lancer l\'installation maintenant ?',
-    enginesReady:'Moteurs IA prêts',
     enginesInstalled:'Installé',
     enginesNotInstalled:'Non installé - la séparation et la transcription sont indisponibles',
     enginesStale:'Installation obsolète - relancer pour corriger',
@@ -12263,6 +12436,16 @@ function renderSettings() {
               </div>
               <label class="switch">
                 <input type="checkbox" ${(localStorage.getItem('freqphull.autoSend')==='1')?'checked':''} onchange="toggleAutoSend(this.checked)"/>
+                <span class="slider"></span>
+              </label>
+            </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('dlToStockName')}</div>
+                <div class="setting-desc">${t('dlToStockDesc')}</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="dl-to-stock-toggle" ${(localStorage.getItem('freqphull.downloadToStockpile')==='1')?'checked':''} onchange="toggleDownloadToStockpile(this.checked)"/>
                 <span class="slider"></span>
               </label>
             </div>

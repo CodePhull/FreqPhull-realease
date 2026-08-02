@@ -13,6 +13,12 @@ const RES  = process.env.RESOURCES_PATH || __dirname;
 let _serverVersion = '0.0.0';
 try { _serverVersion = require('./package.json').version || '0.0.0'; } catch {}
 const sentry = require('./sentry-init.js');
+
+// True while engine setup is running. Declared at the top because `let`
+// is not hoisted and several functions above the setup code read it -
+// including nudgeAnalysisWorker, which threw a ReferenceError on every
+// call while this lived further down, so background analysis never ran.
+let setupRunning = false;
 const _sentryClient = sentry.init('node', _serverVersion, {
   userOptOut: process.env.FREQPHULL_NO_CRASH_REPORT === '1',
 });
@@ -1087,9 +1093,13 @@ function resetEnginesBrokenBreaker() {
   clearPythonCache();
   slog('ENGINES BREAKER RESET: bg-analyze / transcribe / stems re-enabled.');
   try { broadcastEvent('engines-available', {}); } catch {}
-  // kick the worker to drain tracks that queued up during the
-  // outage. Safe because nudgeAnalysisWorker is itself idempotent and
-  // skipped while setupRunning.
+  // Drain tracks that queued up during the outage, and revive the ones
+  // that gave up while the engines were down - their failures were the
+  // outage, not the files. Deferred a moment so the runtime that just
+  // came back is actually ready to be spawned into.
+  setTimeout(function () {
+    try { sweepUnanalysedTracks('engines-recovered'); } catch {}
+  }, 3000);
   try { nudgeAnalysisWorker(); } catch {}
 }
 // Backward-compat aliases for the v0.3.3 call sites that already shipped
@@ -1498,7 +1508,25 @@ app.get('/info', async (req, res) => {
 app.get('/download', async (req, res) => {
   const url    = (req.query.url    || '').trim();
   const fmt    = (req.query.format || 'mp3').toLowerCase();
-  const outDir = (req.query.outDir || path.join(os.homedir(), 'Downloads')).trim();
+  let outDir = (req.query.outDir || '').trim();
+  if (!outDir) {
+    // With "download into the stockpile" on, the stockpile root is the
+    // default destination rather than Downloads. The track then lands
+    // where it belongs and auto-filing only has to move it between
+    // folders on the same drive, instead of hauling it across from
+    // Downloads afterwards.
+    const spRoot = getPref('stockpile_root') || '';
+    const intoStockpile = getPref('download_to_stockpile') === '1' && spRoot;
+    outDir = intoStockpile ? path.join(spRoot, '_Inbox')
+                           : path.join(os.homedir(), 'Downloads');
+    if (intoStockpile) {
+      try { fs.mkdirSync(outDir, { recursive: true }); }
+      catch (e) {
+        slog('download: could not create stockpile inbox, using Downloads: ' + e.message);
+        outDir = path.join(os.homedir(), 'Downloads');
+      }
+    }
+  }
   slog('Download request: fmt=' + fmt + ' outDir=' + outDir);
   const ALLOWED = ['mp3', 'wav', 'flac', 'aac', 'm4a'];
   if (!url || !ALLOWED.includes(fmt)) return res.status(400).json({ error: 'Bad params' });
@@ -1843,6 +1871,12 @@ app.get('/download', async (req, res) => {
     // refresh + pulse the new entry without a manual reload.
     broadcastEvent('history-changed', { reason: 'download', historyId });
     nudgeAnalysisWorker();
+    // File it into the stockpile if the user asked for that. The desktop
+    // already did this for its own downloads, but the extension and the
+    // watch folder did not, so the same setting behaved differently
+    // depending on where a track came from. Doing it here covers every
+    // source at once.
+    try { autoFileIntoStockpile(historyId); } catch (e) { slog('auto-file failed: ' + e.message); }
     res.end();
   });
   }  // end attachListeners
@@ -4127,6 +4161,31 @@ app.post('/prefs', (req, res) => {
 //    daemon, and any future caller). Tags a track into folders whose
 //    artist seeds match its title/path; optionally promotes the best
 //    match to primary and physically moves the file into the folder. ──
+// One place that decides whether a freshly arrived track should be
+// tagged and filed, so every download route behaves identically.
+//
+// Runs after the row exists and the file is in its output folder. If no
+// folder matches, the track stays where it is rather than being pushed
+// somewhere arbitrary: a wrong guess costs the user more than no guess.
+function autoFileIntoStockpile(historyId) {
+  if (!historyId) return null;
+  if (getPref('auto_tag', '1') === '0') return null;
+  const root = getPref('stockpile_root') || null;
+  const wantSend = getPref('auto_send') === '1' && !!root;
+  const r = autoMatchTrack(historyId, { commit: wantSend, stockpileRoot: root });
+  if (r && r.committed && r.committed.moved) {
+    slog('auto-file: track ' + historyId + ' -> ' + (r.committed.folder_name || '?'));
+    broadcastEvent('stockpile-autofiled', {
+      historyId,
+      folder: r.committed.folder_name || null,
+      path: r.committed.newPath || null,
+    });
+  } else if (r && r.tagged && r.tagged.length) {
+    slog('auto-file: track ' + historyId + ' tagged ' + r.tagged.length + ', not moved');
+  }
+  return r;
+}
+
 function autoMatchTrack(historyId, opts) {
   opts = opts || {};
   const track = dbAll('SELECT title, file_path FROM history WHERE id=?', [historyId]);
@@ -6787,7 +6846,6 @@ app.get('/engines-status', (_, res) => {
 //   - /setup-status returns the current state without holding a connection,
 //     so the renderer can poll it as a fallback.
 //   - /setup-cancel explicitly kills the running setup if the user wants out.
-let setupRunning = false;
 let setupProc = null;
 let setupState = {
   events: [],   // {type: 'progress'|'done'|'error', data: {...}}
@@ -7136,6 +7194,54 @@ setInterval(() => {
     slog('temp-sweep periodic failed: ' + e.message);
   }
 }, 6 * 3600 * 1000).unref();
+
+// ── Automatic recovery for tracks left unanalysed ──────────────────
+//
+// Anything with no BPM and a file on disk is outstanding work, whatever
+// the reason: the app closed mid-queue, engines were missing at the
+// time, or a fault stopped the worker before it started. Telling the
+// user to press a button to recover from that is asking them to clean
+// up after the app.
+//
+// The retry is deliberately conservative. Tracks that gave up are only
+// reconsidered when the engines are actually healthy, and each sweep
+// clears the in-session failure counts so a transient problem does not
+// permanently disqualify a track. A file that is genuinely unreadable
+// fails again, gets its three attempts, and settles back out of the
+// queue on its own.
+function sweepUnanalysedTracks(reason) {
+  if (_enginesBrokenBreaker || setupRunning) return 0;
+  let revived = 0;
+  try {
+    const stuck = dbAll(
+      'SELECT COUNT(*) AS n FROM history ' +
+      'WHERE analysis_gave_up=1 AND bpm IS NULL AND file_path IS NOT NULL')[0];
+    if (stuck && stuck.n) {
+      dbRun('UPDATE history SET analysis_gave_up=0 ' +
+            'WHERE analysis_gave_up=1 AND bpm IS NULL AND file_path IS NOT NULL');
+      saveDB();
+      revived = stuck.n;
+    }
+    if (analyzeWorker.failed.size) analyzeWorker.failed.clear();
+    refreshAnalysisQueueSize();
+    if (analyzeWorker.queueSize > 0) {
+      slog('analysis sweep (' + reason + '): ' + analyzeWorker.queueSize +
+           ' outstanding' + (revived ? ', ' + revived + ' revived' : ''));
+      nudgeAnalysisWorker();
+    }
+  } catch (e) {
+    slog('analysis sweep failed: ' + e.message);
+  }
+  return revived;
+}
+
+// On startup, once the engines have had a moment to report in. Anything
+// left over from a previous session is picked up without being asked.
+setTimeout(function () { sweepUnanalysedTracks('startup'); }, 25000);
+
+// And periodically, which covers a track that failed while the engines
+// were still installing and would otherwise wait for the next launch.
+setInterval(function () { sweepUnanalysedTracks('periodic'); }, 30 * 60 * 1000).unref();
 
 // Global handlers - belt and suspenders. Even if slog ever throws
 // (it shouldn't anymore), the try/catch here prevents recursion.

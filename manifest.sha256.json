@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "generated": "2026-08-02T01:17:51.141Z",
+  "files": {
+    "server.js": "12c28ccfb716414df0c9923e6a228163bb9c756404a99b8abec3e55198e009a5",
+    "main.js": "c7cd93ad254cf1504bd1065fccabad058955dacea93e9ae5ea9a41736e850f19",
+    "preload.js": "6a4fb8f198a93e95c9e493c86a49d2ba3107e93bec949f114766e21a4c3e3894",
+    "stems.py": "5346ae047c451d58ea764de8fd2e186b72cf8b0eaa724316efe5c0ca31d592bb",
+    "analyze.py": "62a5d0a44734284ea327290298060368d0b1ca135a9b833d2152ee0a27067b40",
+    "_phull_internal.py": "b8655a879137d68fdfc37f6ae294c29e96acb5c552a8e5610e5e6edc9e364f0c"
+  }
+}

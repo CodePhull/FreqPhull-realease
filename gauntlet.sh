@@ -422,6 +422,167 @@ for f in ['updater.js','main.js','server.js','sentry-init.js']:
             depth += line.count('{') - line.count('}')
 if fails:
     print('\u2717 PASS 20 FAILED'); [print('   -', x) for x in fails]; sys.exit(1)
-print('\u2713 PASS 20  no top-level-looking function is trapped inside a block')
+# `let` and `const` are not hoisted. A function declared ABOVE the
+# declaration is hoisted with it, so calling that function before the
+# declaration line has run throws. nudgeAnalysisWorker sat above
+# `let setupRunning` and threw on every call, which left background
+# analysis completely dead while looking fine in review.
+for _f, _pairs in [('server.js', [('setupRunning', 'nudgeAnalysisWorker')]),
+                   ('renderer/app.js', [('setupPollTimer', 'showSetupModal'),
+                                        ('_analyzeMirrorIdle', 'startAnalyzeMirror')])]:
+    _src = open(_f).read()
+    for _var, _fn in _pairs:
+        _d = re.search(r'^(?:let|const)\s+' + _var + r'\b', _src, re.M)
+        _u = re.search(r'^(?:async\s+)?function\s+' + _fn + r'\b', _src, re.M)
+        if not _d:
+            fails.append(f'{_f}: {_var} is no longer declared'); continue
+        # Search the function's real body, not a fixed window: the read
+        # can sit anywhere inside it.
+        _body = ''
+        if _u:
+            _i = _src.index('{', _u.start()); _depth = 1; _j = _i + 1
+            while _j < len(_src) and _depth:
+                if _src[_j] == '{': _depth += 1
+                elif _src[_j] == '}': _depth -= 1
+                _j += 1
+            _body = _src[_i:_j]
+        if _u and _u.start() < _d.start() and re.search(r'(?<![\w.$])' + _var + r'\b', _body):
+            _l = _src[:_u.start()].count('\n') + 1
+            fails.append(f'{_f}:{_l} {_fn}() reads {_var} but is declared above it - throws when called')
+if fails:
+    print('\u2717 PASS 20 FAILED'); [print('   -', x) for x in fails]; sys.exit(1)
+print('\u2713 PASS 20  no function trapped in a block, no let read before declaration')
 PY
-echo "════════ ALL 20 GREEN ════════"
+python3 - <<'PY'
+import json, os, re, sys
+from struct import unpack
+fails = []
+_b = json.load(open('package.json'))['build']
+n = _b['nsis']
+
+# NSIS resolves ${BUILD_RESOURCES_DIR} to build.directories.buildResources,
+# which defaults to build/ - not to wherever the assets happen to live.
+# Pointing it at the wrong folder fails only at build time, with a
+# "no files found" that names a path nobody configured.
+_res = _b.get('directories', {}).get('buildResources', 'build')
+if not os.path.isdir(_res):
+    fails.append(f'buildResources points at "{_res}/", which does not exist')
+else:
+    _nsh = open('assets/installer.nsh').read() if os.path.exists('assets/installer.nsh') else ''
+    for _r in set(re.findall(r'\$\{BUILD_RESOURCES_DIR\}\\?([\w.-]+)', _nsh)):
+        if not os.path.exists(os.path.join(_res, _r)):
+            fails.append(f'installer.nsh reads {_r} through BUILD_RESOURCES_DIR, but {_res}/{_r} does not exist')
+# Paths given directly in the nsis config are relative to the project.
+for _k in ('installerSidebar', 'uninstallerSidebar', 'installerHeaderIcon', 'uninstallerIcon', 'include'):
+    _v = n.get(_k)
+    if _v and not os.path.exists(_v):
+        fails.append(f'nsis.{_k} points at {_v}, which does not exist')
+
+# The wizard pages only exist while oneClick is false. Turning it back on
+# silently discards every string in installer.nsh, which is exactly what
+# happened to the welcome text that sat there unused for months.
+if n.get('oneClick') is not False:
+    fails.append('nsis.oneClick must be false or the wizard pages never appear')
+
+for f in ['assets/installer.nsh', 'assets/installer-sidebar.bmp', 'assets/installer-header.bmp']:
+    if not os.path.exists(f):
+        fails.append(f'{f} is missing'); continue
+    if f.endswith('.bmp'):
+        b = open(f, 'rb').read(26)
+        if b[:2] != b'BM':
+            fails.append(f'{f} is not a BMP - NSIS cannot read PNG here')
+        else:
+            w, h = unpack('<ii', b[18:26])
+            want = (164, 314) if 'sidebar' in f else (150, 57)
+            if (w, abs(h)) != want:
+                fails.append(f'{f} is {w}x{abs(h)}, NSIS needs {want[0]}x{want[1]}')
+
+# NSIS is ASCII-sensitive and wants CRLF, same as the setup script.
+if os.path.exists('assets/installer.nsh'):
+    raw = open('assets/installer.nsh', 'rb').read()
+    if any(b >= 128 for b in raw): fails.append('installer.nsh contains non-ASCII bytes')
+    if re.search(rb'(?<!\r)\n', raw): fails.append('installer.nsh has bare LF line endings')
+    if b'MUI_WELCOMEPAGE_TEXT' not in raw: fails.append('installer.nsh has no welcome copy')
+    # electron-builder writes its own MUI defines from the nsis config
+    # before including this file. Repeating any of them makes makensis
+    # abort with "already defined" and no installer is produced.
+    txt = raw.decode('ascii', 'replace')
+    for sym in ['MUI_WELCOMEFINISHPAGE_BITMAP', 'MUI_UNWELCOMEFINISHPAGE_BITMAP',
+                'MUI_ICON', 'MUI_UNICON', 'MUI_INSTALLER_TITLE', 'MUI_PRODUCT']:
+        if re.search(r'^!define\s+' + sym, txt, re.M):
+            fails.append(f'installer.nsh redefines {sym}, which electron-builder already sets')
+    # Everything it does define should be guarded, so a future version of
+    # electron-builder claiming one of them cannot break the build.
+    # Unbalanced blocks or a callback that does not exist abort makensis
+    # several minutes into a build, so they are caught here instead.
+    # !ifdef and !ifndef both close with !endif, so they are counted
+    # together rather than as separate pairs.
+    _opens = len(re.findall(r'^\s*!if(?:n?def)', txt, re.M))
+    _closes = len(re.findall(r'^\s*!endif', txt, re.M))
+    if _opens != _closes:
+        fails.append(f'installer.nsh has {_opens} conditionals but {_closes} !endif')
+    # Uninstaller code must be compiled only in the uninstaller pass, or
+    # NSIS warns that WriteUninstaller was never used and the build fails.
+    if re.search(r'^\s*Function\s+un\.', txt, re.M) and '!ifdef BUILD_UNINSTALLER' not in txt:
+        fails.append('installer.nsh defines un. functions outside an !ifdef BUILD_UNINSTALLER block')
+    for _a, _b in [('!macro ', '!macroend'), ('Function ', 'FunctionEnd')]:
+        _na = len(re.findall(r'^\s*' + re.escape(_a), txt, re.M))
+        _nb = len(re.findall(r'^\s*' + re.escape(_b), txt, re.M))
+        if _na != _nb:
+            fails.append(f'installer.nsh has {_na} {_a.strip()} but {_nb} {_b}')
+    # A callback must exist, and NSIS keeps the installer and uninstaller
+    # in separate namespaces: every uninstaller function has to be named
+    # with an "un." prefix. A shared callback aborts the build with
+    # "Call must be used with function names starting with un.".
+    for _m in re.finditer(r'!define\s+(MUI_(?:PAGE_)?CUSTOMFUNCTION_\w+)\s+((?:un\.)?\w+)', txt):
+        _sym, _fn = _m.group(1), _m.group(2)
+        if not re.search(r'^\s*Function\s+' + re.escape(_fn) + r'\b', txt, re.M):
+            fails.append(f'installer.nsh names callback {_fn} but never defines it')
+        _is_un = 'UNGUIINIT' in _sym or _sym.startswith('MUI_UN')
+        if _is_un and not _fn.startswith('un.'):
+            fails.append(f'{_sym} points at {_fn}, which must be named un.{_fn}')
+        if not _is_un and _fn.startswith('un.'):
+            fails.append(f'{_sym} points at {_fn}, which belongs to the uninstaller')
+    # MUI_PAGE_CUSTOMFUNCTION_SHOW attaches to whichever page is declared
+    # next - including an uninstaller page - so it cannot safely carry an
+    # installer-only function from a shared include.
+    if re.search(r'!define\s+MUI_PAGE_CUSTOMFUNCTION_SHOW', txt):
+        fails.append('MUI_PAGE_CUSTOMFUNCTION_SHOW in a shared include also binds uninstaller pages')
+    for _m in re.finditer(r'SetCtlColors\s+\$\w+\s+(\S+)\s+(\S+)', txt):
+        for _c in _m.groups():
+            if not re.fullmatch(r'[0-9A-Fa-f]{6}', _c):
+                fails.append(f'installer.nsh has an invalid colour value: {_c}')
+    for m in re.finditer(r'^\s*!define\s+(\w+)', txt, re.M):
+        sym = m.group(1)
+        if not re.search(r'!ifndef\s+' + sym + r'\b', txt):
+            fails.append(f'installer.nsh defines {sym} without an !ifndef guard')
+    # Sizes were deliberately removed: a number reads as a cost before
+    # anyone knows what they are getting.
+    if re.search(rb'\d+\s*(?:GB|MB)', raw, re.I):
+        fails.append('installer copy quotes a download size')
+
+if fails:
+    print('\u2717 PASS 21 FAILED'); [print('   -', x) for x in fails]; sys.exit(1)
+print('\u2713 PASS 21  installer wizard is enabled with valid NSIS artwork')
+PY
+python3 - <<'PY'
+import re, sys, collections
+# JavaScript keeps only the last of two identical keys in an object
+# literal, silently. Three of these existed, and two were showing the
+# wrong text - editing the first definition changed nothing at all.
+src = open('renderer/app.js').read()
+fails = []
+for name, pat in [('en', r'^\s*en:\s*\{(.*?)^\s*\},\s*$\s*fr:'),
+                  ('fr', r'^\s*fr:\s*\{(.*?)^\s*\}\s*\};')]:
+    body = re.search(pat, src, re.S | re.M).group(1)
+    keys = re.findall(r'^\s*(\w+)\s*:', body, re.M)
+    dupes = {k: n for k, n in collections.Counter(keys).items() if n > 1}
+    if dupes:
+        fails.append(f'{name}: {dupes}')
+if fails:
+    print('\u2717 PASS 22 FAILED - duplicate keys, the last one silently wins:')
+    for f in fails: print('   -', f)
+    sys.exit(1)
+print('\u2713 PASS 22  no translation key is defined twice')
+PY
+echo "════════ ALL 22 GREEN ════════"
