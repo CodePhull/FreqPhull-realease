@@ -430,26 +430,42 @@ async function initDB() {
 
     // Migration: add stockpile_committed column to history if missing.
     // Tracks whether a file has been moved into the stockpile folder structure.
+    //
+    // Each ALTER TABLE below is its own independent try/catch. They used
+    // to be nested - the analysis_json/analysis_mtime/analysis_used_at/
+    // analysis_gave_up block sat INSIDE the stockpile_committed catch, so
+    // it only ran when that specific ALTER threw. On a DB where
+    // stockpile_committed's ALTER succeeded (or threw for an unrelated
+    // reason), analysis_gave_up never got added - every query that
+    // referenced it (the background analyze worker's candidate query,
+    // notably) failed with "no such column" forever, and background
+    // auto-analysis silently never found any work. Independent blocks
+    // mean one migration's outcome can't gate another's.
     try {
       db.run(`ALTER TABLE history ADD COLUMN stockpile_committed INTEGER DEFAULT 0`);
       slog('DB migration: added history.stockpile_committed');
-    } catch (e) {
+    } catch (e) { /* column exists */ }
     try {
       db.run(`ALTER TABLE stockpile_folders ADD COLUMN smart_rules TEXT`);
     } catch (e) { /* column exists */ }
     try {
       db.run(`ALTER TABLE history ADD COLUMN analysis_json TEXT`);
+    } catch (e) { /* column exists */ }
+    try {
       db.run(`ALTER TABLE history ADD COLUMN analysis_mtime REAL`);
+    } catch (e) { /* column exists */ }
+    try {
       db.run(`ALTER TABLE history ADD COLUMN analysis_used_at REAL`);
+    } catch (e) { /* column exists */ }
+    try {
       // The in-memory retry cap (analyzeWorker.failed) resets on every
       // restart, so a file that genuinely cannot be analysed - corrupt
       // audio, a decode failure Python cannot recover from - kept
       // re-crashing and re-reporting to Sentry on every single launch
       // forever. This persists the give-up across restarts.
       db.run(`ALTER TABLE history ADD COLUMN analysis_gave_up INTEGER DEFAULT 0`);
-    } catch (e) { /* columns exist */ }
-      // Column already exists - that's fine, sqlite errors loudly otherwise
-    }
+      slog('DB migration: added history.analysis_gave_up');
+    } catch (e) { /* column exists */ }
     try {
       db.run(`ALTER TABLE history ADD COLUMN artists_detected TEXT`);
       slog('DB migration: added history.artists_detected');

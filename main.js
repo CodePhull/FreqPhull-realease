@@ -12,6 +12,40 @@ try {
   if (fs.existsSync(stale)) fs.unlinkSync(stale);
 } catch {}
 
+// ── Boot flags ────────────────────────────────────────────────────────────────────────────────
+// Settings that Electron only reads once, at startup - hardware
+// acceleration chief among them - can't be toggled live. The renderer's
+// switch just persists the choice here and asks for a relaunch; this
+// file is read back synchronously below, before app is ready, which is
+// the only point Electron will actually honor disableHardwareAcceleration().
+// The renderer (preload.js: window.api.bootFlags, window.api.app.relaunch)
+// has called this API since v0.2.8; it never had a main-process side,
+// so every get/set threw "No handler registered".
+const bootFlagsPath = path.join(app.getPath('userData'), 'boot-flags.json');
+function readBootFlags() {
+  try { return JSON.parse(fs.readFileSync(bootFlagsPath, 'utf8')); }
+  catch { return {}; }
+}
+function writeBootFlags(patch) {
+  const merged = Object.assign(readBootFlags(), patch || {});
+  try {
+    fs.mkdirSync(path.dirname(bootFlagsPath), { recursive: true });
+    fs.writeFileSync(bootFlagsPath, JSON.stringify(merged));
+  } catch (e) { log('boot-flags write failed: ' + e.message); }
+  return merged;
+}
+ipcMain.handle('boot-flags:get', () => readBootFlags());
+ipcMain.handle('boot-flags:set', (_e, patch) => writeBootFlags(patch));
+ipcMain.handle('app:relaunch', () => { app.relaunch(); app.exit(0); });
+
+// Applied now, synchronously, before anything below reaches app.whenReady().
+// Default is ON (hardwareAcceleration !== false matches the renderer's
+// own default in syncHardwareAccelToggle), so only an explicit opt-out
+// calls this.
+if (readBootFlags().hardwareAcceleration === false) {
+  app.disableHardwareAcceleration();
+}
+
 // Crash reporting is always on for production builds.
 // FREQPHULL_NO_CRASH_REPORT=1 is honored as a dev-only escape hatch.
 const _sentry = sentry.init('main', app.getVersion(), {
@@ -384,7 +418,18 @@ function createWindow() {
     frame: false, backgroundColor: '#080808',
     icon: path.join(__dirname, 'assets', 'icon.ico'),
     transparent: false,
-    hasShadow: true,
+    // hasShadow on a frameless window puts the window through the DWM
+    // shadow path, and Windows composites unfocused windows differently
+    // there - the result is a faint softening the moment focus is lost,
+    // which reads as the app going blurry. A frameless window has no
+    // system shadow to speak of anyway, so nothing is lost by turning it
+    // off, and the window stays pixel-exact whether focused or not.
+    hasShadow: false,
+    // Pin to the display's own scale. Chromium otherwise resamples when
+    // a window straddles monitors with different DPI, which softens text
+    // in exactly the same way and is easy to mistake for a driver
+    // problem.
+    useContentSize: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

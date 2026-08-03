@@ -622,4 +622,55 @@ if fails:
     sys.exit(1)
 print('\u2713 PASS 22  no translation key is defined twice')
 PY
-echo "════════ ALL 22 GREEN ════════"
+python3 - <<'PY2'
+import re, sys
+# preload.js exposes ipcRenderer.invoke() channels straight to the
+# renderer; each one needs a matching ipcMain.handle() in the main
+# process or every call rejects at runtime with "No handler registered".
+# boot-flags:get/set and app:relaunch shipped in the renderer (v0.2.8)
+# with no main-process side at all - the toggle looked wired (it had a
+# preload bridge, UI, translations) but threw on first use. This check
+# would have caught it before it shipped.
+preload_src = open('preload.js').read()
+invoked = set(re.findall(r"ipcRenderer\.invoke\(\s*'([^']+)'", preload_src))
+handled = set()
+for f in ['main.js', 'updater.js']:
+    handled |= set(re.findall(r"ipcMain\.handle\(\s*'([^']+)'", open(f).read()))
+missing = sorted(invoked - handled)
+if missing:
+    print('\u2717 PASS 23 FAILED - preload.js invokes these with no ipcMain.handle:')
+    for m in missing: print('   -', m)
+    sys.exit(1)
+print(f'\u2713 PASS 23  every preload invoke channel has a main-process handler ({len(invoked)} channels)')
+PY2
+python3 - <<'PY3'
+import re, sys
+# A DB migration whose ALTER TABLE sits inside another migration's catch
+# block only runs when that OTHER migration throws - which is exactly
+# how analysis_gave_up went missing: it was nested inside
+# stockpile_committed's catch, so on any DB where that ALTER succeeded
+# (or failed for an unrelated reason), analysis_gave_up never got
+# added. Every query that referenced it - the background analyze
+# worker's candidate query - failed silently forever, and nothing got
+# auto-analyzed until a user clicked a track by hand. Every catch block
+# in this codebase is a one-liner ("column exists"); a catch body that
+# contains a real ALTER TABLE is this bug's exact shape.
+src = open('server.js').read()
+fails = []
+for m in re.finditer(r'catch\s*\(\w*\)\s*\{', src):
+    i = src.index('{', m.start())
+    depth = 1
+    j = i + 1
+    while j < len(src) and depth:
+        if src[j] == '{': depth += 1
+        elif src[j] == '}': depth -= 1
+        j += 1
+    body = src[i:j]
+    if 'ALTER TABLE' in body:
+        line = src[:m.start()].count('\n') + 1
+        fails.append(f'server.js:{line} a catch block contains a nested ALTER TABLE migration - it only runs when the outer try throws')
+if fails:
+    print('\u2717 PASS 24 FAILED'); [print('   -', x) for x in fails]; sys.exit(1)
+print('\u2713 PASS 24  no DB migration is nested inside another migration\'s catch block')
+PY3
+echo "════════ ALL 24 GREEN ════════"

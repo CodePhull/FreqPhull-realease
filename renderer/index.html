@@ -1105,7 +1105,7 @@ input[type=range]{flex:1;accent-color:var(--white)}
    * so the GPU handles the resize without paint flicker. gap also
    * transitions so dead-space between collapsed items closes smoothly. */
   transition:width 280ms var(--e-out),gap 280ms var(--e-out),box-shadow 280ms var(--e-out);
-  will-change:width}
+}
 
 /* ── Compact mode - applied on Analyze tab while in mirror mode ─────────────
  * The Analyzer view already exposes time, seek bar, and volume on its own
@@ -2977,7 +2977,7 @@ button > .ic:only-child,
   transition:opacity .2s ease;
 }
 /* GPU-composite the things that animate every frame */
-.progress-fill{will-change:width}
+
 .app-notif{will-change:transform,opacity}
 
 /* ── v0.4.3 accessibility ───────────────────────────────────────── */

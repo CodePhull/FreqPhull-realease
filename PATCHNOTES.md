@@ -4,7 +4,80 @@ Changes since the BPM detector became the foundation. Latest first.
 
 ---
 
-## 0.7.34 (2026-08-02)
+## 0.7.37 (2026-08-02)
+
+**Background analysis never ran - every track sat idle until you clicked
+it.** The cause was a DB migration bug, not the analysis engine. Adding
+`history.analysis_gave_up` was nested inside the catch block for an
+unrelated column, `stockpile_committed`, which meant it only ran when
+that OTHER migration's `ALTER TABLE` threw. On this install it didn't -
+`stockpile_committed` succeeded every launch - so `analysis_gave_up`
+never got added, and every query built on `analysisCandidateWhere()`
+(the one query the background worker uses to find its next track) threw
+`no such column: analysis_gave_up` on every attempt. `dbAll()` catches
+that error and returns an empty result rather than crashing the server,
+so the worker never saw a failure - it just always saw zero candidates.
+The manual "click a track" path was never affected, because it calls
+`/analyze` directly with a specific file and never touches that query,
+which is why analysis always worked on demand and never in the
+background. Verified against a real sql.js instance: the old migration
+code reproduces `no such column: analysis_gave_up` on a DB shaped like
+this one; the fixed code doesn't, on that DB or on one where
+`stockpile_committed` already existed from an earlier install.
+
+Fixed by giving every `ALTER TABLE` in that migration block its own
+independent try/catch, so one column's outcome can no longer gate
+another's. This self-heals on next launch - no manual DB fix needed,
+the corrected migration adds the missing column the moment the new
+version starts.
+
+Gauntlet gained a check for this shape of bug: any `catch` block in
+`server.js` whose body contains a real `ALTER TABLE` (rather than the
+usual one-line "column exists" comment) fails the build, since that's
+exactly what a wrongly-nested migration looks like. Confirmed it
+catches the original bug by reintroducing the old nesting in a scratch
+copy and running gauntlet against it.
+
+## 0.7.36 (2026-08-02)
+
+**The hardware acceleration toggle threw "No handler registered" every
+time it was touched.** The switch in Settings, its confirm-and-relaunch
+prompt, and the translations were all built together in 0.2.8, but only
+on the renderer side - `preload.js` bridged `boot-flags:get`,
+`boot-flags:set` and `app:relaunch` out to `window.api`, and nothing in
+`main.js` ever answered them. Every open of Settings fired the failed
+`get()` silently; every flip of the switch surfaced the error the user
+saw. Hardware acceleration itself was never actually being turned off
+either way - the call that does that, `app.disableHardwareAcceleration()`,
+didn't exist anywhere in the app.
+
+Both are wired now. The choice is persisted to a small `boot-flags.json`
+in the app's data folder and read back synchronously before `app` is
+ready, which is the only point Electron will honor it - a live toggle
+isn't possible for this setting, which is why the switch has always
+asked for a relaunch. `app:relaunch` now actually does that.
+
+Gauntlet gained a check for this shape of bug generally: every
+`ipcRenderer.invoke()` channel `preload.js` exposes is cross-checked
+against `ipcMain.handle()` registrations in `main.js` and `updater.js`,
+so a bridged API that never got a main-process side fails the build
+instead of shipping quietly broken.
+
+## 0.7.35 (2026-08-02)
+
+**The window went slightly soft when it lost focus.** A frameless window
+asking for a system shadow is composited through the DWM shadow path,
+and Windows treats unfocused windows differently there - the result is a
+faint resampling that reads as the whole app blurring. A frameless
+window has no meaningful system shadow anyway, so it is off, and the
+window now stays pixel-exact whether focused or not. Easy to blame on a
+graphics driver, since a driver update changes when it becomes
+noticeable.
+
+Two rules also asked the compositor to keep a permanent layer for an
+element whose width changes. Width is a layout property and cannot be
+composited, so the hint bought nothing and left another surface to be
+resampled.
 
 **Icons restored to the 0.7.12 artwork.** Several versions of trying to
 improve them made things worse, and the artwork was never the problem:
