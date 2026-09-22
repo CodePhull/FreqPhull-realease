@@ -154,6 +154,7 @@ ipcMain.handle('updater:bridge-state', (_e, state) => { _fwdToUpdater(state); re
 let mainWindow, backendProcess, backendReady = false;
 let logFile = null;
 let tray = null;
+let trayContextMenu = null;
 let isQuitting = false;
 
 // ── Prevent multiple instances - one backend is enough ───────────────────────
@@ -180,7 +181,7 @@ function setupLog() {
   if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
   logFile = path.join(logDir, 'freqphull-' + new Date().toISOString().slice(0,10) + '.log');
   log('=== Freq.Phull starting ===');
-  log('App version: 0.0.1');
+  log('App version: ' + app.getVersion());
   log('Electron: ' + process.versions.electron);
   log('Node: ' + process.versions.node);
   log('Platform: ' + process.platform + ' ' + process.arch);
@@ -348,7 +349,7 @@ function createTray() {
   tray = new Tray(trayIcon);
   tray.setToolTip('Freq.Phull');
 
-  const contextMenu = Menu.buildFromTemplate([
+  trayContextMenu = Menu.buildFromTemplate([
     {
       label: 'Open Freq.Phull',
       click: () => {
@@ -374,21 +375,39 @@ function createTray() {
       }
     }
   ]);
-  tray.setContextMenu(contextMenu);
 
-  tray.on('double-click', () => {
+  // Deliberately NOT calling tray.setContextMenu() here. On both
+  // Windows and macOS, once a context menu is attached that way, a
+  // plain left-click on the tray icon opens THAT MENU instead of
+  // firing 'click' - so the only way to actually get the app open was
+  // a double-click (still wired below) or picking "Open Freq.Phull"
+  // from the menu. A single left-click did nothing, which looks
+  // exactly like the tray icon being broken. Handling 'click' and
+  // 'right-click' separately, and only popping the menu up explicitly
+  // on right-click, gives the click-to-open / right-click-for-menu
+  // behavior every other tray app on the platform already has.
+  const openWindow = () => {
     if (mainWindow) {
       mainWindow.show();
       mainWindow.focus();
     } else {
       createWindow();
     }
+  };
+  tray.on('click', openWindow);
+  tray.on('double-click', openWindow);
+  tray.on('right-click', () => {
+    if (trayContextMenu) tray.popUpContextMenu(trayContextMenu);
   });
 }
 
 function updateTrayMenu() {
   if (!tray) return;
-  const contextMenu = Menu.buildFromTemplate([
+  // Rebuild and store only - do NOT call tray.setContextMenu() here
+  // either (see the comment in createTray()). This just keeps the
+  // "Backend: Online/Starting" line current for the next time the user
+  // right-clicks the tray icon.
+  trayContextMenu = Menu.buildFromTemplate([
     {
       label: 'Open Freq.Phull',
       click: () => {
@@ -406,7 +425,6 @@ function updateTrayMenu() {
       click: () => { isQuitting = true; if (backendProcess) backendProcess.kill(); app.quit(); }
     }
   ]);
-  tray.setContextMenu(contextMenu);
 }
 
 // ── Window ────────────────────────────────────────────────────────────────────
@@ -441,12 +459,68 @@ function createWindow() {
     backgroundColor: '#0b0b0b',   // matches the boot splash — no white flash
   });
 
-  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  // A real report from the field: launching the app while the disk/CPU
+  // was under heavy contention from an unrelated program (an installer
+  // updating in the background) produced a broken first paint - the
+  // page "loaded" from Electron's point of view (did-finish-load fired
+  // normally, so a plain retry-on-failure listener wouldn't have caught
+  // it), but rendered as raw, unstyled source text instead of the actual
+  // UI. Closing and reopening the app fixed it immediately, which is the
+  // signature of a one-time load race, not a broken file - confirmed
+  // separately by parsing renderer/index.html with a strict HTML parser:
+  // well-formed, no BOM, both <style> blocks close cleanly, nothing
+  // leaks into the body. Since it can still happen once under a bad
+  // enough race, the app now checks for it directly instead of trusting
+  // "did-finish-load fired" to mean "rendered correctly", and silently
+  // self-heals with a reload if the check fails - instead of leaving the
+  // user staring at raw CSS with no idea what happened or that a restart
+  // would fix it.
+  let mainLoadRetries = 0;
+  const MAIN_LOAD_MAX_RETRIES = 3;
+  function loadMainWindow() {
+    mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  }
+  loadMainWindow();
+
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
+    // -3 is ERR_ABORTED, which fires on totally normal things (e.g. a
+    // fast reload racing an in-flight load) and is not an actual failure.
+    if (!isMainFrame || errorCode === -3) return;
+    if (mainLoadRetries >= MAIN_LOAD_MAX_RETRIES) {
+      log('Main window failed to load repeatedly (' + errorDescription + ') - giving up after ' + mainLoadRetries + ' retries.');
+      return;
+    }
+    mainLoadRetries++;
+    log('Main window failed to load (' + errorDescription + ', code ' + errorCode + ') - retrying (' + mainLoadRetries + '/' + MAIN_LOAD_MAX_RETRIES + ') in 400ms.');
+    setTimeout(loadMainWindow, 400);
+  });
 
   mainWindow.webContents.on('did-finish-load', () => {
     log('Page loaded');
     mainWindow.webContents.send('log', 'Page loaded, backendReady=' + backendReady);
     if (backendReady) mainWindow.webContents.send('backend-ready');
+    // Content-aware sanity check: did this actually render as the app,
+    // or did it come back as unstyled/raw source text (the exact
+    // scenario above)? A real stylesheet being applied is something
+    // that's true within a handful of milliseconds of a normal load and
+    // essentially never true if something went sideways, so a short
+    // settle delay before checking is enough without needing to guess a
+    // longer, arbitrary timeout.
+    setTimeout(() => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.webContents.executeJavaScript(
+        "(() => { try { const cs = getComputedStyle(document.body); return !!document.getElementById('main') && cs.fontFamily.indexOf('Inter') !== -1; } catch (e) { return false; } })()"
+      ).then((renderedOk) => {
+        if (renderedOk || !mainWindow || mainWindow.isDestroyed()) return;
+        if (mainLoadRetries >= MAIN_LOAD_MAX_RETRIES) {
+          log('Main window rendered incorrectly and retry budget is exhausted - leaving as-is.');
+          return;
+        }
+        mainLoadRetries++;
+        log('Main window finished loading but did not render correctly (stylesheet not applied) - reloading (' + mainLoadRetries + '/' + MAIN_LOAD_MAX_RETRIES + ').');
+        mainWindow.reload();
+      }).catch(() => {});
+    }, 500);
   });
 
   mainWindow.once('ready-to-show', () => {

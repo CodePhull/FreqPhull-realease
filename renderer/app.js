@@ -674,11 +674,15 @@ function setStatus(msg) {
 }
 
 // The splash is shown from the first painted frame, so on a fast boot it
-// would otherwise appear and vanish within a few frames. Hold it for at
-// least one bar (2.6s at 100 BPM),
-// then dissolve. Everything behind it is already interactive; the floor
-// only governs the overlay.
-const BOOT_SPLASH_FLOOR_MS = 3200;
+// would otherwise appear and vanish within a few frames - this floor
+// exists only to avoid that one-frame flash, not to pace the launch.
+// Previously held at 3200ms (one full bar at 100 BPM, purely for
+// branding feel) - on a normal machine the backend/DB are ready well
+// before that, meaning this floor, not actual startup work, was the
+// slowest single thing about every launch. Cut to the minimum that
+// still reliably avoids the flash on a fast boot. Everything behind
+// the splash is already interactive; the floor only governs the overlay.
+const BOOT_SPLASH_FLOOR_MS = 500;
 const _bootSplashShownAt = Date.now();
 let _bootSplashDismissed = false;
 
@@ -850,6 +854,9 @@ function onBackendReady() {
   setTimeout(() => idle(() => repairHistory(true)), 3200);
   idle(() => checkEnginesStatus());
   idle(() => checkIntegrity());
+  // A beat past the splash/tamper-banner/history-load window, so the
+  // first-run prompt never stacks on top of something more urgent.
+  setTimeout(() => { if (typeof rbMaybeShowFirstRunSetup === 'function') rbMaybeShowFirstRunSetup(); }, 4000);
 }
 
 async function checkIntegrity() {
@@ -979,6 +986,17 @@ function showTab(btn) {
   if (lastTab === 'slowverb' && newTab !== 'slowverb') {
     try { if (typeof svPause === 'function' && svState && svState.playing) svPause(); } catch {}
   }
+  // Random Beats' recording UI lives only on that page - stopping the
+  // capture on the way out (rather than leaving it running unseen) mirrors
+  // the Slow + Reverb rule just above it.
+  if (lastTab === 'random' && newTab !== 'random') {
+    rbRecordGeneration++; // cancel any recording start still awaiting mic permission / worklet load
+    rbMonitorGeneration++; // same, for a monitor start
+    if (rbRecording) { try { rbStopRecording(); } catch {} }
+    else { try { rbDisarmMic(); } catch {} }
+    if (rbMonitoring) { try { rbStopMonitor(); } catch {} }
+    if (rbReviewActive) { try { rbReviewDiscard(); } catch {} }
+  }
   lastTab = newTab;
   // Track this in the tab history stack (skips if invoked from back/forward)
   pushTabHistory(newTab);
@@ -1035,6 +1053,9 @@ function showTab(btn) {
   } else if (newTab === 'settings') {
     renderSettings();
     setTimeout(restoreScroll, 0);
+  } else if (newTab === 'random') {
+    rbEnterTab();
+    setTimeout(restoreScroll, 0);
   } else {
     // Synchronous tabs: download, analyze, transcribe, tools - restore immediately
     setTimeout(restoreScroll, 0);
@@ -1075,9 +1096,21 @@ async function fetchInfo() {
   document.getElementById('btn-fetch').disabled = true;
   document.getElementById('vid-card').classList.add('hidden');
   try {
-    const r = await fetch(API + '/info?url=' + encodeURIComponent(url));
+    // Round 76: send the format we're about to queue with. For a playlist
+    // the server uses it to work out which tracks are already in History,
+    // and "already have it" is format-specific - owning a track as mp3 does
+    // not mean a wav request is a duplicate.
+    const r = await fetch(API + '/info?url=' + encodeURIComponent(url) +
+                          '&format=' + encodeURIComponent(fmt || 'mp3'));
     const d = await r.json();
-    if (!r.ok) throw new Error(d.error);
+    // Round 56: /info now returns a translated {error, hint} pair for
+    // real yt-dlp failures (private/geo-blocked/age-restricted/etc, not
+    // just launch failures) - concatenate the hint the same way the
+    // download-error path already does (see ~line 4818) instead of
+    // dropping it, since the hint is usually the only actionable part
+    // ("This video is private." on its own doesn't tell anyone what to
+    // do next).
+    if (!r.ok) throw new Error(d.error + (d.hint ? '\n\n' + d.hint : ''));
 
     // Playlist URL: the server expanded it into per-video entries.
     // Queue each as its own download - every track goes through the
@@ -1119,9 +1152,20 @@ function queuePlaylistEntries(pl) {
     const m = (q.url || '').match(/[?&]v=([\w-]{6,})/);
     return m ? m[1] : q.url;
   }));
-  let added = 0, skipped = 0;
+  let added = 0, skipped = 0, owned = 0;
   for (const e of (pl.entries || [])) {
     if (already.has(e.id)) { skipped++; continue; }
+    // Round 76: the server marks entries it can already find in History
+    // (same video id, same format, file still on disk). Skip them here
+    // rather than queueing them.
+    //
+    // /download's persistent guard would have refused these anyway - but it
+    // refuses as an ERROR, one SSE stream and one red failed row each. On a
+    // playlist you mostly own that produced a screen of failures, which
+    // reads like the grab broke instead of like it correctly did nothing.
+    // Counted separately from `skipped` (already sitting in the queue) so
+    // the summary can tell the two apart - they mean different things.
+    if (e.alreadyHave) { owned++; continue; }
     dlQueue.push({
       id: dlNextId++,
       url: e.url,
@@ -1135,11 +1179,21 @@ function queuePlaylistEntries(pl) {
     added++;
   }
   updateDlQueueUI();
-  dlSt((pl.title || 'Playlist') + ' — ' + added + ' ' + (t('plQueued') || 'tracks queued'), added ? 'ok' : 'err');
+  // Round 76: a playlist where everything was already owned is a SUCCESS -
+  // there was simply nothing to do. It used to report added=0 as an error
+  // ('err'), which is the wrong signal for "you already have all of these".
+  const nothingToDo = added === 0 && (owned > 0 || skipped > 0);
+  const parts = [];
+  if (owned)   parts.push(owned + ' ' + (t('plAlreadyHave') || 'already downloaded'));
+  if (skipped) parts.push(skipped + ' ' + (t('plSkipped') || 'already in queue'));
+  const suffix = parts.length ? ' (' + parts.join(', ') + ')' : '';
+  dlSt(
+    (pl.title || 'Playlist') + ' — ' + added + ' ' + (t('plQueued') || 'tracks queued') + suffix,
+    (added || nothingToDo) ? 'ok' : 'err'
+  );
   showAppNotification(
-    (t('plQueuedNotif') || 'Playlist queued') + ': ' + added +
-    (skipped ? ' (+' + skipped + ' ' + (t('plSkipped') || 'already in queue') + ')' : ''),
-    added ? 'done' : 'info', null, 5000
+    (t('plQueuedNotif') || 'Playlist queued') + ': ' + added + suffix,
+    (added || nothingToDo) ? 'done' : 'info', null, 5000
   );
   if (added && !dlProcessing) processDlQueue();
 }
@@ -1586,6 +1640,21 @@ async function processDlQueue() {
         item.status = 'done'; item.progress = 100;
         updateDlQueueUI();
         es.close();
+        return;
+      }
+      // Same track already sits in History from a past session (not just
+      // the last few seconds) and the file is still on disk. Unlike the
+      // in-flight guard above, this is not self-evident to the user, so
+      // it gets an actual toast - with a click-through to reveal the
+      // existing file - instead of silently marking the item done.
+      if (d.code === 'duplicate_history') {
+        item.status = 'done'; item.progress = 100;
+        updateDlQueueUI();
+        es.close();
+        const when = d.downloadedAt ? String(d.downloadedAt).split(' ')[0] : '';
+        const label = (t('alreadyDownloaded') || 'Already downloaded') + (when ? ' · ' + when : '');
+        showAppNotification(label, 'warn', d.existingPath && api.showInFolder
+          ? () => api.showInFolder(d.existingPath) : null, 6000);
         return;
       }
     } catch {}
@@ -2220,6 +2289,7 @@ async function loadAudioBuffer(arrayBuf, name, histId) {
   document.getElementById('key-mode').textContent = '—';
   document.getElementById('chord-list').innerHTML = '<div style="font-size:12px;color:var(--hint)">Analyzing…</div>';
   document.getElementById('cam-grid').innerHTML = '<div style="font-size:12px;color:var(--hint)">—</div>';
+  if (document.getElementById('scale-family-list')) document.getElementById('scale-family-list').innerHTML = '<div style="font-size:12px;color:var(--hint)">Analyzing…</div>';
   // Zero all live meters on file load - nothing is playing yet
   ['live-sub','live-bass','live-low-mid','live-mid','live-high-mid','live-high'].forEach(function(id){
     var el=document.getElementById(id); if(el){el.style.width='0%';el.style.background='#4caf50';}
@@ -2364,6 +2434,7 @@ async function loadAudioBuffer(arrayBuf, name, histId) {
   }
   document.getElementById('chord-list').innerHTML = '<div style="font-size:13px;color:var(--hint)">Analyzing…</div>';
   document.getElementById('cam-grid').innerHTML = '<div style="font-size:13px;color:var(--hint)">…</div>';
+  if (document.getElementById('scale-family-list')) document.getElementById('scale-family-list').innerHTML = '<div style="font-size:13px;color:var(--hint)">Analyzing…</div>';
 
   // Show loading placeholder in pro-metrics panel
   let proPanel = document.getElementById('pro-metrics');
@@ -2395,7 +2466,7 @@ async function loadAudioBuffer(arrayBuf, name, histId) {
     // No file path available - use JS fallback
     diagLog('No path for Python analysis, using JS fallback', 'info');
     const [bpmR, keyR] = await Promise.all([detectBPM(audioBuf), Promise.resolve(detectKey(audioBuf))]);
-    applyAnalysisResult({ bpm: Math.round(bpmR.bpm), key: keyR.key, mode: keyR.mode, confidence: keyR.confidence }, histId);
+    applyAnalysisResult({ bpm: Math.round(bpmR.bpm), key: keyR.key, mode: keyR.mode, key_confidence: keyR.confidence, scale_family: keyR.scaleFamily }, histId);
   }
 }
 
@@ -2598,7 +2669,7 @@ async function runPythonAnalysis(filePath, histId, deep) {
       if (typeof switchTab === 'function') switchTab('settings');
     }, 9000);
     Promise.all([detectBPM(audioBuf), Promise.resolve(detectKey(audioBuf))]).then(([bpmR, keyR]) => {
-      applyAnalysisResult({ bpm: Math.round(bpmR.bpm), key: keyR.key, mode: keyR.mode, confidence: keyR.confidence }, histId);
+      applyAnalysisResult({ bpm: Math.round(bpmR.bpm), key: keyR.key, mode: keyR.mode, key_confidence: keyR.confidence, scale_family: keyR.scaleFamily }, histId);
     }).catch(() => {});
   }, 200000);
 
@@ -2645,7 +2716,7 @@ async function runPythonAnalysis(filePath, histId, deep) {
     // Still do JS fallback for BPM/key
     diagLog('Falling back to JS analysis for BPM/key', 'info');
     Promise.all([detectBPM(audioBuf), Promise.resolve(detectKey(audioBuf))]).then(([bpmR, keyR]) => {
-      applyAnalysisResult({ bpm: Math.round(bpmR.bpm), key: keyR.key, mode: keyR.mode, confidence: keyR.confidence }, histId);
+      applyAnalysisResult({ bpm: Math.round(bpmR.bpm), key: keyR.key, mode: keyR.mode, key_confidence: keyR.confidence, scale_family: keyR.scaleFamily }, histId);
     });
   });
 
@@ -2667,6 +2738,7 @@ function applyAnalysisResult(result, histId) {
   setKeyM(currentKey, currentMode, conf);
   renderChords(currentKey, currentMode);
   renderCamelot(currentKey, currentMode);
+  renderScaleFamily(result.scale_family);
   updatePitchKey(0);
 
   metroBpm = Math.round(currentBpm);
@@ -4167,7 +4239,7 @@ function startVU() {
   const elStatRms   = document.getElementById('stat-rms');
   // Per-channel meter elements + value labels - written every frame for L/R
   // PPM display. updateMeter() used to getElementById these on each call;
-  // now we pass the refs in and it just writes styles.
+  // refs are now passed in and it just writes styles.
   const elMeterL = document.getElementById('meter-l');
   const elMeterR = document.getElementById('meter-r');
   const elPeakL  = document.getElementById('peak-l');
@@ -4541,7 +4613,45 @@ async function detectBPM(buf) {
   return { bpm: Math.round(bestBpm * 10) / 10, confidence: 0.75 };
 }
 
-function detectKey(buf) {
+// In-place iterative radix-2 Cooley-Tukey FFT. re/im must be same-length
+// Float64Arrays whose length is a power of two; re holds real input on
+// entry (im all zero for a real-valued signal) and both hold the
+// complex spectrum on return. Same sign convention as the direct-DFT
+// code this replaces (im -= sin term => forward transform, negative
+// exponent), so bin values are drop-in compatible with what used to be
+// computed bin-by-bin below.
+function fftRadix2(re, im) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      let t = re[i]; re[i] = re[j]; re[j] = t;
+      t = im[i]; im[i] = im[j]; im[j] = t;
+    }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = -2 * Math.PI / len;
+    const wr = Math.cos(ang), wi = Math.sin(ang);
+    const half = len >> 1;
+    for (let i = 0; i < n; i += len) {
+      let curWr = 1, curWi = 0;
+      for (let j = 0; j < half; j++) {
+        const ur = re[i + j], ui = im[i + j];
+        const vr = re[i + j + half] * curWr - im[i + j + half] * curWi;
+        const vi = re[i + j + half] * curWi + im[i + j + half] * curWr;
+        re[i + j] = ur + vr; im[i + j] = ui + vi;
+        re[i + j + half] = ur - vr; im[i + j + half] = ui - vi;
+        const nextWr = curWr * wr - curWi * wi;
+        const nextWi = curWr * wi + curWi * wr;
+        curWr = nextWr; curWi = nextWi;
+      }
+    }
+  }
+}
+
+async function detectKey(buf) {
   const sr = buf.sampleRate, data = buf.getChannelData(0);
   const len = Math.min(data.length, sr * 30);
   const fftSize = 8192, hop = 4096;
@@ -4556,26 +4666,27 @@ function detectKey(buf) {
   const hiIdx = Math.min(fftSize / 2 - 1, Math.ceil(2000 / binHz));
   let frameCount = 0;
 
+  const reBuf = new Float64Array(fftSize);
+  const imBuf = new Float64Array(fftSize);
   for (let pos = 0; pos + fftSize <= len; pos += hop) {
-    const frame = new Float64Array(fftSize);
-    for (let i = 0; i < fftSize; i++) frame[i] = data[pos + i] * hann[i];
+    for (let i = 0; i < fftSize; i++) { reBuf[i] = data[pos + i] * hann[i]; imBuf[i] = 0; }
+    fftRadix2(reBuf, imBuf);
 
-    // Compute DFT for bins in 60-2000Hz range
+    // Read bins in 60-2000Hz range straight out of the transform instead
+    // of computing each one from scratch.
     for (let k = loIdx; k <= hiIdx; k++) {
       const freq = k * binHz;
       if (freq < 60 || freq > 2000) continue;
-      let re = 0, im = 0;
-      const w = 2 * Math.PI * k / fftSize;
-      for (let n = 0; n < fftSize; n++) {
-        re += frame[n] * Math.cos(w * n);
-        im -= frame[n] * Math.sin(w * n);
-      }
-      const mag = Math.sqrt(re * re + im * im) / fftSize;
+      const mag = Math.sqrt(reBuf[k] * reBuf[k] + imBuf[k] * imBuf[k]) / fftSize;
       const midi = 69 + 12 * Math.log2(freq / 440);
       const pc = ((Math.round(midi) % 12) + 12) % 12;
       chroma[pc] += mag * mag;
     }
     frameCount++;
+    // Belt-and-suspenders: yield back to the event loop periodically so
+    // even a very long/unusual input can't block the UI for long, no
+    // matter how fast or slow the machine it's running on is.
+    if (frameCount % 16 === 0) await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
   if (frameCount === 0) return { key: 'C', mode: 'major', confidence: 0.1 };
@@ -4635,7 +4746,68 @@ function detectKey(buf) {
     return { key, mode, score: Math.round(s * 1000) / 1000, camelot: CAM[k] || '?' };
   });
 
-  return { key: bestKey, mode: bestMode, confidence: conf, candidates };
+  const scaleFamily = matchScaleFamily(cn, NOTES.indexOf(bestKey));
+
+  return { key: bestKey, mode: bestMode, confidence: conf, candidates, scaleFamily };
+}
+// Round 62 ("get the most matching type of (key combo) (Harm, pent. etc)
+// and what keys compose them"): given the already-detected root note,
+// ranks every scale/mode type this app knows about (the SAME table
+// RB_AT_SCALE_INTERVALS - the live-autotune piano's in-scale highlight -
+// already uses, so a scale named here means the same thing everywhere
+// else in the app) against the observed chroma, and returns the closest
+// matches with their literal composing note names. Mirrors
+// analyze.py's match_scale_family()/scale_family_result() exactly (same
+// scale table, same correlation-times-coverage scoring - see that
+// function's comment for why coverage alone AND correlation alone both
+// measurably misfire, tested there against synthetic ground-truth
+// content) so the JS fallback path (used when Python analysis fails or
+// times out) shows the same feature, not a degraded one.
+const RB_KEY_SCALE_INTERVALS = {
+  'Major':            [0,2,4,5,7,9,11],
+  'Natural Minor':    [0,2,3,5,7,8,10],
+  'Harmonic Minor':   [0,2,3,5,7,8,11],
+  'Melodic Minor':    [0,2,3,5,7,9,11],
+  'Dorian':           [0,2,3,5,7,9,10],
+  'Phrygian':         [0,1,3,5,7,8,10],
+  'Lydian':           [0,2,4,6,7,9,11],
+  'Mixolydian':       [0,2,4,5,7,9,10],
+  'Locrian':          [0,1,3,5,6,8,10],
+  'Major Pentatonic': [0,2,4,7,9],
+  'Minor Pentatonic': [0,3,5,7,10],
+};
+function matchScaleFamily(chroma12, rootIdx, topN) {
+  const NOTES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  const total = chroma12.reduce((a, b) => a + b, 0) + 1e-12;
+  function pearsonFlat(a, tmpl) {
+    const n = a.length;
+    let sumA = 0, sumB = 0;
+    for (let i = 0; i < n; i++) { sumA += a[i]; sumB += tmpl[i]; }
+    const mA = sumA / n, mB = sumB / n;
+    let num = 0, dA = 0, dB = 0;
+    for (let i = 0; i < n; i++) {
+      const da = a[i] - mA, db = tmpl[i] - mB;
+      num += da * db; dA += da * da; dB += db * db;
+    }
+    const d = Math.sqrt(dA) * Math.sqrt(dB);
+    return d > 1e-10 ? num / d : 0;
+  }
+  const ranked = [];
+  for (const [name, iv] of Object.entries(RB_KEY_SCALE_INTERVALS)) {
+    const tmpl = new Array(12).fill(0);
+    for (const s of iv) tmpl[(rootIdx + s) % 12] = 1;
+    const corr = pearsonFlat(chroma12, tmpl);
+    let covered = 0;
+    for (let i = 0; i < 12; i++) if (tmpl[i]) covered += chroma12[i];
+    const coverage = covered / total;
+    ranked.push({ name, iv, score: corr * Math.max(0, coverage) });
+  }
+  ranked.sort((a, b) => b.score - a.score);
+  return ranked.slice(0, topN || 3).map(r => ({
+    name: r.name,
+    notes: r.iv.map(s => NOTES[(rootIdx + s) % 12]),
+    score: Math.round(Math.max(0, r.score) * 1000) / 1000,
+  }));
 }
 function renderChords(key,mode) {
   const N=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'],root=N.indexOf(key);
@@ -4649,6 +4821,15 @@ function renderCamelot(key,mode) {
   const self=CAM[key+' '+mode];if(!self){document.getElementById('cam-grid').innerHTML='<div style="font-size:12px;color:var(--hint)">—</div>';return;}
   const n=parseInt(self),l=self.slice(-1),compat=new Set([self,((n-2+12)%12+1)+l,(n%12+1)+l,n+(l==='A'?'B':'A')]);
   document.getElementById('cam-grid').innerHTML=Object.entries(CAM).map(([name,code])=>`<div class="cam-key ${code===self?'self':compat.has(code)?'match':''}" title="${name}">${code}<span>${name.split(' ')[0]}</span></div>`).join('');
+}
+// Round 62: renders the scale-family matches (list of {name, notes,
+// score}) either straight from the Python engine's result.scale_family
+// or from the JS fallback's matchScaleFamily() - same shape either way.
+function renderScaleFamily(list) {
+  const el = document.getElementById('scale-family-list');
+  if (!el) return;
+  if (!list || !list.length) { el.innerHTML = '<div style="font-size:14px;color:var(--hint)">—</div>'; return; }
+  el.innerHTML = list.map((sf, i) => `<div class="scale-family-row${i===0?' best':''}"><span class="scale-family-name">${escapeHtml(sf.name)}</span><span class="scale-family-notes">${sf.notes.map(n=>`<span class="scale-note-pill">${escapeHtml(n)}</span>`).join('')}</span></div>`).join('');
 }
 function scheduleNoteSave() {
   clearTimeout(noteTimer);document.getElementById('notes-saved').textContent='Saving…';
@@ -4761,7 +4942,61 @@ async function startTranscribeFile(file) {
 function copyTranscript(){navigator.clipboard.writeText(document.getElementById('transcript-out').value);}
 function saveTranscript(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([document.getElementById('transcript-out').value],{type:'text/plain'}));a.download='transcript.txt';a.click();}
 
-async function loadHistory(){try{histData=await(await fetch(API+'/history')).json();}catch{histData=[];}renderHistory();}
+// Round 70 ("app feels slow and sluggy"): this is called from 30 separate
+// places and refetches the WHOLE history list every time. Static analysis
+// could size the payload but not time it on real hardware, so it now
+// records what actually happened - bytes over the wire, JSON parse time,
+// row count, and how long the resulting render took - into the existing
+// diagnostic log and window.__FP_PERF__. Cheap (one performance.now()
+// pair and a .length), off the hot path, and it turns "feels slow" into
+// numbers that say WHERE the time goes on the machine that's actually
+// slow. Read them from Settings > Diagnostic Log, or type __FP_PERF__
+// in devtools.
+window.__FP_PERF__ = window.__FP_PERF__ || { history: [] };
+function _perfNote(entry){
+  try {
+    const p = window.__FP_PERF__;
+    p.history.push(entry);
+    if (p.history.length > 50) p.history.shift();
+    p.last = entry;
+  } catch {}
+}
+async function loadHistory(){
+  const t0 = performance.now();
+  let bytes = 0;
+  try {
+    const res = await fetch(API+'/history');
+    const text = await res.text();          // measure the real payload
+    bytes = text.length;
+    histData = JSON.parse(text);
+  } catch { histData=[]; }
+  const tFetched = performance.now();
+  renderHistory();
+  // renderHistory() is rAF-coalesced, so the paint it schedules lands
+  // after this function returns - measure it from inside the frame
+  // rather than reporting a misleadingly tiny synchronous number.
+  requestAnimationFrame(() => {
+    const tRendered = performance.now();
+    const entry = {
+      rows: histData.length,
+      payloadKB: +(bytes/1024).toFixed(1),
+      fetchMs: +(tFetched - t0).toFixed(1),
+      renderMs: +(tRendered - tFetched).toFixed(1),
+      totalMs: +(tRendered - t0).toFixed(1),
+      domNodes: (function(){ try { const l=document.getElementById('hist-list'); return l ? l.querySelectorAll('*').length : 0; } catch { return 0; } })(),
+      at: new Date().toISOString(),
+    };
+    _perfNote(entry);
+    // Only surface the slow ones in the log - a fast refresh is noise.
+    if (entry.totalMs > 250) {
+      diagLog('perf: history refresh ' + entry.totalMs + 'ms (' + entry.rows + ' rows, '
+        + entry.payloadKB + 'KB, fetch ' + entry.fetchMs + 'ms, render ' + entry.renderMs
+        + 'ms, ' + entry.domNodes.toLocaleString() + ' DOM nodes)', 'warn');
+    }
+  });
+  if(typeof rbRefreshIfEmpty==='function')rbRefreshIfEmpty();
+  if(typeof rbPickerOpen!=='undefined'&&rbPickerOpen)rbPickerRenderList();
+}
 
 // ── Live server events ──────────────────────────────────────────────────
 // Subscribe once to the backend's /events SSE channel. When the server
@@ -4943,11 +5178,10 @@ function toggleRowSelect(id, e) {
   else selectedIds.add(id);
   updateSelCount();
   updateBatchActions();
-  // Update visual
+  // Update visual - the row itself IS the selection indicator now (no
+  // per-row checkbox - see buildHistoryRowHTML).
   const row = document.querySelector(`.hist-row[data-id="${id}"]`);
   if (row) row.classList.toggle('selected', selectedIds.has(id));
-  const cb = row?.querySelector('.hist-check');
-  if (cb) cb.checked = selectedIds.has(id);
 }
 
 function updateSelCount() {
@@ -6622,8 +6856,13 @@ function _renderHistoryImpl(){
   // same way (template literal below) but apply it surgically.
   function buildHistoryRowHTML(h){
     const checked = selectedIds.has(h.id);
-    const checkbox = selectMode ? `<input type="checkbox" class="hist-check" ${checked?'checked':''} onclick="toggleRowSelect(${h.id},event)"/>` : '';
-    const rowClass = 'hist-row' + (checked ? ' selected' : '');
+    // No checkbox - select mode toggles by clicking anywhere on the row
+    // (the row's own onclick below already routes to toggleRowSelect();
+    // the checkbox used to be a second, redundant click target wired to
+    // the exact same function). Selection state is shown purely via the
+    // '.selected' row highlight now - see the strengthened green
+    // treatment in index.html, since it's the only visual cue left.
+    const rowClass = 'hist-row' + (selectMode ? ' select-mode' : '') + (checked ? ' selected' : '');
     // Click behavior on the row:
     //   • Select mode: single-click toggles selection (touch-friendly, no
     //     ambiguity with the play button - play btn is hidden in select mode)
@@ -6682,7 +6921,7 @@ function _renderHistoryImpl(){
     // by the cleanup pass below so subsequent re-renders don't re-flash.
     const isNew = prevSeenHistId > 0 && (h.id || 0) > prevSeenHistId;
     const pulseClass = isNew ? ' row-pulse' : '';
-    return `<div class="${rowClass}${pulseClass}" data-id="${h.id}"${rowTitle} ${onclick} oncontextmenu="showHistoryContextMenu(event, ${h.id})" draggable="true" ondragstart="dragHistoryRowToExternal(event, ${h.id})">${checkbox}${playBtn}<img class="hist-thumb" loading="lazy" decoding="async" src="${resolveThumb(h.thumbnail)}" onerror="window._thumbFail(this)" alt=""/>${favBtn}<div class="hist-info"><div class="hist-title">${h.title||'(untitled)'}</div><div class="hist-meta">${[h.channel,h.created_at?.slice(0,16),fmtSec(h.duration)].filter(Boolean).join(' · ')}</div>${tagStrip}</div><div class="hist-badges">${h.bpm?`<span class="badge bpm">${Math.round(h.bpm)} BPM</span>`:''}${h.key_note?`<span class="badge key">${h.key_note} ${h.key_mode||''}</span>`:''}${h.format?`<span class="badge">${h.format.toUpperCase()}</span>`:''}</div>${selectMode?`<button class="btn xs danger" onclick="event.stopPropagation();deleteHistory(${h.id})">${t('histRemove')}</button>`:`<button class="btn xs" tabindex="-1" onmousedown="this.blur()" onclick="event.stopPropagation();openSimilarTracks(${h.id});this.blur()" title="${t('simBtn')}">≈</button>`}</div>`;
+    return `<div class="${rowClass}${pulseClass}" data-id="${h.id}"${rowTitle} ${onclick} oncontextmenu="showHistoryContextMenu(event, ${h.id})" draggable="true" ondragstart="dragHistoryRowToExternal(event, ${h.id})">${playBtn}<img class="hist-thumb" loading="lazy" decoding="async" src="${resolveThumb(h.thumbnail)}" onerror="window._thumbFail(this)" alt=""/>${favBtn}<div class="hist-info"><div class="hist-title">${h.title||'(untitled)'}</div><div class="hist-meta">${[h.channel,h.created_at?.slice(0,16),fmtSec(h.duration)].filter(Boolean).join(' · ')}</div>${tagStrip}</div><div class="hist-badges">${h.bpm?`<span class="badge bpm">${Math.round(h.bpm)} BPM</span>`:''}${h.key_note?`<span class="badge key">${h.key_note} ${h.key_mode||''}</span>`:''}${h.format?`<span class="badge">${h.format.toUpperCase()}</span>`:''}</div>${selectMode?`<button class="btn xs danger" onclick="event.stopPropagation();deleteHistory(${h.id})">${t('histRemove')}</button>`:`<button class="btn xs" tabindex="-1" onmousedown="this.blur()" onclick="event.stopPropagation();openSimilarTracks(${h.id});this.blur()" title="${t('simBtn')}">≈</button>`}</div>`;
   } // end buildHistoryRowHTML
 
   // Build a fingerprint for each row so we can detect which ones
@@ -6704,11 +6943,23 @@ function _renderHistoryImpl(){
             (analyzeMirrorActive && typeof playing !== 'undefined' && playing));
   }
 
-  // First render of this list, or massive change → fall back to full
-  // innerHTML rewrite (faster than 100s of individual mutations).
+  // First render of this list, a massive change, or selectMode just
+  // flipped → fall back to full innerHTML rewrite (faster than 100s of
+  // individual mutations). selectMode is part of every single row's
+  // fingerprint (see rowFingerprint below), so toggling it changes
+  // EVERY row's fingerprint at once - the per-row reconciliation path
+  // below would then "patch" all of them individually (build a temp
+  // element, diff, copy innerHTML, re-sync handlers) instead of doing
+  // one bulk replace, which is strictly more expensive for exactly the
+  // case where every row is changing anyway. Measured directly as the
+  // cause of a real, reported slowdown entering select mode on a
+  // history list of any real size - one bulk innerHTML write is much
+  // cheaper than N individual DOM patches when N of N rows differ.
   const existing = Array.from(list.children).filter(el => el.classList && el.classList.contains('hist-row'));
   const FULL_REWRITE_THRESHOLD = 80;
-  if (!existing.length || Math.abs(existing.length - rows.length) > FULL_REWRITE_THRESHOLD) {
+  const selectModeChanged = window._lastRenderedSelectMode !== undefined && window._lastRenderedSelectMode !== selectMode;
+  window._lastRenderedSelectMode = selectMode;
+  if (!existing.length || Math.abs(existing.length - rows.length) > FULL_REWRITE_THRESHOLD || selectModeChanged) {
     list.innerHTML = rows.map(buildHistoryRowHTML).join('');
   } else {
     // Reconcile by data-id. Build a map of current DOM rows.
@@ -6743,6 +6994,19 @@ function _renderHistoryImpl(){
             existingEl.className = fresh.className;
             existingEl.setAttribute('title', fresh.getAttribute('title') || '');
             existingEl.setAttribute('draggable', 'true');
+            // Sync the row's own click handlers too - these flip between
+            // ondblclick (normal mode, opens in Analyze) and onclick
+            // (select mode, toggles selection) depending on selectMode,
+            // but only the innerHTML gets replaced below, not the outer
+            // div's own attributes. Without this, toggling into/out of
+            // select mode on an already-rendered list left existing rows
+            // stuck on their old handler - clicking a row to select it
+            // silently did nothing (selection only worked on rows that
+            // happened to get a full rebuild). Assigning null when the
+            // fresh row doesn't have one correctly clears the stale
+            // handler rather than leaving it dangling.
+            existingEl.onclick = fresh.onclick;
+            existingEl.ondblclick = fresh.ondblclick;
             // Replace children but preserve thumbs whose src is unchanged
             const oldThumb = existingEl.querySelector('.hist-thumb');
             const newThumb = fresh.querySelector('.hist-thumb');
@@ -7513,6 +7777,21 @@ function setStemQuality(btn) {
   sepQuality = btn.dataset.quality;
   const desc = document.getElementById('stems-quality-desc');
   if (desc) desc.textContent = t('sepQuality_' + sepQuality);
+  // "Ultra" is billed as reference quality, but ensemble / vocal-ensemble
+  // — the two toggles that actually buy the biggest additional SDR gains
+  // (+0.3-0.8dB harmonic, +0.3-0.6dB vocal) — are separate opt-in
+  // checkboxes a user has to find on their own. Selecting Ultra now turns
+  // both on automatically, so "reference quality" means the best output
+  // the pipeline can produce, not a partial version of it gated behind
+  // undiscovered toggles. One-directional: picking Fast/High afterwards
+  // does not turn them back off, since they're also a legitimate quality
+  // bonus at High and the user may still want them there.
+  if (sepQuality === 'ultra') {
+    const ecb = document.getElementById('stems-ensemble');
+    if (ecb && !ecb.checked) { ecb.checked = true; setEnsemble(true); }
+    const vcb = document.getElementById('stems-vocal-ensemble');
+    if (vcb && !vcb.checked) { vcb.checked = true; setVocalEnsemble(true); }
+  }
 }
 
 // Direct mode skips Stage 1 (vocal isolation) entirely. Faster, and producer
@@ -10544,6 +10823,10 @@ function startSetupPolling() {
             setTimeout(hideSetupModal, 2200);
             showAppNotification('' + t('enginesReady'), 'done');
             try { localStorage.removeItem('freqphull_setup_skipped'); } catch {}
+            // Update the Settings page immediately, whether or not it's
+            // the visible tab right now - see applyEnginesStatusToUI().
+            try { applyEnginesStatusToUI(sJ); } catch {}
+            try { refreshEnginesDiagRow(); } catch {}
           } else {
             showSetupError('Setup ended without confirmation',
               'Engines marker is missing. Check Settings -> View logs -> Setup tab for details.');
@@ -10571,6 +10854,13 @@ function showSetupError(msg, hint, logTail, logPath) {
   document.getElementById('setup-error').classList.remove('hidden');
   document.getElementById('setup-error-msg').textContent = msg;
   document.getElementById('setup-error-hint').textContent = hint || '';
+  // A failed setup can still change engine state (e.g. tripped the
+  // breaker on a dependency install) - refresh the Settings page's
+  // status line and diagnostic strip for the same reason the success
+  // path does, instead of leaving them showing whatever they said
+  // before this attempt started.
+  try { refreshEnginesDiagRow(); } catch {}
+  fetch(API + '/engines-status').then(r => r.json()).then(applyEnginesStatusToUI).catch(() => {});
   // Show the log tail if the server attached one.
   const wrap = document.getElementById('setup-error-diag-wrap');
   const pre = document.getElementById('setup-error-diag');
@@ -10830,6 +11120,7 @@ const T = {
     plQueued:'tracks queued',
     plQueuedNotif:'Playlist queued',
     plSkipped:'already in queue',
+    plAlreadyHave:'already downloaded',
     analysisStuck:'Analysis is not responding - check Settings > Verify engines',
     doctorNoPrints:'No tracks have audio fingerprints yet, so the doctor cannot compare anything. Run the fingerprint backfill first (a few minutes for large libraries), then scan again.',
     doctorBackfillBtn:'Start fingerprint backfill',
@@ -11102,6 +11393,7 @@ const T = {
     autoSendOnNotif:'New downloads will be moved into their detected folder',
     autoSendOffNotif:'Auto-send off - downloads stay put, tags only',
     sentTo:'Sent to',
+    alreadyDownloaded:'Already downloaded',
     storName:'Storage breakdown',
     storDesc:'See how much disk space each Stockpile folder uses, find missing files, spot orphaned audio in your stockpile root.',
     btnViewStorage:'View storage',
@@ -11416,6 +11708,125 @@ const T = {
     pending:'pending',
     // General
     close:'Close', by:'by', save:'Save', delete:'Delete',
+    // Random Beats
+    navRandomBeats:'Topliner',
+    rbTitle:'Topliner',
+    rbSub:'Shuffle through everything you have downloaded and dive straight into it',
+    rbTag:'Random pick',
+    rbTagPicked:'From your library',
+    rbPickerNoMatch:'No beats match that search',
+    rbPickerEmpty:'Nothing downloaded yet',
+    rbPickerPreview:'Preview',
+    rbNotAnalyzed:'Not analyzed yet',
+    rbNextBeat:'Next random beat',
+    rbStopFirst:'Stop the recording first',
+    rbNoMic:'This device has no microphone support',
+    rbMicDenied:'Microphone access was denied',
+    rbMicFallback:'Couldn\'t reach your selected microphone - using {d} instead',
+    rbMicErrPermission:'Microphone access is blocked - check your OS privacy/microphone settings for this app, then try again',
+    rbMicErrNotFound:'No microphone was found - check it\'s plugged in and try again',
+    rbMicErrInUse:'The microphone is already in use by another app - close it and try again',
+    rbMicErrConstraints:'This microphone doesn\'t support the requested settings - try a different mic',
+    rbMicErrOther:'Couldn\'t open the microphone - see the activity log below for details',
+    rbAtFaultRecovered:'Pitch correction hit an unexpected error and reset itself - dry audio played briefly during the reset. If this keeps happening, please share the activity log below.',
+    rbRecordUnsupported:'Recording is not supported on this device',
+    rbStemNoVocal:'No recorded vocal available yet',
+    rbStemVocalSaved:'Vocal stem saved',
+    rbStemVocalFailed:'Could not save the vocal stem',
+    rbStemNoBeat:'Beat file not available',
+    rbStemBeatRevealed:'Beat file revealed in your file browser',
+    rbRecordTopline:'Record topline',
+    rbStopRecording:'Stop recording',
+    rbRecordHint:"Recording over the beat - hit stop when you're done",
+    rbRecordHintAt:"Recording with autotune over the beat - hit stop when you're done",
+    rbNotes:'Notes',
+    rbMixing:'Mixing your take onto the beat…',
+    rbMixSaved:'Saved {f} — click to play',
+    rbMixFailed:'Could not mix: {e}',
+    rbEmptyTitle:'Nothing downloaded yet',
+    rbEmptySub:'Download a beat first, then come back here to shuffle through your library.',
+    setupStockTitle:'Set up your Stockpile folder',
+    setupStockBody:'Pick a folder and every download will be filed there automatically as your main working library. You can change this anytime from Settings.',
+    setupStockSkip:'Skip for now',
+    setupStockChoose:'Choose folder',
+    setupStockDone:'Stockpile folder set — downloads will go there automatically',
+    // Autotune (Random Beats - Record topline)
+    rbAutotuneUnavailable:'Autotune is unavailable right now - recording plain instead',
+    rbAutotuneChangeNextTake:'Applies starting with your next recording',
+    rbAtTitle:'Recording',
+    rbAtGroupInput:'Input',
+    rbAtGroupPitch:'Pitch Correction',
+    rbAtGroupReverb:'Reverb',
+    rbAtGroupOutput:'Output',
+    rbAtMic:'Microphone',
+    rbAtMicDefault:'System default',
+    rbAtMicGeneric:'Microphone',
+    rbAtMonitor:'Monitor with Autotune',
+    rbAtBake:'Autotune on Recording',
+    rbAtHint:'Use headphones while monitoring - on speakers, the mic hears its own monitored output and screeches',
+    rbAtBakeReminder:"Monitor only makes it audible live - check \u2018Autotune on Recording\u2019 too if you want it in the saved take",
+    rbAtKey:'Key',
+    rbAtScale:'Scale',
+    rbAtPianoTitle:'Notes',
+    rbAtPianoHint:'Click a note to remove it from correction',
+    rbAtRetune:'Retune Speed',
+    rbAtRetuneHint:'Lower = faster, more obvious snap to the note (the classic hard-tune sound). Higher = a smoother, more natural glide.',
+    rbAtTracking:'Tracking Speed',
+    rbAtTrackingHint:"How quickly the engine decides which note you're singing. Lower = catches fast note changes sooner. Higher = steadier lock, less sensitive to jitter.",
+    rbAtHumanize:'Humanize',
+    rbAtHumanizeHint:'Eases sustained notes in more gently the longer they\'re held, instead of snapping instantly every time.',
+    rbAtVibrato:'Natural Vibrato',
+    rbAtVibratoHint:'Lets some of your own pitch wobble through instead of flattening it completely - 0 corrects vibrato too.',
+    rbAtFlexTune:'Flex-Tune',
+    rbAtFlexTuneHint:'Leaves small pitch deviations near the target uncorrected - 0 corrects everything, higher forgives more.',
+    rbAtFormant:'Formant Correction',
+    rbAtFormantHint:'Keeps your voice\'s natural tone when pitch-shifting a lot - off is more transparent for small, everyday corrections.',
+    rbAtInGain:'Input Gain',
+    rbAtOutGain:'Output Gain',
+    rbRvMonitor:'Monitor with Reverb',
+    rbRvBake:'Reverb on Recording',
+    rbRvMix:'Mix',
+    rbRvDecay:'Decay',
+    rbRvDamping:'Damping',
+    rbRvPreDelay:'Pre-delay',
+    rbAtLevel:'Input Level',
+    rbClipping:'Clipping',
+    rbReviewFinishFirst:'Save or discard your current take first',
+    rbReviewLoadingWave:'Loading waveform…',
+    rbReviewTitle:'Review your take',
+    rbReviewHint:'Drag your vocal to line it up, then press play to listen through',
+    rbReviewVocalStem:'Vocal Stem',
+    rbReviewBeatStem:'Beat Stem',
+    rbReviewDiscard:'Discard',
+    rbReviewRerecord:'Re-record',
+    rbReviewSave:'Save',
+    rbGraphToggle:'Graph Mode',
+    rbGraphHint:'Drag the pitch curve to redraw it',
+    rbGraphReset:'Reset',
+    rbGraphApply:'Apply Pitch Edits',
+    rbGraphAnalyzing:'Analyzing pitch…',
+    rbGraphApplying:'Applying pitch edits…',
+    rbGraphApplyFailed:'Could not apply pitch edits',
+    rbMonitorStart:'Monitor',
+    rbMonitorStop:'Stop monitoring',
+    rbAtKeyAuto:'Match beat automatically',
+    rbAtKeyDetecting:'Detecting key…',
+    rbAtKeyDetected:'Detected: {key} {mode}',
+    rbReviewZoomFit:'Fit',
+    rbReviewBeatFader:'Beat',
+    rbReviewVocalFader:'Vocal',
+    rbScale_chromatic:'Chromatic',
+    rbScale_major:'Major',
+    rbScale_minor:'Minor',
+    rbScale_harmonicMinor:'Harmonic Minor',
+    rbScale_melodicMinor:'Melodic Minor',
+    rbScale_dorian:'Dorian',
+    rbScale_phrygian:'Phrygian',
+    rbScale_lydian:'Lydian',
+    rbScale_mixolydian:'Mixolydian',
+    rbScale_locrian:'Locrian',
+    rbScale_majorPentatonic:'Major Pentatonic',
+    rbScale_minorPentatonic:'Minor Pentatonic',
   },
   fr: {
     // ── disjoncteur moteur Python ──
@@ -11457,6 +11868,7 @@ const T = {
     plQueued:'pistes en file',
     plQueuedNotif:'Playlist ajoutée à la file',
     plSkipped:'déjà en file',
+    plAlreadyHave:'déjà téléchargées',
     analysisStuck:'L\'analyse ne répond pas - vérifiez Paramètres > Vérifier les moteurs',
     doctorNoPrints:'Aucune piste n\'a encore d\'empreinte audio, le docteur ne peut donc rien comparer. Lancez d\'abord le remplissage des empreintes (quelques minutes pour les grandes bibliothèques), puis relancez le scan.',
     doctorBackfillBtn:'Lancer le remplissage des empreintes',
@@ -11730,6 +12142,7 @@ const T = {
     autoSendOnNotif:'Les nouveaux téléchargements seront déplacés vers leur dossier détecté',
     autoSendOffNotif:'Envoi auto désactivé - les fichiers restent en place, étiquettes seulement',
     sentTo:'Envoyé vers',
+    alreadyDownloaded:'Déjà téléchargé',
     storName:'Répartition du stockage',
     storDesc:'Voyez l\'espace disque utilisé par chaque dossier Stockpile, trouvez les fichiers manquants, repérez l\'audio orphelin à la racine de votre stockpile.',
     btnViewStorage:'Voir le stockage',
@@ -12043,19 +12456,138 @@ const T = {
     pending:'en attente',
     // General
     close:'Fermer', by:'par', save:'Enregistrer', delete:'Supprimer',
+    // Beats aléatoires
+    navRandomBeats:'Topliner',
+    rbTitle:'Topliner',
+    rbSub:'Parcourez au hasard tout ce que vous avez téléchargé et lancez-vous directement',
+    rbTag:'Sélection aléatoire',
+    rbTagPicked:'De votre bibliothèque',
+    rbPickerNoMatch:'Aucun morceau ne correspond',
+    rbPickerEmpty:'Rien de téléchargé pour le moment',
+    rbPickerPreview:'Aperçu',
+    rbNotAnalyzed:'Pas encore analysé',
+    rbNextBeat:'Prochain beat aléatoire',
+    rbStopFirst:"Arrêtez d'abord l'enregistrement",
+    rbNoMic:'Cet appareil ne prend pas en charge le microphone',
+    rbMicDenied:'Accès au microphone refusé',
+    rbMicFallback:'Impossible d\'atteindre le micro sélectionné - utilisation de {d} à la place',
+    rbMicErrPermission:'L\'accès au microphone est bloqué - vérifiez les paramètres de confidentialité/microphone de votre système pour cette appli, puis réessayez',
+    rbMicErrNotFound:'Aucun microphone détecté - vérifiez qu\'il est bien branché et réessayez',
+    rbMicErrInUse:'Le microphone est déjà utilisé par une autre appli - fermez-la et réessayez',
+    rbMicErrConstraints:'Ce microphone ne prend pas en charge les réglages demandés - essayez un autre micro',
+    rbMicErrOther:'Impossible d\'ouvrir le microphone - voir le journal d\'activité ci-dessous pour plus de détails',
+    rbAtFaultRecovered:'La correction de tonalité a rencontré une erreur inattendue et s\'est réinitialisée - l\'audio brut a été joué brièvement pendant la réinitialisation. Si cela persiste, merci de partager le journal d\'activité ci-dessous.',
+    rbRecordUnsupported:"L'enregistrement n'est pas pris en charge sur cet appareil",
+    rbStemNoVocal:'Aucune voix enregistrée pour le moment',
+    rbStemVocalSaved:'Piste voix enregistrée',
+    rbStemVocalFailed:"Impossible d'enregistrer la piste voix",
+    rbStemNoBeat:"Fichier instru introuvable",
+    rbStemBeatRevealed:'Fichier instru révélé dans votre explorateur de fichiers',
+    rbRecordTopline:'Enregistrer une topline',
+    rbStopRecording:"Arrêter l'enregistrement",
+    rbRecordHint:'Enregistrement par-dessus le beat - cliquez sur arrêter une fois terminé',
+    rbRecordHintAt:"Enregistrement avec autotune par-dessus le beat - cliquez sur arrêter une fois terminé",
+    rbNotes:'Notes',
+    rbMixing:'Mixage de votre prise sur le beat…',
+    rbMixSaved:'{f} enregistré — cliquez pour écouter',
+    rbMixFailed:'Échec du mixage : {e}',
+    rbEmptyTitle:'Rien de téléchargé pour le moment',
+    rbEmptySub:"Téléchargez d'abord un beat, puis revenez ici pour parcourir votre bibliothèque au hasard.",
+    setupStockTitle:'Configurez votre dossier Stockpile',
+    setupStockBody:'Choisissez un dossier et chaque téléchargement y sera classé automatiquement comme bibliothèque de travail principale. Modifiable à tout moment dans les Paramètres.',
+    setupStockSkip:"Ignorer pour l'instant",
+    setupStockChoose:'Choisir le dossier',
+    setupStockDone:'Dossier Stockpile défini — les téléchargements iront automatiquement là-bas',
+    // Autotune (Beats aléatoires - Enregistrer une topline)
+    rbAutotuneUnavailable:"L'autotune est indisponible pour le moment - enregistrement brut à la place",
+    rbAutotuneChangeNextTake:'Prend effet à partir de votre prochain enregistrement',
+    rbAtTitle:'Enregistrement',
+    rbAtGroupInput:'Entrée',
+    rbAtGroupPitch:'Correction de hauteur',
+    rbAtGroupReverb:'Réverbération',
+    rbAtGroupOutput:'Sortie',
+    rbAtMic:'Microphone',
+    rbAtMicDefault:'Par défaut du système',
+    rbAtMicGeneric:'Microphone',
+    rbAtMonitor:"Écoute avec l'autotune",
+    rbAtBake:"Autotune sur l'enregistrement",
+    rbAtHint:"Utilisez un casque pendant l'écoute - sur haut-parleurs, le micro capte sa propre sortie surveillée et ça hurle",
+    rbAtBakeReminder:"L'écoute rend seulement l'effet audible en direct - cochez aussi \u00abAutotune sur l'enregistrement\u00bb si vous le voulez dans le fichier enregistré",
+    rbAtKey:'Tonalité',
+    rbAtScale:'Gamme',
+    rbAtPianoTitle:'Notes',
+    rbAtPianoHint:'Cliquez sur une note pour la retirer de la correction',
+    rbAtRetune:'Vitesse de correction',
+    rbAtRetuneHint:'Plus bas = accrochage plus rapide et plus marqu\u00e9 sur la note (l\'effet hard-tune classique). Plus haut = glissement plus doux et naturel.',
+    rbAtTracking:'Vitesse de suivi',
+    rbAtTrackingHint:"À quelle vitesse le moteur décide quelle note vous chantez. Plus bas = repère plus vite les changements de note rapides. Plus haut = accrochage plus stable, moins sensible aux petites variations.",
+    rbAtHumanize:'Humanisation',
+    rbAtHumanizeHint:'Assouplit progressivement les notes tenues au lieu de les accrocher instantan\u00e9ment \u00e0 chaque fois.',
+    rbAtVibrato:'Vibrato naturel',
+    rbAtVibratoHint:'Laisse passer une partie de votre propre vibrato au lieu de l\'aplatir compl\u00e8tement - 0 corrige aussi le vibrato.',
+    rbAtFlexTune:'Flex-Tune',
+    rbAtFlexTuneHint:'Laisse les petits \u00e9carts de hauteur pr\u00e8s de la cible sans correction - 0 corrige tout, plus haut pardonne davantage.',
+    rbAtFormant:'Correction des formants',
+    rbAtFormantHint:'Conserve le timbre naturel de votre voix lors d\'un fort changement de hauteur - d\u00e9sactiv\u00e9, le rendu est plus transparent pour les petites corrections courantes.',
+    rbAtInGain:"Gain d'entrée",
+    rbAtOutGain:'Gain de sortie',
+    rbRvMonitor:"Écoute avec la réverbération",
+    rbRvBake:"Réverbération sur l'enregistrement",
+    rbRvMix:'Mélange',
+    rbRvDecay:'Décroissance',
+    rbRvDamping:'Amortissement',
+    rbRvPreDelay:'Pré-délai',
+    rbAtLevel:"Niveau d'entrée",
+    rbClipping:'Saturation',
+    rbReviewFinishFirst:"Enregistrez ou annulez d'abord votre prise en cours",
+    rbReviewLoadingWave:'Chargement de la forme d\'onde…',
+    rbReviewTitle:'Écoutez votre prise',
+    rbReviewHint:"Faites glisser votre voix pour la caler, puis lancez la lecture pour l'écouter",
+    rbReviewVocalStem:'Piste voix',
+    rbReviewBeatStem:'Piste instru',
+    rbReviewDiscard:'Annuler',
+    rbReviewRerecord:'Réenregistrer',
+    rbReviewSave:'Enregistrer',
+    rbGraphToggle:'Mode graphique',
+    rbGraphHint:'Faites glisser la courbe de hauteur pour la redessiner',
+    rbGraphReset:'Réinitialiser',
+    rbGraphApply:'Appliquer les corrections',
+    rbGraphAnalyzing:'Analyse de la hauteur…',
+    rbGraphApplying:'Application des corrections…',
+    rbGraphApplyFailed:"Impossible d'appliquer les corrections",
+    rbMonitorStart:'Écoute',
+    rbMonitorStop:"Arrêter l'écoute",
+    rbAtKeyAuto:'Caler automatiquement sur le beat',
+    rbAtKeyDetecting:'Détection de la tonalité…',
+    rbAtKeyDetected:'Détecté : {key} {mode}',
+    rbReviewZoomFit:'Ajuster',
+    rbReviewBeatFader:'Beat',
+    rbReviewVocalFader:'Voix',
+    rbScale_chromatic:'Chromatique',
+    rbScale_major:'Majeure',
+    rbScale_minor:'Mineure',
+    rbScale_harmonicMinor:'Mineure harmonique',
+    rbScale_melodicMinor:'Mineure mélodique',
+    rbScale_dorian:'Dorien',
+    rbScale_phrygian:'Phrygien',
+    rbScale_lydian:'Lydien',
+    rbScale_mixolydian:'Mixolydien',
+    rbScale_locrian:'Locrien',
+    rbScale_majorPentatonic:'Pentatonique majeure',
+    rbScale_minorPentatonic:'Pentatonique mineure',
   }
 };
 function t(key) { return (T[lang] && T[lang][key]) || T.en[key] || key; }
 
 function applyLang() {
   // Nav buttons
-  const navMap = {download:'download',analyze:'analyze',transcribe:'transcribe',stems:'stems',tools:'tools',history:'history',settings:'settings'};
+  const navMap = {download:'download',analyze:'analyze',transcribe:'transcribe',stems:'stems',tools:'tools',history:'history',settings:'settings',random:'navRandomBeats'};
   document.querySelectorAll('.nav-btn').forEach(btn => {
     const tab = btn.dataset.tab;
     if (tab && navMap[tab]) {
       // Keep the SVG, just change the text node
       const textNodes = Array.from(btn.childNodes).filter(n => n.nodeType === 3);
-      if (textNodes.length) textNodes[textNodes.length - 1].textContent = '\n      ' + t(tab) + '\n    ';
+      if (textNodes.length) textNodes[textNodes.length - 1].textContent = '\n      ' + t(navMap[tab]) + '\n    ';
     }
   });
 
@@ -12068,6 +12600,7 @@ function applyLang() {
     'tab-tools': ['toolsTitle', null],
     'tab-history': ['histTitle', 'histSub'],
     'tab-settings': ['setTitle', 'setSub'],
+    'tab-random': ['rbTitle', 'rbSub'],
   };
   for (const [id, [titleKey, subKey]] of Object.entries(headers)) {
     const pane = document.getElementById(id);
@@ -12106,6 +12639,148 @@ function applyLang() {
   const dropSub = document.querySelector('#drop-analyze p');
   if (dropTitle) dropTitle.textContent = t('dropTitle');
   if (dropSub) dropSub.textContent = t('dropSub');
+
+  // Random Beats static labels
+  const rbShuffleLbl = document.getElementById('rb-shuffle-lbl');
+  if (rbShuffleLbl) rbShuffleLbl.textContent = t('rbNextBeat');
+  const rbAnalyzeLbl = document.getElementById('rb-act-analyze-lbl');
+  if (rbAnalyzeLbl) rbAnalyzeLbl.textContent = t('analyze');
+  const rbSepLbl = document.getElementById('rb-act-sep-lbl');
+  if (rbSepLbl) rbSepLbl.textContent = t('stems');
+  const rbNotesLbl = document.getElementById('rb-act-notes-lbl');
+  if (rbNotesLbl) rbNotesLbl.textContent = t('rbNotes');
+  const rbRecordLbl = document.getElementById('rb-record-lbl');
+  if (rbRecordLbl && !rbRecording) rbRecordLbl.textContent = t('rbRecordTopline');
+  const rbEmptyTitle = document.getElementById('rb-empty-title');
+  if (rbEmptyTitle) rbEmptyTitle.textContent = t('rbEmptyTitle');
+  const rbEmptySub = document.getElementById('rb-empty-sub');
+  if (rbEmptySub) rbEmptySub.textContent = t('rbEmptySub');
+  const rbTag = document.getElementById('rb-tag');
+  if (rbTag) rbTag.textContent = t('rbTag');
+  const rbRecordHint = document.getElementById('rb-record-hint');
+  // While actively recording, this reflects whether autotune is engaged
+  // for THIS take (set in rbStartRecording) - a plain re-translate here
+  // would silently revert it to the non-autotune wording mid-recording.
+  if (rbRecordHint) rbRecordHint.textContent = t(rbRecording && rbAutotuneActive ? 'rbRecordHintAt' : 'rbRecordHint');
+
+  // Autotune panel labels
+  const rbAtTitle = document.getElementById('rb-at-title');
+  if (rbAtTitle) rbAtTitle.textContent = t('rbAtTitle');
+  const rbAtGroupInputLbl = document.getElementById('rb-at-group-input-lbl');
+  if (rbAtGroupInputLbl) rbAtGroupInputLbl.textContent = t('rbAtGroupInput');
+  const rbAtGroupPitchLbl = document.getElementById('rb-at-group-pitch-lbl');
+  if (rbAtGroupPitchLbl) rbAtGroupPitchLbl.textContent = t('rbAtGroupPitch');
+  const rbAtGroupReverbLbl = document.getElementById('rb-at-group-reverb-lbl');
+  if (rbAtGroupReverbLbl) rbAtGroupReverbLbl.textContent = t('rbAtGroupReverb');
+  const rbAtGroupOutputLbl = document.getElementById('rb-at-group-output-lbl');
+  if (rbAtGroupOutputLbl) rbAtGroupOutputLbl.textContent = t('rbAtGroupOutput');
+  const rbAtMicLbl = document.getElementById('rb-at-mic-lbl');
+  if (rbAtMicLbl) rbAtMicLbl.textContent = t('rbAtMic');
+  const rbAtMonitorLbl = document.getElementById('rb-at-monitor-lbl');
+  if (rbAtMonitorLbl) rbAtMonitorLbl.textContent = t('rbAtMonitor');
+  const rbAtBakeLbl = document.getElementById('rb-at-bake-lbl');
+  if (rbAtBakeLbl) rbAtBakeLbl.textContent = t('rbAtBake');
+  const rbAtHint = document.getElementById('rb-at-hint');
+  if (rbAtHint) rbAtHint.textContent = t('rbAtHint');
+  const rbAtBakeReminder = document.getElementById('rb-at-bake-reminder');
+  if (rbAtBakeReminder) rbAtBakeReminder.textContent = t('rbAtBakeReminder');
+  const rbAtKeyLbl = document.getElementById('rb-at-key-lbl');
+  if (rbAtKeyLbl) rbAtKeyLbl.textContent = t('rbAtKey');
+  const rbAtScaleLbl = document.getElementById('rb-at-scale-lbl');
+  if (rbAtScaleLbl) rbAtScaleLbl.textContent = t('rbAtScale');
+  const rbAtPianoTitleEl = document.getElementById('rb-at-piano-title');
+  if (rbAtPianoTitleEl) rbAtPianoTitleEl.textContent = t('rbAtPianoTitle');
+  const rbAtPianoHintEl = document.getElementById('rb-at-piano-hint');
+  if (rbAtPianoHintEl) rbAtPianoHintEl.textContent = t('rbAtPianoHint');
+  const rbAtRetuneLbl = document.getElementById('rb-at-retune-lbl');
+  if (rbAtRetuneLbl) rbAtRetuneLbl.textContent = t('rbAtRetune');
+  const rbAtRetuneHint = document.getElementById('rb-at-retune-hint');
+  if (rbAtRetuneHint) rbAtRetuneHint.textContent = t('rbAtRetuneHint');
+  const rbAtTrackingLbl = document.getElementById('rb-at-tracking-lbl');
+  if (rbAtTrackingLbl) rbAtTrackingLbl.textContent = t('rbAtTracking');
+  const rbAtTrackingHint = document.getElementById('rb-at-tracking-hint');
+  if (rbAtTrackingHint) rbAtTrackingHint.textContent = t('rbAtTrackingHint');
+  const rbAtHumanizeLbl = document.getElementById('rb-at-humanize-lbl');
+  if (rbAtHumanizeLbl) rbAtHumanizeLbl.textContent = t('rbAtHumanize');
+  const rbAtHumanizeHint = document.getElementById('rb-at-humanize-hint');
+  if (rbAtHumanizeHint) rbAtHumanizeHint.textContent = t('rbAtHumanizeHint');
+  const rbAtVibratoLbl = document.getElementById('rb-at-vibrato-lbl');
+  if (rbAtVibratoLbl) rbAtVibratoLbl.textContent = t('rbAtVibrato');
+  const rbAtVibratoHint = document.getElementById('rb-at-vibrato-hint');
+  if (rbAtVibratoHint) rbAtVibratoHint.textContent = t('rbAtVibratoHint');
+  const rbAtFlextuneLbl = document.getElementById('rb-at-flextune-lbl');
+  if (rbAtFlextuneLbl) rbAtFlextuneLbl.textContent = t('rbAtFlexTune');
+  const rbAtFlextuneHint = document.getElementById('rb-at-flextune-hint');
+  if (rbAtFlextuneHint) rbAtFlextuneHint.textContent = t('rbAtFlexTuneHint');
+  const rbAtFormantLbl = document.getElementById('rb-at-formant-lbl');
+  if (rbAtFormantLbl) rbAtFormantLbl.textContent = t('rbAtFormant');
+  const rbAtFormantHint = document.getElementById('rb-at-formant-hint');
+  if (rbAtFormantHint) rbAtFormantHint.textContent = t('rbAtFormantHint');
+  const rbAtInGainLbl = document.getElementById('rb-at-ingain-lbl');
+  if (rbAtInGainLbl) rbAtInGainLbl.textContent = t('rbAtInGain');
+  const rbAtOutGainLbl = document.getElementById('rb-at-outgain-lbl');
+  if (rbAtOutGainLbl) rbAtOutGainLbl.textContent = t('rbAtOutGain');
+  const rbRvMonitorLbl = document.getElementById('rb-rv-monitor-lbl');
+  if (rbRvMonitorLbl) rbRvMonitorLbl.textContent = t('rbRvMonitor');
+  const rbRvBakeLbl = document.getElementById('rb-rv-bake-lbl');
+  if (rbRvBakeLbl) rbRvBakeLbl.textContent = t('rbRvBake');
+  const rbRvMixLbl = document.getElementById('rb-rv-mix-lbl');
+  if (rbRvMixLbl) rbRvMixLbl.textContent = t('rbRvMix');
+  const rbRvDecayLbl = document.getElementById('rb-rv-decay-lbl');
+  if (rbRvDecayLbl) rbRvDecayLbl.textContent = t('rbRvDecay');
+  const rbRvDampingLbl = document.getElementById('rb-rv-damping-lbl');
+  if (rbRvDampingLbl) rbRvDampingLbl.textContent = t('rbRvDamping');
+  const rbRvPreDelayLbl = document.getElementById('rb-rv-predelay-lbl');
+  if (rbRvPreDelayLbl) rbRvPreDelayLbl.textContent = t('rbRvPreDelay');
+  const rbAtScaleSel = document.getElementById('rb-at-scale');
+  if (rbAtScaleSel && rbAtScaleSel.options.length) {
+    const cur = rbAtScaleSel.value;
+    rbAtScaleSel.innerHTML = RB_AT_SCALES.map(s => '<option value="' + s + '">' + escapeHtml(t('rbScale_' + s)) + '</option>').join('');
+    rbAtScaleSel.value = cur;
+  }
+  // Mic labels themselves are OS-provided device names (never
+  // translated), but "System default" and any generic "Microphone N"
+  // fallback ARE app strings - re-populate so those pick up the new
+  // language rather than being stuck until the panel is closed/reopened.
+  const rbAtMicSel = document.getElementById('rb-at-mic');
+  if (rbAtMicSel && rbAtMicSel.options.length) rbPopulateMicSelect();
+  const rbAtLevelLbl = document.getElementById('rb-at-level-lbl');
+  if (rbAtLevelLbl) rbAtLevelLbl.textContent = t('rbAtLevel');
+
+  // Review / micro-DAW labels
+  const rbReviewTitleEl = document.getElementById('rb-review-title');
+  if (rbReviewTitleEl) rbReviewTitleEl.textContent = t('rbReviewTitle');
+  const rbReviewHintEl = document.getElementById('rb-review-hint');
+  if (rbReviewHintEl) rbReviewHintEl.textContent = t('rbReviewHint');
+  const rbReviewVocalStemLbl = document.getElementById('rb-review-vocal-stem-lbl');
+  if (rbReviewVocalStemLbl) rbReviewVocalStemLbl.textContent = t('rbReviewVocalStem');
+  const rbReviewBeatStemLbl = document.getElementById('rb-review-beat-stem-lbl');
+  if (rbReviewBeatStemLbl) rbReviewBeatStemLbl.textContent = t('rbReviewBeatStem');
+  const rbReviewDiscardLbl = document.getElementById('rb-review-discard-lbl');
+  if (rbReviewDiscardLbl) rbReviewDiscardLbl.textContent = t('rbReviewDiscard');
+  const rbReviewRerecordLbl = document.getElementById('rb-review-rerecord-lbl');
+  if (rbReviewRerecordLbl) rbReviewRerecordLbl.textContent = t('rbReviewRerecord');
+  const rbReviewSaveLbl = document.getElementById('rb-review-save-lbl');
+  if (rbReviewSaveLbl) rbReviewSaveLbl.textContent = t('rbReviewSave');
+  const rbGraphToggleLbl = document.getElementById('rb-graph-toggle-lbl');
+  if (rbGraphToggleLbl) rbGraphToggleLbl.textContent = t('rbGraphToggle');
+  const rbGraphHintEl = document.getElementById('rb-graph-hint');
+  if (rbGraphHintEl) rbGraphHintEl.textContent = t('rbGraphHint');
+  const rbGraphResetLbl = document.getElementById('rb-graph-reset-lbl');
+  if (rbGraphResetLbl) rbGraphResetLbl.textContent = t('rbGraphReset');
+  const rbGraphApplyLbl = document.getElementById('rb-graph-apply-lbl');
+  if (rbGraphApplyLbl) rbGraphApplyLbl.textContent = t('rbGraphApply');
+  const rbMonitorLblEl = document.getElementById('rb-monitor-lbl');
+  if (rbMonitorLblEl) rbMonitorLblEl.textContent = t(rbMonitoring ? 'rbMonitorStop' : 'rbMonitorStart');
+  const rbAtKeyAutoLbl = document.getElementById('rb-at-key-auto-lbl');
+  if (rbAtKeyAutoLbl) rbAtKeyAutoLbl.textContent = t('rbAtKeyAuto');
+  if (typeof rbApplyKeyAutoUI === 'function') rbApplyKeyAutoUI();
+  const rbZoomFitLbl = document.getElementById('rb-review-zoom-fit-lbl');
+  if (rbZoomFitLbl) rbZoomFitLbl.textContent = t('rbReviewZoomFit');
+  const rbBeatGainLbl = document.getElementById('rb-review-beat-gain-lbl');
+  if (rbBeatGainLbl) rbBeatGainLbl.textContent = t('rbReviewBeatFader');
+  const rbVocalGainLbl = document.getElementById('rb-review-vocal-gain-lbl');
+  if (rbVocalGainLbl) rbVocalGainLbl.textContent = t('rbReviewVocalFader');
 
   // Separator labels
   const sepDropT = document.getElementById('stems-drop-title');
@@ -12294,6 +12969,33 @@ async function sendTestCrashReport() {
     showAppNotification('Could not reach backend: ' + e.message, 'err');
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = t('crashReportTestBtn'); }
+  }
+}
+
+// Single source of truth for the Settings page's "Installed / Not
+// installed / out-of-date" line under Engines. Was previously inlined
+// only where the Settings panel first renders, which meant it never
+// re-ran when setup finished behind an already-open Settings page - the
+// modal would show success and close, but the line underneath still
+// read whatever it said before setup started ("Not installed", or
+// "Checking...") until the user left Settings and came back, which is
+// what rebuilt the panel and re-ran the fetch. Pulling it out into a
+// named function that takes an already-fetched /engines-status payload
+// lets the setup-completion handler call it directly with the result it
+// already has, instead of only ever running on a panel rebuild.
+function applyEnginesStatusToUI(j) {
+  const el = document.getElementById('engines-status-desc');
+  if (!el) return;
+  if (j.installed) {
+    el.textContent = 'Installed' + (j.info && j.info.date ? ' · ' + j.info.date : '');
+    el.style.color = '#e8e8e8';
+  } else if (j.info && j.info.python) {
+    // Marker exists but invalid (stale/old format). Tell the user it needs re-setup.
+    el.textContent = 'Setup is out-of-date — re-run setup to fix';
+    el.style.color = '#f59e0b';
+  } else {
+    el.textContent = 'Not installed — stem separator and transcription unavailable';
+    el.style.color = '#f59e0b';
   }
 }
 
@@ -12617,6 +13319,13 @@ function renderSettings() {
               </div>
               <button class="btn sm" id="btn-run-setup" onclick="showSetupModal()">${t('runSetupBtn')}</button>
             </div>
+            <div class="setting-row" id="engines-diag-row" style="display:none;align-items:flex-start">
+              <div class="setting-info">
+                <div class="setting-name" id="engines-diag-title"></div>
+                <div class="setting-desc" id="engines-diag-detail"></div>
+              </div>
+              <button class="btn sm" id="engines-diag-retry-btn" onclick="showSetupModal()">${t('enginesDiagRetry')}</button>
+            </div>
       </div></div>
     </div>
     <div class="settings-section" data-section="updates">
@@ -12641,6 +13350,7 @@ function renderSettings() {
               </div>
               <button class="btn sm" id="btn-ytdlp-update" onclick="manualUpdateYtdlp()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg> ${t('btnCheckNow')}</button>
             </div>
+
         <div class="setting-row">
               <div class="setting-info">
                 <div class="setting-name">${t('patchNotesName')}</div>
@@ -12763,21 +13473,7 @@ function renderSettings() {
     }).catch(() => {});
   }
   // Async-fetch the engines status to update the row
-  fetch(API + '/engines-status').then(r => r.json()).then(j => {
-    const el = document.getElementById('engines-status-desc');
-    if (!el) return;
-    if (j.installed) {
-      el.textContent = 'Installed' + (j.info && j.info.date ? ' · ' + j.info.date : '');
-      el.style.color = '#e8e8e8';
-    } else if (j.info && j.info.python) {
-      // Marker exists but invalid (stale/old format). Tell the user it needs re-setup.
-      el.textContent = 'Setup is out-of-date — re-run setup to fix';
-      el.style.color = '#f59e0b';
-    } else {
-      el.textContent = 'Not installed — stem separator and transcription unavailable';
-      el.style.color = '#f59e0b';
-    }
-  }).catch(() => {});
+  fetch(API + '/engines-status').then(r => r.json()).then(applyEnginesStatusToUI).catch(() => {});
   // Reflect the current auto-clear value in the dropdown. We always sync
   // after innerHTML so the visible selection matches state, even when
   // the user opens Settings without ever interacting with downloads.
@@ -12862,10 +13558,38 @@ function copyDiagOutput() {
 }
 
 // View server + setup logs in a tabbed modal
+// Tails the main process's own on-disk log file - the one every
+// diagLog()/rbLog() call already lands in via the existing renderer-log
+// IPC channel (see main.js's log() function). Reuses api.getLogPath()/
+// api.readFile(), both of which already existed for other purposes, so
+// this needed no new IPC surface at all.
+async function fetchAppLogTail(kb) {
+  try {
+    const logPath = await api.getLogPath();
+    if (!logPath) return { path: '', text: '' };
+    const result = await api.readFile(logPath);
+    if (!result || !result.ok) return { path: logPath, text: '' };
+    let text = new TextDecoder('utf-8').decode(result.data);
+    const maxBytes = (kb || 300) * 1024;
+    if (text.length > maxBytes) {
+      text = text.slice(text.length - maxBytes);
+      const nl = text.indexOf('\n');
+      if (nl >= 0) text = text.slice(nl + 1); // drop a possibly-clipped partial first line
+    }
+    return { path: logPath, text };
+  } catch (e) {
+    return { path: '', text: '' };
+  }
+}
+
 async function viewLogs() {
   try {
     const r = await fetch(API + '/logs?kb=300');
     const j = await r.json();
+    const appLog = await fetchAppLogTail(300);
+    j.app = appLog.text;
+    j.paths = j.paths || {};
+    j.paths.app = appLog.path;
 
     let modal = document.getElementById('logs-modal');
     if (!modal) {
@@ -12887,6 +13611,7 @@ async function viewLogs() {
         <div style="display:flex;gap:6px;margin-bottom:10px">
           <button class="btn sm logs-tab on" onclick="switchLogTab(0)">Server</button>
           <button class="btn sm logs-tab" onclick="switchLogTab(1)">Setup</button>
+          <button class="btn sm logs-tab" onclick="switchLogTab(2)">App</button>
           <div style="flex:1"></div>
           <button class="btn sm" onclick="refreshLogs()">↻ Refresh</button>
           <button class="btn sm" onclick="copyCurrentLog()">Copy</button>
@@ -12917,9 +13642,18 @@ function switchLogTab(idx) {
   if (idx === 0) {
     if (path) path.textContent = j.paths?.server || '';
     if (out) out.textContent = (j.server || '').trim() || '(empty — no server log activity yet)';
-  } else {
+  } else if (idx === 1) {
     if (path) path.textContent = j.paths?.setup || '';
     if (out) out.textContent = (j.setup || '').trim() || '(empty — no setup log; setup may not have run yet)';
+  } else {
+    // Everything the renderer itself logs - every tab's diagnostics,
+    // including Topliner's mic/monitor/pitch-correction activity
+    // (prefixed "[RandomBeats]" for historical/internal-naming reasons,
+    // same feature) - lands here via the same renderer-log pipeline
+    // every other part of the app already uses, instead of a separate
+    // one-off log box living inside a single settings panel.
+    if (path) path.textContent = j.paths?.app || '';
+    if (out) out.textContent = (j.app || '').trim() || '(empty — nothing logged yet this session)';
   }
   // Auto-scroll to bottom (most recent)
   if (out) out.scrollTop = out.scrollHeight;
@@ -12928,7 +13662,12 @@ function switchLogTab(idx) {
 async function refreshLogs() {
   try {
     const r = await fetch(API + '/logs?kb=300');
-    window._logsData = await r.json();
+    const j = await r.json();
+    const appLog = await fetchAppLogTail(300);
+    j.app = appLog.text;
+    j.paths = j.paths || {};
+    j.paths.app = appLog.path;
+    window._logsData = j;
     switchLogTab(window._logsCurrentTab || 0);
   } catch (e) {
     showAppNotification('Refresh failed: ' + e.message, 'err');
@@ -14268,6 +15007,7 @@ function playTrack(track, context) {
   if (typeof renderHistory === 'function') {
     try { renderHistory(); } catch {}
   }
+  if (typeof rbPickerSyncPlayState === 'function') rbPickerSyncPlayState();
 }
 
 function showMiniPlayerForTrack(track) {
@@ -14474,11 +15214,37 @@ function scrollLockEnabled() {
   return localStorage.getItem('freqphull.scrollLock') !== '0';
 }
 
-function _scrollActiveRowIntoView() {
+// Round 70 ("on shuffle the anchor/following option doesn't follow - it
+// goes to the track you just played, always one step late"): this used to
+// read the track id purely from global state (currentHistId /
+// globalPlayer.track), and every caller invoked it inside a bare
+// requestAnimationFrame immediately after kicking off an async load.
+//
+// loadFromHistory() is async and awaits a disk read (plus, on a miss, a
+// /history fetch and a /find-file lookup) BEFORE it reaches
+// loadAudioBuffer(), which is what actually assigns currentHistId. A rAF
+// fires on the next frame (~16ms); the read does not finish anywhere near
+// that fast. So the helper reliably ran while currentHistId still held the
+// PREVIOUS track - and scrolled to the previous row. Exactly "always one
+// step late".
+//
+// Why the report says "on shuffle": in sequential play the stale row is
+// the immediate neighbour of the right one, so it almost always still sits
+// inside the comfortable middle band checked below and no scroll happens -
+// the bug is invisible. Shuffle puts consecutive tracks far apart in the
+// list, so the stale row is off-screen every time and the wrong scroll
+// becomes obvious on every skip.
+//
+// Fixed on both axes: callers now pass the id they are navigating TO
+// (so the result never depends on racy global state), and they call this
+// after the load has actually settled rather than guessing with a frame.
+function _scrollActiveRowIntoView(explicitId) {
   if (!scrollLockEnabled()) return;
-  let id = null;
-  if (analyzeMirrorActive && currentHistId) id = currentHistId;
-  else if (globalPlayer && globalPlayer.track && globalPlayer.track.id) id = globalPlayer.track.id;
+  let id = explicitId || null;
+  if (!id) {
+    if (analyzeMirrorActive && currentHistId) id = currentHistId;
+    else if (globalPlayer && globalPlayer.track && globalPlayer.track.id) id = globalPlayer.track.id;
+  }
   if (!id) return;
   const row = document.querySelector('.hist-row[data-id="' + id + '"]');
   if (!row) return;
@@ -14499,7 +15265,7 @@ function _scrollActiveRowIntoView() {
   }
 }
 
-function globalPlayerPrev() {
+async function globalPlayerPrev() {
   // Mirror mode: walk the Analyzer playlist (set by playFromHistory). The
   // Analyzer remains the audio source - we just swap the loaded track.
   if (analyzeMirrorActive) {
@@ -14515,19 +15281,25 @@ function globalPlayerPrev() {
       globalPlayer._handoffWasPlaying = true;
       globalPlayer._handoffTime = 0;
     }
-    loadFromHistory(prevTrack.id, { skipTabSwitch: true });
-    // Defer the scroll one rAF so loadFromHistory has set currentHistId
-    // (which our helper reads) before we ask which row to scroll to.
-    requestAnimationFrame(_scrollActiveRowIntoView);
+    // Round 70: await the load (it is async - see the note above
+    // _scrollActiveRowIntoView) and pass the id we are navigating TO,
+    // instead of firing a rAF that lands before currentHistId updates.
+    try { await loadFromHistory(prevTrack.id, { skipTabSwitch: true }); }
+    catch (e) { return; }
+    _scrollActiveRowIntoView(prevTrack.id);
     return;
   }
   const ctx = globalPlayer.context;
   if (!ctx || !ctx.tracks || ctx.index <= 0) return;
   const prevIdx = ctx.index - 1;
-  playTrack(ctx.tracks[prevIdx], { ...ctx, index: prevIdx });
-  requestAnimationFrame(_scrollActiveRowIntoView);
+  const prevTrack = ctx.tracks[prevIdx];
+  playTrack(prevTrack, { ...ctx, index: prevIdx });
+  // playTrack() is synchronous, so the id is already correct here - but
+  // pass it explicitly anyway so this cannot silently regress the same
+  // way the mirror path did.
+  _scrollActiveRowIntoView(prevTrack && prevTrack.id);
 }
-function globalPlayerNext() {
+async function globalPlayerNext() {
   // Mirror mode: walk the Analyzer playlist (set by playFromHistory). The
   // Analyzer remains the audio source - we just swap the loaded track.
   if (analyzeMirrorActive) {
@@ -14557,14 +15329,24 @@ function globalPlayerNext() {
       globalPlayer._handoffWasPlaying = true;
       globalPlayer._handoffTime = 0;
     }
-    loadFromHistory(nextTrack.id, { skipTabSwitch: true });
-    requestAnimationFrame(_scrollActiveRowIntoView);
+    // Round 70: see globalPlayerPrev - await the async load and scroll to
+    // the id we actually navigated to. This is the path the shuffle report
+    // was about: shuffle picks a distant index, so the stale-id scroll
+    // landed on a visibly wrong row on every single skip.
+    try { await loadFromHistory(nextTrack.id, { skipTabSwitch: true }); }
+    catch (e) { return; }
+    _scrollActiveRowIntoView(nextTrack.id);
     return;
   }
   const ctx = globalPlayer.context;
   if (!ctx || !ctx.tracks || ctx.index >= ctx.tracks.length - 1) return;
   const nextIdx = ctx.index + 1;
-  playTrack(ctx.tracks[nextIdx], { ...ctx, index: nextIdx });
+  const nextTrack = ctx.tracks[nextIdx];
+  playTrack(nextTrack, { ...ctx, index: nextIdx });
+  // Round 70: the legacy (non-mirror) NEXT path had NO follow call at all,
+  // while PREV right above it did - so in that mode the list followed you
+  // backwards but never forwards. Found while fixing the shuffle report.
+  _scrollActiveRowIntoView(nextTrack && nextTrack.id);
 }
 
 // ── Mini player modes: shuffle + loop ──────────────────────────────────────
@@ -14741,11 +15523,17 @@ async function loadMiniNotepad(historyId) {
   if (titleEl && tr) {
     titleEl.textContent = (t('miniNotesFor') || 'Notes —') + ' ' + (tr.title || '').slice(0, 40);
   }
-  // Pull fresh notes from server - they may have been edited from elsewhere
+  // Pull fresh notes from server - they may have been edited from elsewhere.
+  //
+  // Round 70 ("app feels slow and sluggy"): this used to fetch the ENTIRE
+  // /history list and then .find() the single row it wanted. On a real
+  // library that is a ~1.25 MB JSON download, parse, and scan every time
+  // the notepad is opened - to read one short text field. /history/:id/full
+  // already exists for exactly this (one row, all columns) and was being
+  // ignored here.
   try {
-    const r = await fetch(API + '/history');
-    const all = await r.json();
-    const row = all.find(h => h.id === historyId);
+    const r = await fetch(API + '/history/' + historyId + '/full');
+    const row = r.ok ? await r.json() : null;
     const txt = document.getElementById('sp-fv-mini-notepad-text');
     if (txt) txt.value = (row && row.user_notes) || '';
     // Store the loaded historyId so saveMiniNotepad knows what to update.
@@ -14806,6 +15594,7 @@ function stopGlobalPlay() {
   if (typeof renderHistory === 'function') {
     try { renderHistory(); } catch {}
   }
+  if (typeof rbPickerSyncPlayState === 'function') rbPickerSyncPlayState();
 }
 
 // Legacy alias
@@ -14839,6 +15628,8 @@ function updateMiniPlayerPlayState() {
       navigator.mediaSession.playbackState = paused ? 'paused' : 'playing';
     }
   } catch {}
+  if (typeof rbSyncPlayState === 'function') rbSyncPlayState();
+  if (typeof rbPickerSyncPlayState === 'function') rbPickerSyncPlayState();
 }
 
 function updateMiniPlayerTime() {
@@ -14865,6 +15656,7 @@ function updateMiniPlayerTime() {
       if (bufEl) bufEl.style.width = bpct + '%';
     }
   } catch {}
+  if (typeof rbSyncTime === 'function') rbSyncTime();
 }
 
 // ── Seek bar interaction ──────────────────────────────────────────────────
@@ -15011,6 +15803,10 @@ function updateVolumeUI() {
       icon.innerHTML = '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>';
     }
   }
+  const rbFill = document.getElementById('rb-vol-fill');
+  const rbIcon = document.getElementById('rb-vol-icon');
+  if (rbFill) rbFill.style.width = pct + '%';
+  if (rbIcon && icon) rbIcon.innerHTML = icon.innerHTML;
 }
 
 function folderViewVolumeClick(evt) {
@@ -15074,6 +15870,3840 @@ function folderViewToggleMute() {
   }
   applyVolumeToAudio();
   updateVolumeUI();
+}
+
+
+// ── Random Beats ─────────────────────────────────────────────────────────
+// A single "hero" player fed straight from the whole History table (every
+// download, plus anything filed into Stockpile, since Stockpile tracks are
+// History rows too). It drives the SAME globalPlayer/audio element every
+// other player in the app uses, so it never fights the mini-player for the
+// output device and the mini-player keeps working normally if the user
+// switches away mid-track.
+let rbCurrent = null;      // the track object shown on the page right now
+let rbRecentIds = [];      // small ring buffer so "next" avoids repeats
+let rbRecording = false;
+let rbMediaStream = null;      // raw getUserMedia stream, kept only to stop its tracks on cleanup
+let rbRecordStartTs = 0;
+let rbBeatStartTs = 0;
+let rbRecordTimer = null;
+// True from the moment Stop is pressed until the flush + review hand-off
+// has fully settled. Without this, a click on Record during that gap
+// starts a SECOND capture that stomps the module-level buffers the first
+// one's still-draining flush is reading from.
+let rbStopping = false;
+// Recording graph state: mic -> optional autotune -> a lossless capture
+// worklet (rb-recorder-worklet.js). Built for every take now, not just
+// ones with autotune on - raw PCM capture replaced MediaRecorder/webm-
+// opus entirely, since a lossy call codec is not "studio quality" no
+// matter the bitrate.
+let rbAudioCtx = null;
+let rbAutotuneWorkletReady = false;
+// True once rbPopulateAutotunePanel() has actually run this session -
+// see rbGetAutotuneSettings() below for why this matters. The autotune
+// checkbox/key/scale/etc. controls exist in the DOM from page load (the
+// panel is only hidden via CSS, never removed), but they sit at their
+// raw HTML defaults - unchecked, empty <select> - until this function
+// writes the real saved values into them. If Monitor/Record is the very
+// first thing clicked in a session, before Settings has ever been
+// opened, this is still false.
+let rbRecorderWorkletReady = false;
+let rbChannelSafetyWorkletReady = false;
+let rbMicSource = null;
+// Round 68: low-cut filter, always on, ahead of everything else in the
+// chain (including the input-gain trim and the level meter) - see
+// RB_MIC_HIGHPASS_HZ below for the full investigation.
+let rbMicHighpassNode = null;
+let rbInputGainNode = null;    // pre-processing trim, shared upstream of every branch
+let rbChannelSafetyNode = null; // picks the live mic channel - see rb-channel-safety-worklet.js; sits in front of every branch, autotune on or off
+let rbAutotuneNode = null;
+let rbRecNode = null;
+let rbMonitorNode = null;      // the final node connected to ctx.destination, whatever chain feeds it
+let rbPrintOutputGainNode = null;   // post-processing makeup gain on the branch that feeds the recorder
+let rbMonitorOutputGainNode = null; // same, on the branch that feeds the speakers
+let rbPrintReverbUnit = null;   // rbCreateReverbUnit() instance on the record-tap branch, or null if reverb isn't baked
+let rbMonitorReverbUnit = null; // same, on the live-monitor branch, or null if reverb isn't being monitored
+let rbAutotuneActive = false;
+let rbRecChunks = [];          // array of {channels:[Float32Array,...]} posted by the worklet
+let rbRecNumChannels = 0;
+let rbRecSampleRate = 44100;
+let rbRecFlushResolve = null;
+// Live input level metering - one AnalyserNode pointed at whichever mic
+// source is currently open (armed preview or an active take), and a
+// single rAF loop that redraws every ".rb-meter-*" element on screen
+// from it, so the panel meter and the in-take mini meter always agree.
+let rbLevelAnalyser = null;
+let rbMeterData = null;
+let rbMeterRAF = null;
+let rbArmedStream = null;      // mic opened just to preview levels, not recording yet
+let rbArmedSource = null;
+let rbArmedHighpassNode = null; // same low-cut filter, mirrored into the meter-only preview graph
+let rbArmedGainNode = null;    // input-trim node in the meter-only preview graph, so the
+                                // preview meter (and its clip indicator) reflects the saved
+                                // Input Gain setting instead of always reading the raw mic
+let rbPrintLimiterNode = null;  // final safety ceiling on the record-tap branch
+let rbMonitorLimiterNode = null; // final safety ceiling on the live-monitor branch
+// Bumped by rbDisarmMic() every time it's called, including when there's
+// nothing to tear down yet. An in-flight rbArmMic() checks this after
+// each await and abandons itself if it no longer matches - otherwise a
+// disarm that lands BEFORE rbArmedStream is even assigned (e.g. Record
+// clicked again while the mic permission prompt from arming is still
+// pending) would silently do nothing, and the arm would later commit an
+// orphaned stream nothing will ever stop.
+let rbArmGeneration = 0;
+// Bumped to cancel an in-flight rbStartRecordingInner()/rbStartMonitorInner()
+// call (e.g. the user left the Random Beats tab mid-permission-prompt) -
+// the awaiting call rechecks its own generation and abandons itself rather
+// than completing and starting sound the user can no longer see or stop.
+let rbRecordGeneration = 0;
+let rbMonitorGeneration = 0;
+// Review / micro-DAW state for the take a user just recorded, before
+// it's committed to a mixdown - lets them nudge timing, listen through
+// it, and either save or re-record instead of it uploading itself the
+// instant they hit stop.
+let rbReviewActive = false;
+let rbReviewToken = 0;         // invalidates a stale in-flight rbEnterReview after exit/re-entry
+let rbReviewBeatTrack = null;  // the exact beat this take was recorded over - never the live rbCurrent
+let rbReviewVocalBuf = null;   // AudioBuffer decoded straight from the captured samples
+let rbReviewVocalBlob = null;  // WAV blob built from the same samples, ready to upload as-is
+let rbReviewVocalPeaks = null;
+let rbReviewBeatBuf = null;
+let rbReviewBeatPeaks = null;
+let rbReviewBeatForTrackId = null; // which track's beat waveform is currently cached
+let rbReviewOffsetMs = 0;      // current vocal placement on the timeline, adjustable by dragging
+let rbReviewDuration = 0;      // full timeline length shown, in seconds
+let rbReviewPlaying = false;
+let rbReviewPlayheadSec = 0;
+let rbReviewCtxStartTime = 0;  // ctx.currentTime when playback last started, for live playhead math
+let rbReviewBeatSrc = null;
+let rbReviewVocalSrc = null;
+let rbReviewRAF = null;
+// Holds a just-finished take when it finishes AFTER the user has already
+// left the Random Beats tab (recording was stopped by the tab-leave
+// handler, but the worklet flush + WAV build only resolve some time
+// later). Discarding a fully-captured, good take just because a tab
+// switch happened mid-flush would be a real loss - vocal takes aren't
+// always easy to redo. Instead it waits here and rbEnterTab() opens
+// review for it automatically the next time the user comes back.
+let rbRecordingBeatTrack = null; // which beat the take IN PROGRESS was started against - pinned at record-start, immune to rbCurrent changing mid-take
+let rbPendingReviewTake = null;
+// True from the moment Record is pressed until the capture graph is
+// actually connected. rbRecording itself isn't set true until AFTER the
+// mic permission prompt and worklet-module load both resolve - both can
+// take a real amount of time - so a second click on Record during that
+// window would otherwise re-enter rbStartRecording() and build a SECOND
+// capture graph that stomps rbMicSource/rbRecNode/rbMediaStream out from
+// under the first one, and double-connects the shared level-meter
+// analyser to two live mic streams at once.
+let rbStarting = false;
+// True while a Save upload is in flight - blocks Re-record/Discard so a
+// stale success/failure callback can never rbExitReview() out from under
+// a take the user has since replaced.
+let rbSaving = false;
+const RB_REVIEW_COLUMNS = 600;
+
+// ── Auto key detection ──────────────────────────────────────────────
+// Per-beat cache so switching beats back and forth doesn't re-run the
+// (fairly expensive) chroma analysis every time. Keyed by history row id.
+let rbDetectedKeyCache = {};
+let rbKeyDetectToken = 0;
+
+// ── Standalone monitoring (hear yourself without recording) ──────────
+let rbMonitoring = false;
+let rbMonitorStarting = false; // reentrancy guard, mirrors rbStarting on the recording path
+
+// True whenever recording, monitoring, or the START of either is in any
+// stage of owning (or about to own) the mic + shared audio graph -
+// including the brief windows before rbRecording/rbMonitoring actually
+// flip true (rbStarting/rbMonitorStarting) and after they flip back to
+// false but teardown hasn't finished yet (rbStopping). Every function
+// that opens, tears down, or checks in on the shared mic graph gates
+// through this rather than re-deriving its own subset of these flags.
+function rbMicOwned() {
+  return rbRecording || rbStarting || rbStopping || rbMonitoring || rbMonitorStarting;
+}
+
+// The settings panel's own 'hidden' class only ever changes when the
+// panel itself is opened/closed - it says nothing about whether the
+// Random Beats tab is still the one visible. Re-arming the mic just
+// because the panel happens to still be "open" (from before the user
+// navigated away) reopens getUserMedia and restarts the meter on a tab
+// the user can no longer see or stop, so every re-arm-on-stop call site
+// must also confirm the tab pane itself is still active.
+function rbTabIsActive() {
+  const pane = document.getElementById('tab-random');
+  return !!(pane && pane.classList.contains('on'));
+}
+let rbMonitorStream = null;
+
+// ── Review zoom + pan ──────────────────────────────────────────────
+let rbReviewZoom = 1;                 // 1 = whole timeline fits the canvas
+const RB_REVIEW_ZOOM_LEVELS = [1, 2, 4, 8, 16];
+let rbReviewScrollSec = 0;            // seconds at the left edge of the visible window
+
+// ── Review faders ────────────────────────────────────────────────────
+let rbReviewBeatGain = 1;
+let rbReviewVocalGain = 1;
+let rbReviewBeatGainNode = null;
+let rbReviewVocalGainNode = null;
+
+// ── Graph Mode - manual pitch-curve editing over the captured take ────
+// Auto-mode (the Key/Scale autotune above) is the "hands-off, always-
+// on-pitch" workflow; Graph Mode is the manual alternative for a take
+// that's mostly fine but has a specific phrase to hand-correct, the same
+// role Auto-Tune Pro's Graph Mode / Melodyne play alongside their own
+// Auto modes. It's entirely offline (runs once, on demand, over the
+// already-captured audio) rather than real-time.
+let rbGraphModeActive = false;
+let rbGraphContour = null;          // [{tSec, hz, midi, voiced}] - one entry per RB_GRAPH_HOP_SEC, extracted once from the ORIGINAL captured vocal
+let rbGraphEditedMidi = null;       // Float32Array, one target MIDI per contour frame - starts equal to the detected contour, mutated by dragging
+let rbGraphOriginalVocalBuf = null; // the untouched capture, cached the first time Graph Mode opens so Reset/re-analysis never has to start from an already-edited take
+let rbGraphOriginalVocalBlob = null;
+let rbGraphApplied = false;         // whether rbReviewVocalBuf/Blob currently reflect applied graph edits, vs. the raw capture
+let rbGraphApplying = false;        // an rbGraphApplyEdits() crunch is currently in flight - guards against Discard/Re-record/Save/tab-leave racing ahead of it and against Save uploading stale (pre-edit) audio
+let rbGraphDragging = false;
+let rbGraphAnalyzing = false;
+let rbGraphMinMidi = 48, rbGraphMaxMidi = 72; // display range (C3-C5) - recentered around the contour once it's extracted
+const RB_GRAPH_HOP_SEC = 0.02; // 20ms hops for contour extraction/editing resolution - same order as the real-time engine's analysis hop
+const RB_AT_SCALES = ['chromatic', 'major', 'minor', 'harmonicMinor', 'melodicMinor',
+  'dorian', 'phrygian', 'lydian', 'mixolydian', 'locrian', 'majorPentatonic', 'minorPentatonic'];
+// Round 52: a per-round build identifier, independent of package.json's
+// version (which has stayed "0.8.0" across many rounds of real fixes -
+// there was no way to tell from the app itself which round's code was
+// actually running). Two jobs: (1) cache-busts every audioWorklet
+// addModule() call below so a stale, already-compiled worklet module
+// from a previous process/session can never silently keep running
+// after files on disk are updated - Electron/Chromium's module loading
+// has no obligation to notice a same-named file changed underneath it,
+// (2) is shown at the bottom of the Recording settings panel so a bug
+// report can be matched to the exact build unambiguously, no more
+// "it's from the new build" back-and-forth with no way to verify it.
+// Bump this string every time a build is delivered.
+const RB_BUILD_ID = 'r73';
+try { rbLog('Topliner build: ' + RB_BUILD_ID); } catch (e) {}
+const NOTE_NAMES_RB = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+// Mirrors SCALE_INTERVALS in renderer/autotune-worklet.js exactly (that
+// copy lives inside the audio worklet's isolated scope, unreachable
+// from here) - used only to decide which piano keys render as
+// "in scale" for the live note view (Round 48), never for any actual
+// DSP decision, so a drift between the two would be a purely visual
+// bug, not a correctness one - still kept byte-identical on purpose.
+const RB_AT_SCALE_INTERVALS = {
+  chromatic: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+  major: [0, 2, 4, 5, 7, 9, 11],
+  minor: [0, 2, 3, 5, 7, 8, 10],
+  harmonicMinor: [0, 2, 3, 5, 7, 8, 11],
+  melodicMinor: [0, 2, 3, 5, 7, 9, 11],
+  dorian: [0, 2, 3, 5, 7, 9, 10],
+  phrygian: [0, 1, 3, 5, 7, 8, 10],
+  lydian: [0, 2, 4, 6, 7, 9, 11],
+  mixolydian: [0, 2, 4, 5, 7, 9, 10],
+  locrian: [0, 1, 3, 5, 6, 8, 10],
+  majorPentatonic: [0, 2, 4, 7, 9],
+  minorPentatonic: [0, 3, 5, 7, 10],
+};
+// Standard keyboard geometry: 7 white keys (C D E F G A B) laid out
+// evenly, 5 black keys positioned over the gaps between them - no black
+// key between E-F or B-C, matching every real piano/keyboard. whitePc
+// is the pitch class each white key represents; blackAfterWhiteIdx says
+// "this black key sits after white key at this index" (0-based, so 0 =
+// between the 1st and 2nd white key).
+const RB_PIANO_WHITE_PCS = [0, 2, 4, 5, 7, 9, 11];
+const RB_PIANO_BLACK = [
+  { pc: 1, afterWhiteIdx: 0 },  // C#
+  { pc: 3, afterWhiteIdx: 1 },  // D#
+  { pc: 6, afterWhiteIdx: 3 },  // F#
+  { pc: 8, afterWhiteIdx: 4 },  // G#
+  { pc: 10, afterWhiteIdx: 5 }, // A#
+];
+// Which pitch classes the user has bypassed (removed from correction) -
+// persisted alongside the rest of the autotune settings, read by
+// rbAutotuneParamsForEngine() and sent to the worklet as excludedNotes.
+let rbAtExcludedNotes = [];
+// Live target-note state, updated from the worklet's throttled 'note'
+// postMessage (see rbHandleAutotuneNodeMessage) - drives the pulsing
+// .rb-piano-live highlight so the piano doubles as a real-time note
+// display, not just a static scale/exclusion editor.
+let rbAtLiveTargetMidi = null;
+let rbAtLiveVoiced = false;
+let rbAtLiveRawHz = null; // Round 49 - feeds the tuner-style cents readout
+
+function rbToggleExcludedNote(pc) {
+  const idx = rbAtExcludedNotes.indexOf(pc);
+  if (idx >= 0) rbAtExcludedNotes.splice(idx, 1);
+  else rbAtExcludedNotes.push(pc);
+  rbRenderAutotunePiano();
+  rbAutotuneParamsChanged();
+}
+
+// Builds/updates the 12-key mini-piano: white keys first (so black keys
+// can be absolutely positioned on top of them), then black keys offset
+// by their afterWhiteIdx. Only rebuilds the DOM structure once (guarded
+// by a data attribute) - normal updates just toggle classes, since this
+// can run on every params change including slider drags elsewhere in
+// the same panel (rbUpdateAutotuneLabels calls it) and shouldn't pay
+// for innerHTML churn on every one of those.
+function rbRenderAutotunePiano() {
+  const el = document.getElementById('rb-at-piano');
+  if (!el) return;
+  const keyEl = document.getElementById('rb-at-key');
+  const scaleEl = document.getElementById('rb-at-scale');
+  const rootPc = keyEl ? (parseInt(keyEl.value, 10) || 0) : 0;
+  const scaleName = scaleEl ? (scaleEl.value || 'major') : 'major';
+  const intervals = RB_AT_SCALE_INTERVALS[scaleName] || RB_AT_SCALE_INTERVALS.major;
+  const inScale = new Set(intervals.map(iv => (rootPc + iv) % 12));
+  const liveVoicedPc = (rbAtLiveVoiced && rbAtLiveTargetMidi != null) ? (((rbAtLiveTargetMidi % 12) + 12) % 12) : null;
+
+  if (el.dataset.built !== '1') {
+    el.innerHTML = '';
+    const whiteWidthPct = 100 / RB_PIANO_WHITE_PCS.length;
+    RB_PIANO_WHITE_PCS.forEach((pc) => {
+      const k = document.createElement('div');
+      k.className = 'rb-piano-key rb-piano-white';
+      k.dataset.pc = String(pc);
+      k.textContent = NOTE_NAMES_RB[pc];
+      k.tabIndex = 0;
+      k.setAttribute('role', 'button');
+      k.onclick = () => rbToggleExcludedNote(pc);
+      k.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); rbToggleExcludedNote(pc); } };
+      el.appendChild(k);
+    });
+    RB_PIANO_BLACK.forEach(({ pc, afterWhiteIdx }) => {
+      const k = document.createElement('div');
+      k.className = 'rb-piano-key rb-piano-black';
+      k.dataset.pc = String(pc);
+      k.style.left = (whiteWidthPct * (afterWhiteIdx + 1) - 4.1) + '%';
+      k.tabIndex = 0;
+      k.setAttribute('role', 'button');
+      k.onclick = () => rbToggleExcludedNote(pc);
+      k.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); rbToggleExcludedNote(pc); } };
+      el.appendChild(k);
+    });
+    el.dataset.built = '1';
+  }
+  el.querySelectorAll('.rb-piano-key').forEach((k) => {
+    const pc = parseInt(k.dataset.pc, 10);
+    k.classList.toggle('rb-piano-inscale', inScale.has(pc));
+    k.classList.toggle('rb-piano-excluded', rbAtExcludedNotes.indexOf(pc) >= 0);
+    k.classList.toggle('rb-piano-live', liveVoicedPc === pc);
+    k.setAttribute('aria-pressed', rbAtExcludedNotes.indexOf(pc) >= 0 ? 'false' : 'true');
+    k.setAttribute('aria-label', NOTE_NAMES_RB[pc] + (rbAtExcludedNotes.indexOf(pc) >= 0 ? ' - excluded, click to re-include' : ' - click to exclude from correction'));
+  });
+  rbUpdateAutotuneReadout();
+}
+
+// Round 49: tuner-style live readout (note name + cents-off meter)
+// above the piano - the fast, at-a-glance answer to "what note is it
+// hearing right now", complementing the piano's own live-key highlight
+// with an actual numeric/visual cents reading. midiToHzRb() is a tiny
+// local mirror of the worklet's own midiToHz() (A4=69=440Hz, 12-TET) -
+// this is display-only math, not anything that feeds correction, so it
+// doesn't need to live in the shared DSP core.
+function midiToHzRb(midi) { return 440 * Math.pow(2, (midi - 69) / 12); }
+function rbUpdateAutotuneReadout() {
+  const wrap = document.getElementById('rb-at-readout');
+  const noteEl = document.getElementById('rb-at-readout-note');
+  const fillEl = document.getElementById('rb-at-readout-meter-fill');
+  const dotEl = document.getElementById('rb-at-readout-meter-dot');
+  const centsEl = document.getElementById('rb-at-readout-cents');
+  if (!wrap || !noteEl || !fillEl || !dotEl || !centsEl) return;
+  const voiced = !!rbAtLiveVoiced && rbAtLiveTargetMidi != null;
+  wrap.classList.toggle('voiced', voiced);
+  if (!voiced) {
+    wrap.classList.remove('in-tune');
+    noteEl.textContent = '–';
+    fillEl.style.left = '50%';
+    fillEl.style.width = '0%';
+    dotEl.style.left = '50%';
+    centsEl.textContent = '';
+    return;
+  }
+  const octave = Math.floor(rbAtLiveTargetMidi / 12) - 1;
+  noteEl.textContent = NOTE_NAMES_RB[((rbAtLiveTargetMidi % 12) + 12) % 12] + octave;
+  let cents = 0;
+  if (rbAtLiveRawHz) {
+    cents = 1200 * Math.log2(rbAtLiveRawHz / midiToHzRb(rbAtLiveTargetMidi));
+  }
+  const clamped = Math.max(-50, Math.min(50, cents));
+  const pct = 50 + (clamped / 50) * 50;
+  dotEl.style.left = pct + '%';
+  if (clamped >= 0) { fillEl.style.left = '50%'; fillEl.style.width = (pct - 50) + '%'; }
+  else { fillEl.style.left = pct + '%'; fillEl.style.width = (50 - pct) + '%'; }
+  const inTune = Math.abs(cents) < 8;
+  wrap.classList.toggle('in-tune', inTune);
+  centsEl.textContent = inTune ? 'in tune' : ((cents > 0 ? '+' : '') + Math.round(cents) + '¢');
+}
+
+function rbPool() {
+  return (histData || []).filter(h => h && h.file_path);
+}
+
+function rbPickRandom() {
+  const pool = rbPool();
+  if (!pool.length) return null;
+  if (pool.length === 1) return pool[0];
+  const avoid = new Set(rbRecentIds);
+  let candidates = pool.filter(h => !avoid.has(h.id));
+  if (!candidates.length) candidates = pool;
+  const pick = candidates[Math.floor(Math.random() * candidates.length)];
+  rbRecentIds.push(pick.id);
+  if (rbRecentIds.length > Math.min(8, Math.floor(pool.length / 2))) rbRecentIds.shift();
+  return pick;
+}
+
+// Called by showTab() on entry. Keeps the current pick across tab
+// switches (leaving and coming back should not lose your spot) and only
+// grabs a fresh random track the first time, or if the old one vanished
+// from the library.
+// Reflects a saved autotune preference on the gear icon even before the
+// panel has ever been opened this session - otherwise a setting from a
+// previous session is silently "on" with no visible sign of it.
+function rbSyncAutotuneGearIndicator() {
+  const gear = document.getElementById('rb-autotune-gear');
+  if (!gear) return;
+  const saved = rbAutotuneLoadSettings();
+  gear.classList.toggle('on', !!(saved.monitor || saved.bake));
+}
+
+// loadHistory() can resolve AFTER the user has already landed on Random
+// Beats (e.g. they switch tabs fast right at startup) - rbEnterTab() only
+// runs from the tab-switch handler, so without this, a page that showed
+// "Nothing downloaded yet" before the fetch settled stays stuck showing
+// that even once tracks exist, until the user leaves and comes back.
+function rbRefreshIfEmpty() {
+  if (lastTab !== 'random') return;
+  const empty = document.getElementById('rb-empty');
+  if (empty && !empty.classList.contains('hidden')) rbEnterTab();
+}
+
+function rbEnterTab() {
+  if (rbPendingReviewTake) {
+    const p = rbPendingReviewTake;
+    rbPendingReviewTake = null;
+    rbCurrent = p.beatTrack;
+    rbRenderTrack(p.beatTrack);
+    rbEnterReview(p.buffer, p.blob, p.offsetMs, p.beatTrack);
+    return;
+  }
+  rbSyncAutotuneGearIndicator();
+  const empty = document.getElementById('rb-empty');
+  const card = document.getElementById('rb-card');
+  if (rbCurrent && rbPool().some(h => h.id === rbCurrent.id)) {
+    rbRenderTrack(rbCurrent);
+    return;
+  }
+  const pick = rbPickRandom();
+  if (!pick) {
+    if (empty) empty.classList.remove('hidden');
+    if (card) card.classList.add('hidden');
+    return;
+  }
+  rbCurrent = pick;
+  rbRenderTrack(pick);
+  rbMaybeDetectKeyForCurrent();
+}
+
+function rbNext() {
+  if (rbRecording || rbStopping) { showAppNotification(t('rbStopFirst'), 'info'); return; }
+  if (rbReviewActive) { showAppNotification(t('rbReviewFinishFirst'), 'info'); return; }
+  const pick = rbPickRandom();
+  if (!pick) return;
+  if (globalPlayer.audio && globalPlayer.track && rbCurrent && globalPlayer.track.id === rbCurrent.id) {
+    try { globalPlayer.audio.pause(); } catch {}
+  }
+  rbCurrent = pick;
+  rbRenderTrack(pick);
+  rbMaybeDetectKeyForCurrent();
+  if (rbPickerOpen) rbPickerRenderList(); // keep the "current" highlight in sync if the picker's open
+}
+
+// Compact beat-history picker (Topliner page) - lets someone jump
+// straight to a SPECIFIC previously-downloaded beat to write a topline
+// over, instead of shuffling until the random pick happens to land on
+// it. Reuses the same histData the full History tab already loads (no
+// second fetch), filtered down to rbPool() - only tracks with a real
+// file on disk are pickable, same rule rbPickRandom() already follows.
+let rbPickerOpen = false;
+
+function rbTogglePicker() {
+  rbPickerOpen = !rbPickerOpen;
+  const panel = document.getElementById('rb-picker-panel');
+  const btn = document.getElementById('rb-picker-toggle-btn');
+  if (panel) panel.classList.toggle('hidden', !rbPickerOpen);
+  if (btn) btn.setAttribute('aria-expanded', String(rbPickerOpen));
+  if (rbPickerOpen) {
+    rbPickerRenderList();
+    const search = document.getElementById('rb-picker-search');
+    if (search) setTimeout(() => search.focus(), 0);
+  }
+}
+
+function rbPickerFilter() {
+  rbPickerRenderList();
+}
+
+function rbPickerRenderList() {
+  const list = document.getElementById('rb-picker-list');
+  const countEl = document.getElementById('rb-picker-count');
+  if (!list) return;
+  const q = (document.getElementById('rb-picker-search')?.value || '').trim().toLowerCase();
+  const pool = rbPool();
+  const matches = q
+    ? pool.filter(h => (h.title || '').toLowerCase().includes(q) || (h.channel || '').toLowerCase().includes(q))
+    : pool;
+  // Most-recently-downloaded first - matches the History tab's default
+  // order and puts what someone probably just grabbed at the top.
+  const sorted = matches.slice().sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+  if (countEl) countEl.textContent = sorted.length ? String(sorted.length) : '';
+  if (!sorted.length) {
+    list.innerHTML = '<div class="rb-picker-empty">' + escapeHtml(q ? t('rbPickerNoMatch') : t('rbPickerEmpty')) + '</div>';
+    return;
+  }
+  const CAP = 200; // keep the DOM light even against a big library - search narrows it down further
+  const shown = sorted.slice(0, CAP);
+  list.innerHTML = shown.map(h => {
+    const isCurrent = rbCurrent && rbCurrent.id === h.id;
+    // Same simplification renderFolderTracks() already uses: highlight
+    // whichever row matches the mini player's LOADED track, regardless of
+    // paused/playing - the button itself still toggles correctly either
+    // way since playTrack() re-clicking the same track flips play/pause.
+    const isPlaying = !!(globalPlayer.track && globalPlayer.track.id === h.id);
+    const subParts = [];
+    if (h.bpm) subParts.push(Math.round(h.bpm) + ' BPM');
+    if (h.key_note) subParts.push((h.key_note + ' ' + (h.key_mode || '')).trim());
+    const thumb = h.thumbnail
+      ? '<img src="' + String(h.thumbnail).replace(/"/g, '&quot;') + '" alt=""/>'
+      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>';
+    const playGlyph = isPlaying
+      ? '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>'
+      : '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="7,5 7,19 19,12"/></svg>';
+    return '<div class="rb-picker-row' + (isCurrent ? ' current' : '') + '" onclick="rbSelectBeat(' + Number(h.id) + ')">' +
+      '<button class="rb-picker-play' + (isPlaying ? ' playing' : '') + '" onclick="rbPickerPlayTrack(' + Number(h.id) + ', event)" title="' + escapeHtml(t('rbPickerPreview')) + '" aria-label="' + escapeHtml(t('rbPickerPreview')) + '">' + playGlyph + '</button>' +
+      '<div class="rb-picker-thumb">' + thumb + '</div>' +
+      '<div class="rb-picker-meta">' +
+        '<div class="rb-picker-title">' + escapeHtml(h.title || (h.file_path || '').split(/[/\\]/).pop() || '?') + '</div>' +
+        '<div class="rb-picker-sub">' + escapeHtml(subParts.join(' · ') || h.channel || '') + '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+// Jump straight to one specific beat (from the picker above), the same
+// guarded path rbNext() uses so this can't yank the beat out from under
+// an in-progress recording/review.
+function rbSelectBeat(id) {
+  if (rbRecording || rbStopping) { showAppNotification(t('rbStopFirst'), 'info'); return; }
+  if (rbReviewActive) { showAppNotification(t('rbReviewFinishFirst'), 'info'); return; }
+  const pick = rbPool().find(h => String(h.id) === String(id));
+  if (!pick) return;
+  if (globalPlayer.audio && globalPlayer.track && rbCurrent && globalPlayer.track.id === rbCurrent.id) {
+    try { globalPlayer.audio.pause(); } catch {}
+  }
+  rbCurrent = pick;
+  rbRenderTrack(pick, { picked: true });
+  rbMaybeDetectKeyForCurrent();
+  rbTogglePicker();
+}
+
+// Preview a beat straight from the picker list via the shared mini player
+// - the same playTrack() entry point folder/history rows already use -
+// without loading it as the active Topliner beat. event.stopPropagation()
+// keeps this from also triggering the row's own onclick (rbSelectBeat).
+function rbPickerPlayTrack(id, event) {
+  if (event) event.stopPropagation();
+  const tr = rbPool().find(h => h.id === id);
+  if (!tr || !tr.file_path) return;
+  // Playlist context = whatever's currently shown (search-filtered), same
+  // convention folderViewPlayTrack() uses, so mini-player prev/next walks
+  // what's actually on screen.
+  const q = (document.getElementById('rb-picker-search')?.value || '').trim().toLowerCase();
+  const pool = rbPool();
+  const visible = q
+    ? pool.filter(h => (h.title || '').toLowerCase().includes(q) || (h.channel || '').toLowerCase().includes(q))
+    : pool;
+  visible.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+  const idx = visible.findIndex(h => h.id === id);
+  playTrack(tr, { source: 'topliner-picker', tracks: visible, index: idx >= 0 ? idx : 0 });
+}
+
+// Keeps the picker's per-row play/pause glyphs in sync with the mini
+// player - called whenever playback starts/stops/switches tracks
+// elsewhere (playTrack, stopGlobalPlay, updateMiniPlayerPlayState), not
+// just from a click inside the picker itself.
+function rbPickerSyncPlayState() {
+  if (typeof rbPickerOpen !== 'undefined' && rbPickerOpen) rbPickerRenderList();
+}
+
+// Re-runs key detection for whatever beat is showing now, but only if
+// the recording panel is actually open - no point analyzing a beat
+// nobody's about to record over.
+function rbMaybeDetectKeyForCurrent() {
+  const panel = document.getElementById('rb-autotune-panel');
+  if (panel && !panel.classList.contains('hidden') && rbCurrent) rbDetectBeatKey(rbCurrent);
+}
+
+function rbRenderTrack(track, opts) {
+  const empty = document.getElementById('rb-empty');
+  const card = document.getElementById('rb-card');
+  if (empty) empty.classList.add('hidden');
+  if (card) card.classList.remove('hidden');
+
+  const tagEl = document.getElementById('rb-tag');
+  if (tagEl) tagEl.textContent = (opts && opts.picked) ? t('rbTagPicked') : t('rbTag');
+
+  const titleEl = document.getElementById('rb-title');
+  if (titleEl) titleEl.textContent = track.title || (track.file_path || '').split(/[/\\]/).pop() || '?';
+  const subEl = document.getElementById('rb-sub');
+  if (subEl) subEl.textContent = track.channel || '';
+
+  const badges = document.getElementById('rb-badges');
+  if (badges) {
+    const parts = [];
+    if (track.bpm) parts.push(Math.round(track.bpm) + ' BPM');
+    if (track.key_note) parts.push((track.key_note + ' ' + (track.key_mode || '')).trim());
+    if (track.duration) parts.push(fmt2time(track.duration));
+    badges.innerHTML = parts.length
+      ? parts.map(p => '<span class="rb-badge">' + escapeHtml(p) + '</span>').join('')
+      : '<span class="rb-badge">' + escapeHtml(t('rbNotAnalyzed')) + '</span>';
+  }
+
+  const art = document.getElementById('rb-art');
+  if (art) {
+    art.innerHTML = track.thumbnail
+      ? '<img src="' + String(track.thumbnail).replace(/"/g, '&quot;') + '" alt=""/>'
+      : '<svg class="rb-art-fallback" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>';
+  }
+
+  rbSyncPlayState();
+  rbSyncTime();
+  if (typeof updateVolumeUI === 'function') updateVolumeUI();
+}
+
+// Play/pause the hero player. Reuses playTrack() - the same entry point
+// every history row and folder track uses - so starting a beat here stops
+// whatever else was playing, exactly like clicking any other track does.
+function rbTogglePlay() {
+  if (!rbCurrent) return;
+  if (globalPlayer.track && globalPlayer.track.id === rbCurrent.id && globalPlayer.audio) {
+    if (globalPlayer.audio.paused) globalPlayer.audio.play().catch(() => {});
+    else globalPlayer.audio.pause();
+    return;
+  }
+  playTrack(rbCurrent, 'random');
+}
+
+function rbSyncPlayState() {
+  const svg = document.getElementById('rb-play-svg');
+  const glow = document.getElementById('rb-art-glow');
+  if (!svg) return;
+  const isThis = !!(rbCurrent && globalPlayer.track && globalPlayer.track.id === rbCurrent.id);
+  const playingNow = isThis && globalPlayer.audio && !globalPlayer.audio.paused;
+  svg.innerHTML = playingNow
+    ? '<rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/>'
+    : '<polygon points="7,5 7,19 19,12"/>';
+  if (glow) glow.classList.toggle('playing', !!playingNow);
+}
+
+function rbSyncTime() {
+  const curEl = document.getElementById('rb-time-cur');
+  const durEl = document.getElementById('rb-time-dur');
+  const fill = document.getElementById('rb-seek-fill');
+  const thumb = document.getElementById('rb-seek-thumb');
+  const isThis = !!(rbCurrent && globalPlayer.track && globalPlayer.track.id === rbCurrent.id && globalPlayer.audio);
+  if (!isThis) {
+    if (curEl) curEl.textContent = '0:00';
+    if (durEl) durEl.textContent = rbCurrent && rbCurrent.duration ? fmt2time(rbCurrent.duration) : '0:00';
+    if (fill) fill.style.width = '0%';
+    if (thumb) thumb.style.left = '0%';
+    return;
+  }
+  const audio = globalPlayer.audio;
+  const cur = isFinite(audio.currentTime) ? audio.currentTime : 0;
+  const dur = isFinite(audio.duration) ? audio.duration : 0;
+  if (curEl) curEl.textContent = fmt2time(cur);
+  if (durEl) durEl.textContent = dur > 0 ? fmt2time(dur) : '0:00';
+  if (dur > 0) {
+    const pct = (cur / dur) * 100;
+    if (fill) fill.style.width = pct + '%';
+    if (thumb) thumb.style.left = pct + '%';
+  }
+}
+
+function rbSeekClick(evt) {
+  if (!rbCurrent) return;
+  if (!globalPlayer.track || globalPlayer.track.id !== rbCurrent.id) {
+    playTrack(rbCurrent, 'random');
+  }
+  const seek = document.getElementById('rb-seek');
+  if (!seek || !globalPlayer.audio || !isFinite(globalPlayer.audio.duration) || !globalPlayer.audio.duration) return;
+  const rect = seek.getBoundingClientRect();
+  const pct = Math.max(0, Math.min(1, (evt.clientX - rect.left) / rect.width));
+  globalPlayer.audio.currentTime = pct * globalPlayer.audio.duration;
+  rbSyncTime();
+}
+
+function rbVolumeClick(evt) {
+  const bar = document.getElementById('rb-vol');
+  if (!bar) return;
+  const rect = bar.getBoundingClientRect();
+  const pct = Math.max(0, Math.min(1, (evt.clientX - rect.left) / rect.width));
+  spFvSaveVolume(pct);
+  applyVolumeToAudio();
+  updateVolumeUI();
+}
+
+// Analyze / Separator actions reuse the exact navigation paths History
+// rows already use, so behavior (and any future fix to those paths)
+// stays identical instead of forking a second copy.
+function rbOpenAnalyze() {
+  if (!rbCurrent) return;
+  loadFromHistory(rbCurrent.id);
+}
+
+function rbOpenSeparator() {
+  if (!rbCurrent || !rbCurrent.file_path) return;
+  sepSourcePath = rbCurrent.file_path;
+  sepSourceName = rbCurrent.title || (rbCurrent.file_path || '').split(/[/\\]/).pop();
+  showSeparatorSource();
+  showTab(document.querySelector('[data-tab="stems"]'));
+}
+
+// ── Autotune monitoring / baking (Random Beats "Record topline") ────────
+// Two independent choices: Monitor with Autotune controls what the user
+// HEARS while recording (a pitch-correction reference to sing against),
+// and Autotune on Recording controls whether the SAVED take actually has
+// correction printed into it. They can be combined any way - practice
+// against a corrected reference but keep the raw take, or record blind
+// but still want the printed take corrected, or both, or neither (the
+// default: plain dry recording, no Web Audio graph built at all).
+function rbAutotuneDefaults() {
+  return {
+    monitor: false, bake: false, key: 0, scale: 'major', retuneSpeedMs: 5,
+    trackingSpeedMs: 120, // Round 49 - user-facing note-decision tracking speed
+    humanize: 0, naturalVibrato: 0, flexTune: 0, formantCorrection: false,
+    excludedNotes: [], // Round 48 - live note view/bypass piano
+    micDeviceId: '', micDeviceLabel: '', keyAuto: true,
+    inputGainDb: 0, outputGainDb: 0,
+    reverbMonitor: false, reverbBake: false,
+    reverbMix: 35, reverbDecay: 50, reverbDamping: 50, reverbPreDelayMs: 20,
+  };
+}
+function rbAutotuneLoadSettings() {
+  try {
+    const raw = localStorage.getItem('fp_autotune');
+    if (raw) return Object.assign(rbAutotuneDefaults(), JSON.parse(raw));
+  } catch (e) {}
+  return rbAutotuneDefaults();
+}
+function rbAutotuneSaveSettings(s) {
+  try { localStorage.setItem('fp_autotune', JSON.stringify(s)); } catch (e) {}
+}
+// Dragging a slider fires its 'input' event continuously (every pixel of
+// mouse movement, easily 60-100+ times/sec) - rbAutotuneParamsChanged()
+// runs on ALL of those (Input/Output Gain, all 4 reverb knobs, retune
+// speed, humanize, vibrato, flex-tune), and used to call
+// rbAutotuneSaveSettings() - a synchronous localStorage.setItem plus a
+// JSON.stringify - on every single one of them. That's real, measurable
+// main-thread work stacked on every input event during a drag, on top of
+// the panel's own layout/paint cost - a direct, avoidable contributor to
+// "the settings lag when moving things around". The live audio-side
+// updates (gain ramps, worklet postMessage) still happen immediately on
+// every event, since those need to feel responsive and are already cheap
+// (rbRampParam schedules an AudioParam change, it doesn't do work per
+// call) - only the disk-adjacent persistence is coalesced, since nothing
+// needs that saved mid-drag, only by the time the user lets go.
+let rbAutotuneSaveDebounceTimer = null;
+let rbAutotuneSavePending = null;
+function rbAutotuneSaveSettingsDebounced(s) {
+  rbAutotuneSavePending = s;
+  if (rbAutotuneSaveDebounceTimer) clearTimeout(rbAutotuneSaveDebounceTimer);
+  rbAutotuneSaveDebounceTimer = setTimeout(() => {
+    rbAutotuneSaveDebounceTimer = null;
+    rbAutotuneSavePending = null;
+    rbAutotuneSaveSettings(s);
+  }, 200);
+}
+// Safety net: if the app closes within the 200ms debounce window (quit
+// right after dragging a slider), flush whatever was pending instead of
+// silently losing that last change.
+window.addEventListener('beforeunload', () => {
+  if (rbAutotuneSaveDebounceTimer && rbAutotuneSavePending) {
+    clearTimeout(rbAutotuneSaveDebounceTimer);
+    rbAutotuneSaveSettings(rbAutotuneSavePending);
+  }
+});
+// The Random Beats settings panel's controls are static DOM nodes for
+// the life of the session (rb-autotune-panel is only ever shown/hidden
+// via a class toggle, never rebuilt) - so a plain document.getElementById
+// result for any of its ids is safe to cache forever. rbGetAutotuneSettings
+// and rbUpdateAutotuneLabels together run 25+ of these lookups on EVERY
+// single 'input' tick while dragging any of ~10 sliders (easily 60-100+
+// events/sec) - a real, measurable, and entirely avoidable chunk of the
+// "settings lag while moving things around" complaint. Caching turns
+// each repeat lookup into a plain object-property read.
+const rbElCache = new Map();
+function rbCachedEl(id) {
+  if (rbElCache.has(id)) return rbElCache.get(id);
+  const el = document.getElementById(id);
+  rbElCache.set(id, el);
+  return el;
+}
+function rbGetAutotuneSettings() {
+  const monitorEl = rbCachedEl('rb-at-monitor');
+  // rb-at-monitor exists in the DOM from page load regardless of whether
+  // the panel's ever been opened (it's only hidden via CSS), so a null
+  // check alone doesn't catch "never opened" - it's rbAutotunePanelPopulated
+  // that actually tells us whether monitorEl.checked (and every other
+  // control read below) holds the real saved value or just its raw HTML
+  // default. Without this, Monitor/Record as literally the first action of
+  // a session read every autotune setting - including whether it's even
+  // on - as blank/default instead of what was saved: a fully unprocessed,
+  // silently-bypassed take that has nothing to do with the DSP engine
+  // itself, which is why it looked like an intermittent, unreproducible
+  // "sometimes crystal clear, no autotune" bug for so long.
+  if (!monitorEl || !rbAutotunePanelPopulated) return rbAutotuneLoadSettings();
+  const val = (id, fallback) => {
+    const el = rbCachedEl(id);
+    const n = el ? parseInt(el.value, 10) : NaN;
+    return isFinite(n) ? n : fallback;
+  };
+  // This runs on every single slider drag tick (see rbAutotuneParamsChanged,
+  // wired to oninput on ~10 controls) - rbAutotuneLoadSettings() is a
+  // localStorage.getItem + JSON.parse, and it was being paid for on EVERY
+  // call regardless of whether it was actually needed. It's only ever
+  // used as a fallback for a handful of fields when their element is
+  // missing from the DOM entirely - which, since the panel is open and
+  // monitorEl already resolved above, essentially never happens. Made
+  // lazy/memoized so the real localStorage read only happens if some
+  // fallback value actually gets used.
+  let _savedFallback = null;
+  const savedFallback = () => (_savedFallback || (_savedFallback = rbAutotuneLoadSettings()));
+  return {
+    monitor: !!monitorEl.checked,
+    bake: !!(rbCachedEl('rb-at-bake') || {}).checked,
+    key: val('rb-at-key', 0),
+    scale: (rbCachedEl('rb-at-scale') || {}).value || 'major',
+    retuneSpeedMs: val('rb-at-retune', 5),
+    trackingSpeedMs: val('rb-at-tracking', 120),
+    humanize: val('rb-at-humanize', 0),
+    naturalVibrato: val('rb-at-vibrato', 0),
+    flexTune: val('rb-at-flextune', 0),
+    // Round 72 note: this defaults OFF and should stay that way. Measured
+    // against a clean reference signal (bypass measures +0.0dB on every
+    // band, so the method is sound): with correction engaged, formant
+    // correction costs ~3.3dB of presence and ~3.4dB of sibilance and adds
+    // ~3.7dB in the 250-630Hz box region. The engine is transparent when
+    // the input is already in tune (+0.1-0.3dB) - the coloring scales with
+    // how much correction is actually happening, which is why "matching
+    // the key" never helped the users who reported it.
+    formantCorrection: !!(rbCachedEl('rb-at-formant') || {}).checked,
+    excludedNotes: rbAtExcludedNotes.slice(),
+    // The <select> element itself exists in the DOM from page load
+    // (the settings panel is only hidden via CSS, never removed) even
+    // though its list of devices is only ever actually populated by
+    // rbPopulateMicSelect() - which runs when the settings panel is
+    // opened. Reading el.value on that still-empty <select> before it's
+    // been populated silently returns "" - not an error, just a
+    // perfectly normal-looking empty string - so starting Monitor or
+    // Record before ever opening the settings panel this session read
+    // an empty saved mic id and went straight to "system default mic"
+    // instead, regardless of what was actually saved. That's the real
+    // cause of a real report: "mic is always in use, saved mic doesn't
+    // do anything" - confirmed directly from an activity log showing
+    // exactly this sequence (Monitor started and requested "system
+    // default mic" first, before the settings panel had ever been
+    // opened that session; opening the panel afterward correctly
+    // requested the saved device by id and worked). el.options.length
+    // is what actually reflects "has this been populated yet", not
+    // whether the element exists - falls back to the saved settings
+    // directly whenever it hasn't been.
+    micDeviceId: (() => {
+      const el = rbCachedEl('rb-at-mic');
+      if (el && el.options.length > 0) return el.value || '';
+      return savedFallback().micDeviceId || '';
+    })(),
+    micDeviceLabel: (() => {
+      const el = rbCachedEl('rb-at-mic');
+      if (el && el.options.length > 0 && el.selectedIndex >= 0 && el.value) return (el.options[el.selectedIndex] || {}).textContent || '';
+      return savedFallback().micDeviceLabel || '';
+    })(),
+    keyAuto: (() => { const el = rbCachedEl('rb-at-key-auto'); return el ? !!el.checked : savedFallback().keyAuto; })(),
+    inputGainDb: val('rb-at-ingain', savedFallback().inputGainDb),
+    outputGainDb: val('rb-at-outgain', savedFallback().outputGainDb),
+    reverbMonitor: !!(rbCachedEl('rb-rv-monitor') || {}).checked,
+    reverbBake: !!(rbCachedEl('rb-rv-bake') || {}).checked,
+    reverbMix: val('rb-rv-mix', savedFallback().reverbMix),
+    reverbDecay: val('rb-rv-decay', savedFallback().reverbDecay),
+    reverbDamping: val('rb-rv-damping', savedFallback().reverbDamping),
+    reverbPreDelayMs: val('rb-rv-predelay', savedFallback().reverbPreDelayMs),
+  };
+}
+function rbAutotuneParamsForEngine(at) {
+  return {
+    key: at.key, scale: at.scale, retuneSpeedMs: at.retuneSpeedMs,
+    trackingSpeedMs: at.trackingSpeedMs,
+    humanize: at.humanize, naturalVibrato: at.naturalVibrato,
+    flexTune: at.flexTune, formantCorrection: at.formantCorrection, bypass: false,
+    excludedNotes: at.excludedNotes || [],
+  };
+}
+
+// at.reverbMix/Decay/Damping are stored 0-100 (matching their sliders
+// and the existing 0-100 convention for humanize/vibrato/flexTune) -
+// rbReverbParamMap/rbCreateReverbUnit expect the 0-1 scale, so that
+// conversion happens right here, in one place.
+function rbReverbSettingsFrom(at) {
+  return {
+    mix: (at.reverbMix || 0) / 100,
+    decay: (at.reverbDecay || 0) / 100,
+    damping: (at.reverbDamping || 0) / 100,
+    preDelayMs: at.reverbPreDelayMs || 0,
+  };
+}
+
+async function rbPopulateAutotunePanel() {
+  const keyEl = document.getElementById('rb-at-key');
+  const scaleEl = document.getElementById('rb-at-scale');
+  if (!keyEl || !scaleEl) return;
+  if (!keyEl.options.length) {
+    keyEl.innerHTML = NOTE_NAMES_RB.map((n, i) => '<option value="' + i + '">' + n + '</option>').join('');
+  }
+  scaleEl.innerHTML = RB_AT_SCALES.map(s => '<option value="' + s + '">' + escapeHtml(t('rbScale_' + s)) + '</option>').join('');
+  const saved = rbAutotuneLoadSettings();
+  document.getElementById('rb-at-monitor').checked = saved.monitor;
+  document.getElementById('rb-at-bake').checked = saved.bake;
+  keyEl.value = String(saved.key);
+  scaleEl.value = saved.scale;
+  const keyAutoEl = document.getElementById('rb-at-key-auto');
+  if (keyAutoEl) keyAutoEl.checked = saved.keyAuto !== false;
+  rbApplyKeyAutoUI();
+  const buildIdEl = document.getElementById('rb-at-buildid');
+  if (buildIdEl) buildIdEl.textContent = 'Build ' + RB_BUILD_ID;
+  document.getElementById('rb-at-retune').value = saved.retuneSpeedMs;
+  document.getElementById('rb-at-tracking').value = (saved.trackingSpeedMs != null) ? saved.trackingSpeedMs : 120;
+  document.getElementById('rb-at-humanize').value = saved.humanize;
+  document.getElementById('rb-at-vibrato').value = saved.naturalVibrato;
+  document.getElementById('rb-at-flextune').value = saved.flexTune;
+  document.getElementById('rb-at-formant').checked = saved.formantCorrection;
+  rbAtExcludedNotes = (saved.excludedNotes || []).slice();
+  const pianoEl = document.getElementById('rb-at-piano');
+  if (pianoEl) pianoEl.dataset.built = '0';
+  rbRenderAutotunePiano();
+  const inGainEl = document.getElementById('rb-at-ingain');
+  if (inGainEl) inGainEl.value = saved.inputGainDb;
+  const outGainEl = document.getElementById('rb-at-outgain');
+  if (outGainEl) outGainEl.value = saved.outputGainDb;
+  const rvMonitorEl = document.getElementById('rb-rv-monitor');
+  if (rvMonitorEl) rvMonitorEl.checked = saved.reverbMonitor;
+  const rvBakeEl = document.getElementById('rb-rv-bake');
+  if (rvBakeEl) rvBakeEl.checked = saved.reverbBake;
+  const rvMixEl = document.getElementById('rb-rv-mix');
+  if (rvMixEl) rvMixEl.value = saved.reverbMix;
+  const rvDecayEl = document.getElementById('rb-rv-decay');
+  if (rvDecayEl) rvDecayEl.value = saved.reverbDecay;
+  const rvDampingEl = document.getElementById('rb-rv-damping');
+  if (rvDampingEl) rvDampingEl.value = saved.reverbDamping;
+  const rvPreDelayEl = document.getElementById('rb-rv-predelay');
+  if (rvPreDelayEl) rvPreDelayEl.value = saved.reverbPreDelayMs;
+  rbUpdateAutotuneLabels();
+  rbUpdateAutotuneParamsVisibility();
+  // Awaited (not fired-and-forgotten) on purpose - see rbToggleAutotunePanel,
+  // which needs this to actually finish, including its own internal
+  // getUserMedia label-probe call on a fresh session, before it's safe
+  // to start a second, independent getUserMedia call (rbArmMic's meter
+  // preview) without racing it.
+  await rbPopulateMicSelect();
+  rbAutotunePanelPopulated = true;
+}
+
+// Grays out the manual Key/Scale selects while "match beat" is on, and
+// shows what was actually detected (or that detection hasn't run/failed
+// yet) so it's never ambiguous why the dropdowns aren't responding.
+function rbApplyKeyAutoUI() {
+  const auto = !!(document.getElementById('rb-at-key-auto') || {}).checked;
+  const keyEl = document.getElementById('rb-at-key');
+  const scaleEl = document.getElementById('rb-at-scale');
+  if (keyEl) keyEl.disabled = auto;
+  if (scaleEl) scaleEl.disabled = auto;
+  const hint = document.getElementById('rb-at-key-auto-hint');
+  if (!hint) return;
+  if (!auto) { hint.textContent = ''; return; }
+  const detected = rbCurrent ? rbDetectedKeyCache[rbCurrent.id] : null;
+  hint.textContent = detected
+    ? t('rbAtKeyDetected').replace('{key}', NOTE_NAMES_RB[detected.key]).replace('{mode}', t('rbScale_' + detected.mode))
+    : t('rbAtKeyDetecting');
+}
+
+function rbKeyAutoToggleChanged() {
+  rbApplyKeyAutoUI();
+  if (document.getElementById('rb-at-key-auto').checked && rbCurrent) rbDetectBeatKey(rbCurrent);
+  rbAutotuneSaveSettings(rbGetAutotuneSettings());
+  rbAutotuneParamsChanged();
+}
+
+// Applies a cached detection result to the Key/Scale selects, if "match
+// beat" is still on and the detection is still for the beat currently
+// showing (both can have changed while the (async) analysis was running).
+function rbApplyDetectedKey(trackId) {
+  if (!rbCurrent || rbCurrent.id !== trackId) return;
+  const auto = !!(document.getElementById('rb-at-key-auto') || {}).checked;
+  if (!auto) { rbApplyKeyAutoUI(); return; }
+  const detected = rbDetectedKeyCache[trackId];
+  if (!detected) return;
+  const keyEl = document.getElementById('rb-at-key');
+  const scaleEl = document.getElementById('rb-at-scale');
+  if (keyEl && keyEl.options.length) keyEl.value = String(detected.key);
+  if (scaleEl && scaleEl.options.length) scaleEl.value = detected.mode;
+  rbApplyKeyAutoUI();
+  rbAutotuneSaveSettings(rbGetAutotuneSettings());
+  if ((rbRecording || rbMonitoring) && rbAutotuneNode) {
+    rbAutotuneNode.port.postMessage({ type: 'params', params: rbAutotuneParamsForEngine(rbGetAutotuneSettings()) });
+  }
+}
+
+// Detects the beat's musical key by reusing the Analyze tab's own
+// detectKey() - same algorithm, same accuracy, nothing duplicated - fed
+// with the beat decoded through the app's existing decodeAudioData-free
+// path (fetch /convert-wav, then parseWAV on the bytes). Cached per
+// track id since the analysis itself takes real time and there's no
+// reason to repeat it for a beat already looked at this session.
+async function rbDetectBeatKey(track) {
+  if (!track) return;
+  if (rbDetectedKeyCache[track.id]) { rbApplyDetectedKey(track.id); return; }
+  const myToken = ++rbKeyDetectToken;
+  try {
+    if (!rbAudioCtx) await rbEnsureWorklets();
+    const r = await fetch(API + '/convert-wav?path=' + encodeURIComponent(track.file_path));
+    if (!r.ok) return;
+    const arrayBuf = await r.arrayBuffer();
+    const buf = parseWAV(arrayBuf, rbAudioCtx);
+    const result = await detectKey(buf);
+    const idx = NOTE_NAMES_RB.indexOf(result.key);
+    rbDetectedKeyCache[track.id] = { key: idx >= 0 ? idx : 0, mode: result.mode === 'minor' ? 'minor' : 'major' };
+  } catch (e) {
+    return; // detection is a nicety - leaving the manual default in place is a fine fallback
+  }
+  if (myToken !== rbKeyDetectToken) return; // a newer beat superseded this detection while it was running
+  rbApplyDetectedKey(track.id);
+}
+
+let rbDeviceChangeWired = false;
+
+// Lists available input devices so a user with more than one microphone
+// (an interface, a headset, a built-in mic) can pick which one Random
+// Beats records from, instead of whatever the OS happens to default to.
+// Device LABELS are blank until mic permission has been granted at least
+// once, so the first time this runs with no prior permission, it asks for
+// it, immediately stops the resulting tracks (opening a settings panel
+// should not leave the mic "hot"), and re-lists with real names.
+let rbPopulateMicSelectInFlight = null;
+function rbPopulateMicSelect() {
+  // Re-entrancy guard: this can do its own getUserMedia call (the
+  // label-probe below, on a session's first run with no prior
+  // permission), and two of those racing the same physical device is a
+  // real, observed cause of getUserMedia failing outright on hardware
+  // that doesn't like concurrent opens. A rapid double-toggle of the
+  // settings panel is enough to trigger two overlapping calls to this
+  // function on its own; returning the SAME in-flight promise instead of
+  // starting a second one closes that off entirely, on top of the
+  // caller-side (rbToggleAutotunePanel) fix for the more common case.
+  if (rbPopulateMicSelectInFlight) return rbPopulateMicSelectInFlight;
+  rbPopulateMicSelectInFlight = rbPopulateMicSelectImpl().finally(() => { rbPopulateMicSelectInFlight = null; });
+  return rbPopulateMicSelectInFlight;
+}
+async function rbPopulateMicSelectImpl() {
+  const sel = document.getElementById('rb-at-mic');
+  if (!sel || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+  try {
+    let devices = await navigator.mediaDevices.enumerateDevices();
+    let inputs = devices.filter(d => d.kind === 'audioinput');
+    if (inputs.length && inputs.every(d => !d.label)) {
+      try {
+        const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+        probe.getTracks().forEach(tr => tr.stop());
+        devices = await navigator.mediaDevices.enumerateDevices();
+        inputs = devices.filter(d => d.kind === 'audioinput');
+      } catch (e) { /* permission not granted yet - list falls back to generic names below */ }
+    }
+    const saved = rbAutotuneLoadSettings();
+    const current = saved.micDeviceId || '';
+    sel.innerHTML = '<option value="">' + escapeHtml(t('rbAtMicDefault')) + '</option>' +
+      inputs.map((d, i) => '<option value="' + escapeHtml(d.deviceId) + '">' +
+        escapeHtml(d.label || (t('rbAtMicGeneric') + ' ' + (i + 1))) + '</option>').join('');
+    // A saved deviceId not matching anything in THIS enumeration doesn't
+    // mean the mic is gone - Chromium salts device ids per session/app
+    // launch, so the exact id from last time is expected to go stale.
+    // rbOpenMicStream() already re-resolves by label when it actually
+    // opens a stream, but the dropdown itself used to just silently fall
+    // back to showing "Default" whenever the raw id didn't match - which
+    // reads as "it forgot my mic" even though the saved label could
+    // still find it. Try that same label match here before giving up, so
+    // what's actually shown/selected matches what actually happens when
+    // recording starts, and self-heal the saved id while we're at it so
+    // this doesn't have to keep re-resolving by label every launch.
+    let resolvedId = inputs.some(d => d.deviceId === current) ? current : '';
+    if (!resolvedId && current && saved.micDeviceLabel) {
+      const wantedNorm = rbMicLabelNormalize(saved.micDeviceLabel);
+      const wantedCore = rbMicLabelCore(saved.micDeviceLabel);
+      let match = inputs.find((d) => rbMicLabelNormalize(d.label) === wantedNorm);
+      if (!match && wantedCore) match = inputs.find((d) => rbMicLabelCore(d.label) === wantedCore);
+      if (match) {
+        resolvedId = match.deviceId;
+        saved.micDeviceId = match.deviceId;
+        saved.micDeviceLabel = match.label;
+        rbAutotuneSaveSettings(saved);
+      }
+    }
+    sel.value = resolvedId;
+  } catch (e) {}
+
+  if (!rbDeviceChangeWired && navigator.mediaDevices) {
+    rbDeviceChangeWired = true;
+    // Refresh the list on hotplug (headset plugged in mid-session, etc.)
+    // only while the panel is actually open - no point polling in the background.
+    navigator.mediaDevices.ondevicechange = () => {
+      const panel = document.getElementById('rb-autotune-panel');
+      if (panel && !panel.classList.contains('hidden')) rbPopulateMicSelect();
+    };
+  }
+}
+
+function rbMicDeviceChanged() {
+  rbAutotuneSaveSettings(rbGetAutotuneSettings());
+  if (rbMonitoring) {
+    rbSwitchMonitorDevice();
+  } else if (!rbMicOwned()) {
+    // Meter-only preview, nothing recording or monitoring right now -
+    // disarm+rearm opens a fresh stream against whatever the select now
+    // says. Deliberately NOT gated on rbArmedStream being truthy: the
+    // panel's own opening arm can still be mid-getUserMedia (a very
+    // normal thing to hit - open the panel, immediately pick your mic
+    // before the default-device arm has even resolved) at the moment
+    // this fires, in which case rbArmedStream is still null and an
+    // earlier version of this check silently did nothing - the user's
+    // selection was saved but never actually applied, and the meter
+    // stayed on whatever device the in-flight arm was already opening.
+    // rbDisarmMic() bumps rbArmGeneration unconditionally (see its own
+    // comment), which is exactly what makes this safe to call even
+    // while that first arm is still in flight - the in-flight call's
+    // post-await recheck sees its generation is stale and abandons
+    // itself instead of committing the wrong device, and the fresh
+    // rbArmMic() call started right after reads the CURRENT dropdown
+    // value.
+    rbDisarmMic();
+    rbArmMic();
+  }
+  // If a take is actively recording or something is mid-start/mid-stop,
+  // the new device is already saved and will be picked up by whatever
+  // opens the mic next (matches how every other setting here behaves
+  // mid-take - see rbAutotuneToggleChanged's "applies next take" path).
+}
+
+// Reopens the live monitor stream against whatever device is now
+// selected, without interrupting anything else. Can't just rewire the
+// existing graph (that's what rbRestartMonitor() is for, on param/routing
+// changes) because a device switch needs an actual new MediaStream from
+// getUserMedia - the old track can't be swapped in place.
+async function rbSwitchMonitorDevice() {
+  if (!rbMonitoring) return;
+  const at = rbGetAutotuneSettings();
+  const myGen = ++rbMonitorGeneration; // supersede any other switch/stop racing this one
+  let newStream;
+  try {
+    const result = await rbOpenMicStream(at.micDeviceId, at.micDeviceLabel);
+    rbApplyMicFallback(result, at.micDeviceId, at.micDeviceLabel);
+    newStream = result.stream;
+  } catch (e) {
+    showAppNotification((e && e.rbMicErrorHint) || t('rbMicDenied'), 'err');
+    return;
+  }
+  if (!rbMonitoring || myGen !== rbMonitorGeneration) {
+    // Stopped, or superseded by a second rapid device switch, while this
+    // was awaiting permission - the stream we just opened was never
+    // wired into anything, so just release it.
+    try { newStream.getTracks().forEach((tr) => tr.stop()); } catch (e) {}
+    return;
+  }
+  // Full teardown of every node the current monitor graph built - not
+  // just the three this originally knew about. Leaving the reverb
+  // unit's internal comb/allpass network and the gain nodes connected
+  // to each other (even once detached from ctx.destination, so silent)
+  // orphans a still-running audio graph on every device switch instead
+  // of freeing it - repeated switching over a session would accumulate
+  // these, and Web Audio nodes with an active feedback loop don't get
+  // garbage-collected just because nothing downstream is listening.
+  try { if (rbMonitorNode) rbMonitorNode.disconnect(); } catch (e) {}
+  try { if (rbMonitorLimiterNode) rbMonitorLimiterNode.dispose(); } catch (e) {}
+  try { if (rbMonitorOutputGainNode) rbMonitorOutputGainNode.disconnect(); } catch (e) {}
+  try { if (rbMonitorReverbUnit) rbMonitorReverbUnit.dispose(); } catch (e) {}
+  try { if (rbAutotuneNode) rbAutotuneNode.disconnect(); } catch (e) {}
+  try { if (rbChannelSafetyNode) rbChannelSafetyNode.disconnect(); } catch (e) {}
+  try { if (rbInputGainNode) rbInputGainNode.disconnect(); } catch (e) {}
+  try { if (rbMicSource) rbMicSource.disconnect(); } catch (e) {}
+  try { if (rbMonitorStream) rbMonitorStream.getTracks().forEach((tr) => tr.stop()); } catch (e) {}
+  newStream.getAudioTracks().forEach((tr) => {
+    tr.onended = () => { if (rbMonitoring) rbStopMonitor(); };
+  });
+  rbMonitorStream = newStream;
+  try {
+    rbConnectMonitorGraph(newStream, at);
+  } catch (e) {
+    showAppNotification(t('rbRecordUnsupported'), 'err');
+    try { newStream.getTracks().forEach((tr) => tr.stop()); } catch (e2) {}
+    rbMonitorStream = null;
+    rbMonitoring = false;
+    rbStopLevelMeter();
+    rbUpdateMonitorUI();
+  }
+}
+
+let rbPanelOpenGeneration = 0;
+async function rbToggleAutotunePanel() {
+  const panel = document.getElementById('rb-autotune-panel');
+  if (!panel) return;
+  const opening = panel.classList.contains('hidden');
+  panel.classList.toggle('hidden');
+  if (opening) rbLog('Settings panel opened.');
+  if (!opening) { rbDisarmMic(); return; }
+  // Real bug found via a user's activity log: rbPopulateAutotunePanel()
+  // used to fire off rbPopulateMicSelect() (which itself does its own
+  // getUserMedia call to probe device labels, the FIRST time this runs
+  // in a session and labels are still blank) and then rbArmMic() ran
+  // immediately after, calling getUserMedia a SECOND time - concurrently,
+  // racing the first. Two near-simultaneous open attempts against the
+  // same physical mic is a real, observed cause of "NotReadableError:
+  // Could not start audio source" on USB audio hardware that doesn't
+  // handle overlapping opens gracefully - confirmed by a real log
+  // showing exactly that error, at the same timestamp as the panel
+  // opening, with a later single (non-concurrent) open of the same
+  // device succeeding cleanly. Awaiting the panel population (which now
+  // itself awaits the mic-select population) before arming the meter
+  // serializes these instead of racing them.
+  const myGen = ++rbPanelOpenGeneration;
+  await rbPopulateAutotunePanel();
+  if (myGen !== rbPanelOpenGeneration || panel.classList.contains('hidden')) return; // closed again (or reopened) while this was still resolving
+  rbArmMic();
+  if (rbCurrent) rbDetectBeatKey(rbCurrent);
+}
+
+// Round 40: Recording panel is now a tab strip (Input | Pitch Correction |
+// Reverb) instead of three stacked cards - direct feedback was that the
+// panel was "long... u have to scroll... not like a DAW". Switching tabs
+// just toggles which .rb-at-group[data-at-tab] is visible via CSS
+// (.rb-at-tab-active); nothing about the underlying controls, IDs, or
+// rbAutotuneParamsChanged()/rbPopulateAutotunePanel() wiring changes, so
+// every existing value read/write and persisted-settings path keeps
+// working unmodified.
+function rbAtSwitchTab(tabName) {
+  const tabs = document.querySelectorAll('#rb-at-tabs .rb-at-tab');
+  const groups = document.querySelectorAll('.rb-autotune-panel .rb-at-group[data-at-tab]');
+  for (const tab of tabs) {
+    const active = tab.getAttribute('data-at-tab') === tabName;
+    tab.classList.toggle('rb-at-tab-active', active);
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+  }
+  for (const group of groups) {
+    group.classList.toggle('rb-at-tab-active', group.getAttribute('data-at-tab') === tabName);
+  }
+}
+
+function rbUpdateAutotuneLabels() {
+  const pairs = [['rb-at-retune', 'rb-at-retune-val', ' ms'], ['rb-at-tracking', 'rb-at-tracking-val', ' ms'], ['rb-at-humanize', 'rb-at-humanize-val', '%'],
+                 ['rb-at-vibrato', 'rb-at-vibrato-val', '%'], ['rb-at-flextune', 'rb-at-flextune-val', '%'],
+                 ['rb-at-ingain', 'rb-at-ingain-val', ' dB'], ['rb-at-outgain', 'rb-at-outgain-val', ' dB'],
+                 ['rb-rv-mix', 'rb-rv-mix-val', '%'], ['rb-rv-decay', 'rb-rv-decay-val', '%'],
+                 ['rb-rv-damping', 'rb-rv-damping-val', '%'], ['rb-rv-predelay', 'rb-rv-predelay-val', ' ms']];
+  for (const [inputId, labelId, suffix] of pairs) {
+    const input = rbCachedEl(inputId), label = rbCachedEl(labelId);
+    if (input && label) {
+      // dB sliders can be positive - show the sign explicitly so "0"
+      // doesn't read as ambiguous between "no boost" and "no reading yet".
+      const v = parseInt(input.value, 10) || 0;
+      label.textContent = (suffix === ' dB' && v > 0 ? '+' : '') + input.value + suffix;
+    }
+    if (input) rbUpdateSliderFill(input);
+  }
+}
+
+// Drives the custom slider's "filled up to the thumb" look (see the
+// --fill custom property in the .rb-at-slider-row input[type=range]
+// CSS) - plain browser range inputs have no such concept on their own,
+// this is what makes it actually look like a plugin control instead of
+// a bare OS-default slider.
+function rbUpdateSliderFill(input) {
+  const min = parseFloat(input.min) || 0, max = parseFloat(input.max) || 100;
+  const v = parseFloat(input.value);
+  const pct = max > min ? Math.max(0, Math.min(100, ((v - min) / (max - min)) * 100)) : 0;
+  input.style.setProperty('--fill', pct + '%');
+}
+
+function rbUpdateAutotuneParamsVisibility() {
+  const monitorEl = document.getElementById('rb-at-monitor');
+  const bakeEl = document.getElementById('rb-at-bake');
+  const params = document.getElementById('rb-at-params');
+  const on = !!(monitorEl && monitorEl.checked) || !!(bakeEl && bakeEl.checked);
+  if (params) params.classList.toggle('hidden', !on);
+  rbUpdateReverbParamsVisibility();
+  const rvMonitorEl = document.getElementById('rb-rv-monitor');
+  const rvBakeEl = document.getElementById('rb-rv-bake');
+  const rvOn = !!(rvMonitorEl && rvMonitorEl.checked) || !!(rvBakeEl && rvBakeEl.checked);
+  const gear = document.getElementById('rb-autotune-gear');
+  if (gear) gear.classList.toggle('on', on || rvOn);
+  // Feedback-risk warning: only actually live once something is being
+  // routed to the speakers (monitorEl checked), not just because the
+  // params section is expanded - "on recording" (bake) alone never
+  // touches ctx.destination and carries no feedback risk at all.
+  const hint = document.getElementById('rb-at-hint');
+  if (hint) hint.classList.toggle('warn', !!(monitorEl && monitorEl.checked) || !!(rvMonitorEl && rvMonitorEl.checked));
+  // Monitor and Bake are deliberately independent (previewing a
+  // correction live without committing it to the take is a real,
+  // supported workflow) - but that independence is also an easy trap:
+  // hearing it correctly while singing says nothing about whether the
+  // SAVED file will have it, and there was previously no indication of
+  // that at all. Surface it directly, only in the one state where it
+  // actually matters (monitoring it, but not saving it), rather than
+  // leaving it to be discovered the hard way after review/export.
+  const bakeReminder = document.getElementById('rb-at-bake-reminder');
+  if (bakeReminder) bakeReminder.classList.toggle('hidden', !(monitorEl && monitorEl.checked && bakeEl && !bakeEl.checked));
+}
+
+function rbUpdateReverbParamsVisibility() {
+  const monitorEl = document.getElementById('rb-rv-monitor');
+  const bakeEl = document.getElementById('rb-rv-bake');
+  const params = document.getElementById('rb-rv-params');
+  const on = !!(monitorEl && monitorEl.checked) || !!(bakeEl && bakeEl.checked);
+  if (params) params.classList.toggle('hidden', !on);
+}
+
+function rbAutotuneToggleChanged() {
+  rbUpdateAutotuneParamsVisibility();
+  rbAutotuneSaveSettings(rbGetAutotuneSettings());
+  if (rbRecording) {
+    // The audio graph for this take is already built - routing changes
+    // mid-take would need tearing it down and losing what's recorded so
+    // far, so this applies starting with the NEXT recording instead.
+    showAppNotification(t('rbAutotuneChangeNextTake'), 'info', null, 3500);
+  } else if (rbMonitoring) {
+    // Monitoring isn't capturing anything - there's nothing to lose by
+    // rebuilding the graph immediately, so a toggle flipped while
+    // listening takes effect on the spot instead of waiting for a
+    // stop/start cycle.
+    rbRestartMonitor();
+  }
+}
+
+function rbAutotuneParamsChanged() {
+  rbUpdateAutotuneLabels();
+  const settings = rbGetAutotuneSettings();
+  rbAutotuneSaveSettingsDebounced(settings);
+  if ((rbRecording || rbMonitoring) && rbAutotuneNode) {
+    rbAutotuneNode.port.postMessage({ type: 'params', params: rbAutotuneParamsForEngine(settings) });
+  }
+  if (rbRecording || rbMonitoring) {
+    const inGain = rbDbToLinear(settings.inputGainDb);
+    const outGain = rbDbToLinear(settings.outputGainDb);
+    rbRampParam(rbInputGainNode && rbInputGainNode.gain, inGain, rbAudioCtx);
+    rbRampParam(rbPrintOutputGainNode && rbPrintOutputGainNode.gain, outGain, rbAudioCtx);
+    rbRampParam(rbMonitorOutputGainNode && rbMonitorOutputGainNode.gain, outGain, rbAudioCtx);
+    const rv = rbReverbSettingsFrom(settings);
+    if (rbPrintReverbUnit) rbPrintReverbUnit.setParams(rv);
+    if (rbMonitorReverbUnit) rbMonitorReverbUnit.setParams(rv);
+  } else if (rbArmedGainNode) {
+    // Meter-only preview (panel open, nothing recording/monitoring yet) -
+    // still live-update its gain node so dragging Input Gain moves the
+    // preview meter immediately instead of only taking effect once a
+    // take/monitor session actually starts.
+    rbRampParam(rbArmedGainNode.gain, rbDbToLinear(settings.inputGainDb), rbAudioCtx);
+  }
+}
+
+// The sample rate the mic is actually delivering, straight from the track.
+// Returns null when the browser won't say, in which case the caller must
+// leave the AudioContext on its default rather than guessing.
+function rbStreamSampleRate(stream) {
+  try {
+    const track = stream && stream.getAudioTracks && stream.getAudioTracks()[0];
+    const s = track && track.getSettings && track.getSettings();
+    return (s && s.sampleRate) ? s.sampleRate : null;
+  } catch (e) { return null; }
+}
+
+// Lazily creates one AudioContext + loads the worklet module once, then
+// reuses both across every recording for the rest of the session.
+//
+// Round 73 ("voice getting butchered"): this used to construct the
+// AudioContext with NO options, which means it inherits Chromium's default
+// rate - and that default follows the OUTPUT device, not the microphone.
+// A user with a Focusrite clocked at 44100 was getting a context at 88200,
+// so every take was resampled 2x on the way IN before the engine ever saw
+// it. Confirmed from the artifact rather than assumed: the recorder worklet
+// runs inside this context, and their recorded WAVs carry an 88200 header
+// while the interface is set to 44100.
+//
+// That is not just untidy. Measured against a clean reference, the formant
+// path costs 5.2dB of added boxiness at 44.1k but 7.2dB at 88.2k, and the
+// engine costs 0.24x realtime at 44.1k versus 0.43x at 88.2k. Running at
+// the device's own rate is worth ~2dB of the exact coloration that was
+// being reported, plus half the CPU, for no quality loss whatsoever - the
+// upsample was manufacturing samples, not capturing them.
+//
+// Passing desiredRate rebuilds the context when it doesn't match. Rebuild
+// is deliberately skipped while anything is live (closing a context with
+// running nodes would kill the take); it simply happens on the next start
+// instead. If the browser refuses the rate, fall back to the default
+// context rather than failing to record at all.
+async function rbEnsureWorklets(desiredRate) {
+  if (rbAudioCtx && desiredRate && Math.abs(rbAudioCtx.sampleRate - desiredRate) > 1) {
+    if (rbRecording || rbMonitoring) {
+      rbLog('Sample-rate mismatch (context ' + rbAudioCtx.sampleRate + 'Hz vs mic ' +
+            desiredRate + 'Hz) but a session is live - leaving it until the next start.', 'warn');
+    } else {
+      rbLog('Rebuilding the audio context at the mic\'s own rate: ' +
+            rbAudioCtx.sampleRate + 'Hz -> ' + desiredRate + 'Hz', 'info');
+      try { await rbAudioCtx.close(); } catch (e) {}
+      rbAudioCtx = null;
+      rbAutotuneWorkletReady = false;
+      rbRecorderWorkletReady = false;
+      rbChannelSafetyWorkletReady = false;
+    }
+  }
+  if (!rbAudioCtx) {
+    const Ctor = window.AudioContext || window.webkitAudioContext;
+    if (desiredRate) {
+      try {
+        rbAudioCtx = new Ctor({ sampleRate: desiredRate });
+      } catch (e) {
+        // Some devices/drivers refuse an explicit rate. Recording at the
+        // wrong rate beats not recording.
+        rbLog('Audio context refused ' + desiredRate + 'Hz (' + (e && e.message) +
+              ') - falling back to the browser default.', 'warn');
+        rbAudioCtx = new Ctor();
+      }
+    } else {
+      rbAudioCtx = new Ctor();
+    }
+    rbLog('Audio context running at ' + rbAudioCtx.sampleRate + 'Hz' +
+          (desiredRate ? ' (mic reports ' + desiredRate + 'Hz)' : ' (mic rate unknown)'), 'info');
+  }
+  if (rbAudioCtx.state === 'suspended') { try { await rbAudioCtx.resume(); } catch (e) {} }
+  if (!rbAutotuneWorkletReady) {
+    await rbAudioCtx.audioWorklet.addModule('autotune-worklet.js?build=' + RB_BUILD_ID);
+    rbAutotuneWorkletReady = true;
+  }
+  if (!rbRecorderWorkletReady) {
+    await rbAudioCtx.audioWorklet.addModule('rb-recorder-worklet.js?build=' + RB_BUILD_ID);
+    rbRecorderWorkletReady = true;
+  }
+  if (!rbChannelSafetyWorkletReady) {
+    await rbAudioCtx.audioWorklet.addModule('rb-channel-safety-worklet.js?build=' + RB_BUILD_ID);
+    rbChannelSafetyWorkletReady = true;
+  }
+  return rbAudioCtx;
+}
+
+// ── Diagnostics ──────────────────────────────────────────────────────
+// "The random page monitor and all that have no logs so we dont know
+// whats going on" - fair complaint: every mic/monitor/record failure
+// used to either vanish silently or surface as one generic toast with
+// no detail behind it. rbLog() is a small, always-on activity trail
+// for the Topliner recording pipeline: every open attempt, fallback,
+// fault/recovery, and failure gets a timestamped line, sent through the
+// exact same diagLog()/api.log() pipeline every other part of this app
+// already logs through - which lands in the app's durable on-disk log,
+// viewable (with the rest of the app's activity, not off in its own
+// box) via the existing View Logs modal's "App" tab. This used to also
+// render into a small live panel built specifically for this one
+// settings panel - removed per direct feedback ("dont keep it there
+// its ugly") now that the same information is one click away in the
+// place logs already live.
+function rbLog(msg, level) {
+  level = level || 'info';
+  try {
+    const consoleFn = level === 'err' ? console.error : level === 'warn' ? console.warn : console.log;
+    consoleFn('[RandomBeats] ' + msg);
+  } catch (e) {}
+  try { diagLog('[RandomBeats] ' + msg, level === 'err' ? 'err' : level === 'warn' ? 'warn' : 'info'); } catch (e) {}
+}
+// Turns a getUserMedia rejection into something a non-technical user can
+// actually act on instead of a bare "access was denied" that's true for
+// maybe one of five different real causes. DOMException.name is the
+// actual, standardized signal here - matched against the specific
+// cases worth telling apart.
+// Fires when the autotune worklet processor recovers from an internal
+// fault (see the try/catch in AutotuneProcessor.process()) - this
+// should be rare/never in normal use, but if it ever happens the
+// alternative is the take going silently and permanently silent with
+// no explanation, so it's worth a real log line and a one-time
+// on-screen notice rather than swallowing it quietly.
+let rbAutotuneFaultNotified = false;
+function rbHandleAutotuneNodeMessage(e) {
+  if (!e || !e.data) return;
+  // Round 48: live note view - throttled by the worklet itself (see
+  // NOTE_REPORT_INTERVAL_MS in autotune-worklet.js), so this just
+  // updates state + re-renders on receipt, no extra throttling needed
+  // here.
+  if (e.data.type === 'note') {
+    rbAtLiveTargetMidi = e.data.targetMidi;
+    rbAtLiveVoiced = !!e.data.voiced;
+    rbAtLiveRawHz = (typeof e.data.rawHz === 'number' && e.data.rawHz > 0) ? e.data.rawHz : null;
+    rbRenderAutotunePiano();
+    return;
+  }
+  if (e.data.type !== 'fault') return;
+  rbLog('Pitch correction hit an internal fault and reset itself (' + e.data.message + ', occurrence #' + e.data.count + ').', 'err');
+  if (!rbAutotuneFaultNotified) {
+    rbAutotuneFaultNotified = true;
+    showAppNotification(t('rbAtFaultRecovered'), 'warn', null, 8000);
+  }
+}
+function rbDescribeMicError(e) {
+  const name = (e && e.name) || 'Unknown';
+  if (name === 'NotAllowedError' || name === 'PermissionDeniedError') return { code: name, hint: t('rbMicErrPermission') };
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') return { code: name, hint: t('rbMicErrNotFound') };
+  if (name === 'NotReadableError' || name === 'TrackStartError') return { code: name, hint: t('rbMicErrInUse') };
+  if (name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError') return { code: name, hint: t('rbMicErrConstraints') };
+  return { code: name, hint: t('rbMicErrOther') };
+}
+
+// Studio-quality capture constraints. Browsers default echoCancellation,
+// noiseSuppression and autoGainControl ON - a chain tuned for phone/video
+// calls that flattens dynamics, smears transients and can audibly pump
+// on a sung vocal. All three are switched off here; sample rate/bit
+// depth are requested as "ideal" (not "exact") so hardware that can't
+// hit them still connects instead of failing outright.
+function rbMicConstraints(deviceId) {
+  const audio = {
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
+    // Reverted a mono capture constraint that was here briefly: the
+    // "talking in a bottle" complaint's real, confirmed cause turned out
+    // to be unconditional LPC formant-correction coloring in the
+    // autotune engine (fixed and verified separately - see
+    // autotune-worklet.js's formantBlend), not stereo channel summing,
+    // which was only ever a theory. Forcing channelCount down to 1 on a
+    // multi-channel professional interface (an Apollo Twin, for example)
+    // risks the OS/driver handing back a single specific physical input
+    // that may not be the one actually wired to the mic, which reads as
+    // "the mic sounds fine but autotune/pitch-detection gets nothing" -
+    // a worse regression than the comb-filter theory this was guarding
+    // against. Back to requesting stereo (soft "ideal", not "exact", so
+    // a genuinely mono device still connects fine either way).
+    channelCount: { ideal: 2 },
+    sampleRate: { ideal: 48000 },
+    sampleSize: { ideal: 24 },
+  };
+  if (deviceId) audio.deviceId = { exact: deviceId };
+  return { audio };
+}
+
+// A device label's parenthesized suffix - "Line (Universal Audio Twin
+// USB)" -> "universal audio twin usb" - is the actual hardware name and
+// is far more stable across enumerations than the prefix in front of it
+// (channel index/name), which multi-channel interfaces are prone to
+// reformat slightly between one enumerateDevices() call and the next
+// even for the exact same physical device.
+function rbMicLabelNormalize(label) { return String(label || '').trim().toLowerCase().replace(/\s+/g, ' '); }
+function rbMicLabelCore(label) {
+  let s = String(label || '').trim();
+  // Chromium appends a trailing "(XXXX:XXXX)" USB vendor:product id to
+  // disambiguate identical-model devices - confirmed present in the
+  // wild ("Default - Microphone (fifine SC3) (3142:0c33)"). It's a
+  // hardware id, not a stable enumeration key, and stripping it is
+  // required before the "last parenthetical = hardware name" heuristic
+  // below can find the actual name instead of grabbing the hex pair.
+  s = s.replace(/\s*\([0-9a-fA-F]{4}:[0-9a-fA-F]{4}\)\s*$/, '');
+  // The synthetic "current default device" entry some platforms expose
+  // prefixes the real device's own name with "Default -"/"Communications
+  // -" - strip it so this can still match that same device's plain
+  // (non-default) listing, or vice versa.
+  s = s.replace(/^(default|communications)\s*-\s*/i, '');
+  const m = s.match(/\(([^)]+)\)\s*$/);
+  return m ? rbMicLabelNormalize(m[1]) : rbMicLabelNormalize(s);
+}
+
+// Opens the mic with a fallback ladder, and reports what actually got
+// opened so callers can tell "got exactly what was asked for" apart from
+// "silently opened something else instead":
+//   1. The chosen deviceId with studio constraints.
+//   2. If that fails, re-find the SAME physical device by the label saved
+//      alongside its id and retry with its CURRENT id - first an exact
+//      label match, then just the hardware name in parentheses (see
+//      rbMicLabelCore above) if nothing exact turns up. This is not a
+//      rare edge case: Electron/Chromium salt deviceId hashes per
+//      session, so a deviceId saved to settings from a PRIOR run of the
+//      app routinely no longer matches ANY device in a fresh enumeration
+//      even though the physical hardware never changed - without this
+//      step, every restart would silently drop back to the default
+//      device forever, which is exactly the "picking my interface does
+//      nothing" symptom.
+//   3. The system default device with the same constraints (the chosen
+//      one may really have been unplugged).
+//   4. A bare request as an absolute last resort (some drivers reject the
+//      strict constraint set outright - better a call-quality recording
+//      than no recording at all).
+// Returns { stream, matched, resolvedId, resolvedLabel, actualLabel }.
+// matched is false whenever a specific device was requested but the app
+// had to fall back to something else; actualLabel (best-effort, may be
+// undefined) is the label of whatever device is ACTUALLY now open, so
+// callers can tell the user the truth instead of just naming what was
+// wanted.
+// Round 50: direct evidence (a real user's own app log) showed Record
+// occasionally doing nothing at all on its very first press of a fresh
+// session - two consecutive "Record: starting..." log lines with NO
+// follow-up log of any kind (not even the unconditional, synchronous
+// "Requesting saved mic..." line rbOpenMicStream logs as its very first
+// statement) - then working normally once Settings was opened, and
+// working normally again later the same session on the very first
+// press with Settings still closed. That pattern - works standalone
+// most of the time, silently does nothing on rare occasions, no error
+// ever surfaced - points at an intermittent hang (most likely audio-
+// subsystem/driver contention right at launch, several background
+// downloads/ffmpeg conversions were actively running in the same
+// window in the evidence log) rather than a deterministic code path
+// that always requires Settings first. Since a genuine hang can't be
+// distinguished from "still legitimately negotiating a real audio
+// interface" from inside this code, the fix is not to guess at the
+// hang's exact cause but to make sure it can never again be silent:
+// wrap the mic-open/worklet-load awaits with a bounded timeout so a
+// stuck promise always surfaces a real, visible error (and resets
+// rbStarting so the button works again immediately) instead of leaving
+// the user staring at a Record button that looks like it did nothing.
+// ─── BEGIN RB TIMEOUT UTIL (pure - no DOM/app-state references below
+// this marker, extracted headlessly by tools/test-rb-timeout.js)
+function rbWithTimeout(promise, ms, label) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Object.assign(new Error('rbWithTimeout: ' + label + ' timed out after ' + ms + 'ms'), { rbTimedOut: true, rbTimeoutLabel: label })), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+// ─── END RB TIMEOUT UTIL ────────────────────────────────────────────
+
+async function rbOpenMicStream(deviceId, label) {
+  if (deviceId) {
+    rbLog('Requesting saved mic (' + (label || deviceId) + ')…');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia(rbMicConstraints(deviceId));
+      rbLog('Opened saved mic by id - exact match.');
+      return { stream, matched: true };
+    } catch (e) {
+      rbLog('Saved mic id no longer resolves (' + (e && e.name) + ') - trying to re-match by label…', 'warn');
+      if (label && navigator.mediaDevices.enumerateDevices) {
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const inputs = devices.filter((d) => d.kind === 'audioinput');
+          const wantedNorm = rbMicLabelNormalize(label);
+          const wantedCore = rbMicLabelCore(label);
+          let match = inputs.find((d) => d.deviceId !== deviceId && rbMicLabelNormalize(d.label) === wantedNorm);
+          if (!match && wantedCore) match = inputs.find((d) => d.deviceId !== deviceId && rbMicLabelCore(d.label) === wantedCore);
+          if (match) {
+            try {
+              const stream = await navigator.mediaDevices.getUserMedia(rbMicConstraints(match.deviceId));
+              rbLog('Re-matched by label to "' + match.label + '" - opened.');
+              return { stream, matched: true, resolvedId: match.deviceId, resolvedLabel: match.label, actualLabel: match.label };
+            } catch (e2) {
+              rbLog('Label-matched device "' + match.label + '" failed to open (' + (e2 && e2.name) + ') - falling back to default.', 'warn');
+            }
+          } else {
+            rbLog('No device matched saved label "' + label + '" among: ' + inputs.map((d) => d.label || '(unlabeled)').join(', '), 'warn');
+          }
+        } catch (e3) {
+          rbLog('Device enumeration itself failed (' + (e3 && e3.name) + ') while re-matching - falling back to default.', 'warn');
+        }
+      }
+    }
+  }
+  const resolveActualLabel = async (stream) => {
+    try {
+      const track = stream.getAudioTracks()[0];
+      const settingsId = track && track.getSettings && track.getSettings().deviceId;
+      if (!settingsId || !navigator.mediaDevices.enumerateDevices) return undefined;
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const found = devices.find((d) => d.kind === 'audioinput' && d.deviceId === settingsId);
+      return found ? found.label : undefined;
+    } catch (e) { return undefined; }
+  };
+  try {
+    rbLog('Requesting system default mic…');
+    const stream = await navigator.mediaDevices.getUserMedia(rbMicConstraints(null));
+    const actualLabel = await resolveActualLabel(stream);
+    rbLog('Opened default mic' + (actualLabel ? (' (' + actualLabel + ')') : '') + '.');
+    return { stream, matched: !deviceId, actualLabel };
+  } catch (e) {
+    rbLog('Default-mic request failed (' + (e && e.name) + ': ' + (e && e.message) + ') - trying bare unconstrained audio…', 'warn');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const actualLabel = await resolveActualLabel(stream);
+      rbLog('Opened mic with no constraints at all' + (actualLabel ? (' (' + actualLabel + ')') : '') + '.');
+      return { stream, matched: !deviceId, actualLabel };
+    } catch (e2) {
+      const desc = rbDescribeMicError(e2);
+      rbLog('All mic-open attempts failed. Final error: ' + desc.code + ' - ' + (e2 && e2.message), 'err');
+      const err = new Error('rbOpenMicStream: ' + desc.code);
+      err.rbMicErrorCode = desc.code;
+      err.rbMicErrorHint = desc.hint;
+      throw err;
+    }
+  }
+}
+
+// Reconciles a rbOpenMicStream() result against what was actually asked
+// for. If the device was re-found under a new id (session salt changed,
+// or a multi-channel interface reformatted its label), quietly persists
+// the new id/label so this doesn't have to re-resolve every single time.
+// If nothing matched at all, tells the user what's ACTUALLY playing now
+// (not what they wanted - that would just be confusing) instead of
+// leaving them recording off the wrong mic with no idea.
+function rbApplyMicFallback(result, wantedId, wantedLabel) {
+  if (!wantedId) return; // "system default" was actually requested - no mismatch possible
+  if (result.resolvedId) {
+    rbLog('Self-healing saved mic id (was stale, now points at "' + (result.resolvedLabel || wantedLabel) + '").');
+    const settings = rbAutotuneLoadSettings();
+    settings.micDeviceId = result.resolvedId;
+    settings.micDeviceLabel = result.resolvedLabel || wantedLabel;
+    rbAutotuneSaveSettings(settings);
+    const sel = document.getElementById('rb-at-mic');
+    if (sel) { for (const o of sel.options) { if (o.value === result.resolvedId) { sel.value = result.resolvedId; break; } } }
+    return;
+  }
+  if (!result.matched) {
+    rbLog('Could not reach "' + wantedLabel + '" - actually using "' + (result.actualLabel || t('rbAtMicDefault')) + '".', 'warn');
+    showAppNotification(t('rbMicFallback').replace('{d}', result.actualLabel || t('rbAtMicDefault')), 'err');
+  }
+}
+
+// ── Live input level meter ────────────────────────────────────────────
+function rbStartLevelMeter(sourceNode) {
+  if (!rbAudioCtx || !sourceNode) return;
+  if (!rbLevelAnalyser) {
+    rbLevelAnalyser = rbAudioCtx.createAnalyser();
+    rbLevelAnalyser.fftSize = 1024;
+    rbLevelAnalyser.smoothingTimeConstant = 0;
+    rbMeterData = new Float32Array(rbLevelAnalyser.fftSize);
+  }
+  try { sourceNode.connect(rbLevelAnalyser); } catch (e) {}
+  if (!rbMeterRAF) rbDrawMeters();
+}
+
+function rbStopLevelMeter() {
+  if (rbMeterRAF) { cancelAnimationFrame(rbMeterRAF); rbMeterRAF = null; }
+  // Zero out whatever bars are on screen so a stopped meter doesn't sit
+  // there showing its last (possibly loud) reading indefinitely.
+  document.querySelectorAll('.rb-meter-fill').forEach((el) => { el.style.width = '0%'; el.classList.remove('clip'); });
+  document.querySelectorAll('.rb-meter-db').forEach((el) => { el.textContent = '—'; });
+  rbMeterFillEls = null; rbMeterDbEls = null; rbMeterFrameCount = 0;
+}
+
+let rbMeterFillEls = null; // cached across frames - see rbDrawMeters
+let rbMeterDbEls = null;
+let rbMeterFrameCount = 0;
+
+function rbDrawMeters() {
+  rbMeterRAF = requestAnimationFrame(rbDrawMeters);
+  if (!rbLevelAnalyser || !rbMeterData) return;
+  rbLevelAnalyser.getFloatTimeDomainData(rbMeterData);
+  let peak = 0, sumSq = 0;
+  for (let i = 0; i < rbMeterData.length; i++) {
+    const v = rbMeterData[i];
+    const a = Math.abs(v);
+    if (a > peak) peak = a;
+    sumSq += v * v;
+  }
+  // Visuals refresh at ~30fps, not every single compositor frame - a VU-
+  // style readout doesn't need 60fps, and skipping every other frame
+  // halves the DOM work below for the entire time a meter is showing
+  // (which, for the panel-open preview case, can be the whole time
+  // someone sits on the settings panel).
+  rbMeterFrameCount++;
+  if (rbMeterFrameCount % 2 !== 0) return;
+  const rms = Math.sqrt(sumSq / rbMeterData.length);
+  const db = rms > 0 ? Math.max(-60, 20 * Math.log10(rms)) : -60;
+  const pct = Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
+  const clipping = peak >= 0.98;
+  // Cached rather than a fresh document-wide querySelectorAll() every
+  // frame - that walks the entire DOM tree each call, real cost at
+  // 30-60Hz for as long as metering runs. Invalidated in
+  // rbStopLevelMeter() so a start after any DOM change picks up fresh
+  // elements instead of stale references.
+  if (!rbMeterFillEls) rbMeterFillEls = document.querySelectorAll('.rb-meter-fill');
+  if (!rbMeterDbEls) rbMeterDbEls = document.querySelectorAll('.rb-meter-db');
+  rbMeterFillEls.forEach((el) => {
+    el.style.width = pct + '%';
+    el.classList.toggle('clip', clipping);
+  });
+  rbMeterDbEls.forEach((el) => {
+    el.textContent = clipping ? t('rbClipping') : Math.round(db) + ' dB';
+  });
+}
+
+// Round 68: low-cut filter cutoff for the live mic input, applied
+// unconditionally ahead of everything else (input-gain trim, channel
+// safety, autotune, the level meter - all of it). Added after a real
+// report ("everything is too loud... its all wind but the wind is far,
+// its all from sounding like theres too much gain... from the start"),
+// with an evidence WAV attached. Direct FFT analysis of that file (not
+// a guess): 74.2% of ALL spectral energy sits in just 20-50Hz, 97.4%
+// under 200Hz - checked at three different points (the loudest instant
+// in the whole take, a spot mid-recording, and near the very start,
+// which matches "from the start") and it was the same dominant
+// sub-50Hz rumble every time, not something isolated to one moment.
+// That's far below any real vocal fundamental (even a deep male voice
+// bottoms out well above 80Hz) - it's the classic signature of moving
+// air/breath hitting an unprotected capsule directly, or mechanical
+// rumble transmitted through a desk/stand, not an actual "too much
+// gain" problem in the digital sense (the file's overall peak measured
+// -16.8dBFS, nowhere near clipping - the perceived "too loud" character
+// is this broadband low-end roar masking everything else, not the
+// signal being digitally hot). No stage in the recording chain
+// filtered this out - grepping the whole chain found gain trims and a
+// reverb's own internal filters, but nothing between the mic and the
+// recorder that removes sub-vocal rumble. A low-cut is the standard,
+// near-universal fix for exactly this class of problem (it's what a
+// hardware mic/interface's own "low cut" switch does), so it's applied
+// as an always-on default rather than an opt-in - it can only remove
+// content with no vocal value regardless of the room/mic. This doesn't
+// fix an already-overloaded capsule at the acoustic level (a pop
+// filter/windscreen and moving the mic out of direct breath path are
+// still the real fix for the root cause) - it removes what a low-cut
+// can actually remove: the broadband sub-vocal energy this file
+// measured, before it reaches gain staging, the meter, or the recorder.
+const RB_MIC_HIGHPASS_HZ = 80;
+
+// Opens the mic purely so the level meter has something to show before
+// the user commits to recording - closed again the moment the panel
+// that displays it is closed, or handed off cleanly if Record is
+// pressed while it's open (see rbStartRecording).
+async function rbArmMic() {
+  if (rbArmedStream || rbMicOwned()) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+  // Bumping generation here (not just in rbDisarmMic) means a second
+  // call arriving while an earlier one is still awaiting permission
+  // supersedes it cleanly instead of being dropped by a busy-flag - the
+  // earlier call detects the mismatch below and abandons itself, the
+  // newer one always wins.
+  const myGen = ++rbArmGeneration;
+  const abandon = (stream) => { try { stream.getTracks().forEach((tr) => tr.stop()); } catch (e) {} };
+  try {
+    const at = rbGetAutotuneSettings();
+    const result = await rbOpenMicStream(at.micDeviceId, at.micDeviceLabel);
+    if (rbMicOwned() || myGen !== rbArmGeneration) { abandon(result.stream); return; }
+    rbApplyMicFallback(result, at.micDeviceId, at.micDeviceLabel);
+    rbArmedStream = result.stream;
+    // Round 73: same as the record path - match the context to the mic's own
+    // rate. Arming usually happens first, so getting it right here means the
+    // later record start finds a context that already matches and never has
+    // to rebuild.
+    const ctx = await rbEnsureWorklets(rbStreamSampleRate(result.stream));
+    if (rbMicOwned() || myGen !== rbArmGeneration) { abandon(result.stream); rbArmedStream = null; return; }
+    rbArmedSource = ctx.createMediaStreamSource(result.stream);
+    // Low-cut ahead of the trim node (Round 68) - see RB_MIC_HIGHPASS_HZ.
+    rbArmedHighpassNode = ctx.createBiquadFilter();
+    rbArmedHighpassNode.type = 'highpass';
+    rbArmedHighpassNode.frequency.value = RB_MIC_HIGHPASS_HZ;
+    rbArmedSource.connect(rbArmedHighpassNode);
+    // Meter taps AFTER a trim node set to the current Input Gain, not the
+    // raw source - previously the preview meter (and its clip indicator)
+    // read the mic completely unattenuated, so turning Input Gain down
+    // had zero visible effect on it and a hot interface preamp (an
+    // Apollo Twin, for instance) would show clipping no matter what the
+    // user set the knob to.
+    rbArmedGainNode = ctx.createGain();
+    rbArmedGainNode.gain.value = rbDbToLinear(at.inputGainDb);
+    rbArmedHighpassNode.connect(rbArmedGainNode);
+    rbStartLevelMeter(rbArmedGainNode);
+    rbLog('Meter preview armed.');
+  } catch (e) {
+    // No permission yet, or no device - the meter just stays at rest.
+    rbLog('Meter preview could not arm (' + (e && e.name) + ') - this is expected before mic permission is granted.', 'warn');
+  }
+}
+
+function rbDisarmMic() {
+  rbArmGeneration++; // invalidate any rbArmMic() call still in flight, even if there's nothing below to tear down yet
+  if (rbRecording || rbStopping || rbMonitoring) return; // one of them owns (or is still wrapping up owning) the mic + meter now - don't tear either down or blank the meter early
+  try { if (rbArmedGainNode) rbArmedGainNode.disconnect(); } catch (e) {}
+  try { if (rbArmedHighpassNode) rbArmedHighpassNode.disconnect(); } catch (e) {}
+  try { if (rbArmedSource) rbArmedSource.disconnect(); } catch (e) {}
+  try { if (rbArmedStream) rbArmedStream.getTracks().forEach((tr) => tr.stop()); } catch (e) {}
+  const wasArmed = !!rbArmedStream;
+  rbArmedStream = null; rbArmedSource = null; rbArmedHighpassNode = null; rbArmedGainNode = null;
+  rbStopLevelMeter();
+  if (wasArmed) rbLog('Meter preview disarmed.');
+}
+
+// Builds mic -> autotune worklet -> {dry, wet} destinations, routes
+// whichever one the user wants to hear to the speakers, and returns the
+// MediaStream MediaRecorder should actually capture (wet if baking,
+// dry otherwise - the worklet still runs even when only monitoring is
+// on, since the recorder needs the corrected stream to exist somewhere
+// only when baking is requested).
+// Synchronous by design: everything async (opening the mic, loading the
+// worklet modules) has already happened by the time this runs, so the
+// gap between "beat started" and "capture actually connected" - used to
+// line the take up with the beat - is just graph-construction time, not
+// module-load or permission-prompt time.
+// ─── BEGIN RB DSP PARAM MATH
+// Pure parameter-mapping math for the gain/reverb chain - no DOM, no
+// AudioContext, no other app.js state. Kept pure and marker-delimited so
+// tools/test-rb-dsp-math.js can extract just this block and exercise it
+// headless in Node, the same way tools/test-autotune.js and
+// tools/test-rb-recorder.js already do for their respective worklet
+// files - the actual AudioContext graph these numbers feed into can only
+// be verified by hand/in a real browser, but the numbers themselves
+// (clamping, curve shape, stability of the feedback coefficient) can be.
+function rbDbToLinear(db) {
+  const n = parseFloat(db);
+  const clamped = isFinite(n) ? Math.max(-24, Math.min(24, n)) : 0;
+  return Math.pow(10, clamped / 20);
+}
+
+// Smoothly approaches a new AudioParam value instead of snapping to it -
+// an instant jump on a gain/delay/frequency param is a classic zipper-
+// noise/click source on Web Audio when the signal isn't at a zero
+// crossing at that exact sample, and every slider here (Input Gain,
+// Output Gain, all four reverb controls) updates live while you're
+// actually listening. 15ms is short enough that the control still feels
+// immediate, long enough that the transition is inaudible as a step.
+function rbRampParam(param, target, ctx) {
+  if (!param) return;
+  const target_ = isFinite(target) ? target : 0;
+  if (!ctx) { try { param.value = target_; } catch (e) {} return; }
+  try {
+    const now = ctx.currentTime;
+    param.cancelScheduledValues(now);
+    param.setTargetAtTime(target_, now, 0.015);
+  } catch (e) {
+    try { param.value = target_; } catch (e2) {}
+  }
+}
+
+function rbReverbParamMap(p) {
+  const clamp01 = (v, fallback) => { const n = parseFloat(v); return isFinite(n) ? Math.max(0, Math.min(1, n)) : fallback; };
+  const mix = clamp01(p && p.mix, 0);
+  const decay = clamp01(p && p.decay, 0);
+  const damping = clamp01(p && p.damping, 0);
+  const preDelayMsRaw = (p && isFinite(parseFloat(p.preDelayMs))) ? parseFloat(p.preDelayMs) : 0;
+  return {
+    dryGain: 1 - mix,
+    wetGain: mix,
+    // Freeverb's own room-size -> feedback formula (0.7 + size*0.28) -
+    // stays comfortably under 1 (stable, won't build up into a runaway
+    // loop) across the entire 0-1 decay range, at any decay setting.
+    feedback: 0.7 + decay * 0.28,
+    // Brighter tail at damping=0, darker at damping=1; floored well above
+    // 0 so the tail never goes fully silent/lowpassed into nothing.
+    dampFreq: Math.max(800, 11000 - damping * 9500),
+    preDelaySec: Math.max(0, Math.min(0.25, preDelayMsRaw / 1000)),
+  };
+}
+// ─── END RB DSP PARAM MATH
+
+// Last-stage safety ceiling for anything about to reach the recorder or
+// the speakers. Formant correction and reverb are both effects that can
+// legitimately add gain above what Input Gain trimmed the mic down to -
+// LPC resynthesis in particular does not guarantee unity gain even when
+// perfectly stable, and reverb sums multiple comb-filter taps - so a
+// user pulling Input Gain all the way down was still able to hear/print
+// clipped audio with nothing downstream ever compensating. A
+// DynamicsCompressor tuned as a fast limiter does the actual gain
+// reduction musically; the WaveShaper after it is a hard, un-missable
+// floor so output can never exceed full scale even if something
+// upstream misbehaves in a way the compressor's finite ratio doesn't
+// fully catch.
+function rbCreateLimiter(ctx) {
+  // A true brick-wall limiter needs lookahead, which Web Audio's stock
+  // DynamicsCompressor doesn't offer - it can only react to a peak
+  // after the fact. Two changes address "gets crazy when clipping":
+  // 1) The compressor's threshold is pulled down and its ratio pushed
+  //    up close to hard-limiting, so it's doing almost all of the work
+  //    on anything short of a true instantaneous spike, catching most
+  //    hot peaks before they ever reach the ceiling below.
+  // 2) The final ceiling is no longer a hard linear clamp. A flat clamp
+  //    slices the waveform off square, which is exactly what reads as
+  //    harsh/digital/"crazy" - it's a discontinuity in the derivative
+  //    that generates a burst of high-frequency aliasing energy. A
+  //    tanh-based soft-knee saturation instead starts gently rounding
+  //    off peaks before the ceiling and asymptotically approaches it,
+  //    so on the rare sample that still gets here after the compressor,
+  //    it saturates smoothly (more like analog tape/tube) instead of
+  //    being sheared off.
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -6;
+  comp.knee.value = 6;
+  comp.ratio.value = 20;
+  comp.attack.value = 0.001;
+  comp.release.value = 0.1;
+  const ceiling = ctx.createWaveShaper();
+  const CEILING = 0.98;
+  const KNEE_START = 0.7;
+  const curve = new Float32Array(2048);
+  for (let i = 0; i < curve.length; i++) {
+    const x = (i / (curve.length - 1)) * 2 - 1;
+    const ax = Math.abs(x);
+    const sign = x < 0 ? -1 : 1;
+    if (ax <= KNEE_START) {
+      curve[i] = x;
+    } else {
+      const range = CEILING - KNEE_START;
+      const t = (ax - KNEE_START) / range;
+      curve[i] = sign * Math.min(KNEE_START + range * Math.tanh(t), CEILING);
+    }
+  }
+  ceiling.curve = curve;
+  ceiling.oversample = '4x';
+  comp.connect(ceiling);
+  return { input: comp, output: ceiling, dispose() { try { comp.disconnect(); } catch (e) {} try { ceiling.disconnect(); } catch (e) {} } };
+}
+
+// Schroeder/Freeverb-style reverb built entirely from stock Web Audio
+// nodes - no custom worklet DSP needed for this one. Four parallel comb
+// filters (feedback delay line + a lowpass in the feedback path for
+// damping) are summed and run through two series allpass filters for
+// diffusion, then blended against the dry signal by the Mix control.
+// Returns {input, output, setParams(p), dispose()} - input/output are
+// plain GainNodes, so this composes into any chain with a single
+// .connect() at each end regardless of what's built inside.
+function rbCreateReverbUnit(ctx) {
+  const input = ctx.createGain();
+  const output = ctx.createGain();
+  const preDelay = ctx.createDelay(1);
+  const dryGain = ctx.createGain();
+  const wetGain = ctx.createGain();
+
+  input.connect(dryGain);
+  dryGain.connect(output);
+  input.connect(preDelay);
+
+  // Classic Freeverb comb tunings (samples @ 44.1kHz) - deliberately not
+  // simple multiples of each other so the four combs don't reinforce the
+  // same periodicity and ring with an audible metallic pitch.
+  const combTunings = [1557, 1617, 1491, 1422];
+  const combs = combTunings.map((samples) => {
+    const delay = ctx.createDelay(1);
+    delay.delayTime.value = samples / 44100;
+    const feedback = ctx.createGain();
+    const damp = ctx.createBiquadFilter();
+    damp.type = 'lowpass';
+    damp.frequency.value = 8000;
+    preDelay.connect(delay);
+    delay.connect(damp);
+    damp.connect(feedback);
+    feedback.connect(delay);
+    return { delay, feedback, damp };
+  });
+  const combSum = ctx.createGain();
+  combSum.gain.value = 0.25; // summing 4 combs - scale back down to unity-ish
+  combs.forEach((c) => c.damp.connect(combSum));
+
+  const ap1 = ctx.createBiquadFilter();
+  ap1.type = 'allpass'; ap1.frequency.value = 500; ap1.Q.value = 1;
+  const ap2 = ctx.createBiquadFilter();
+  ap2.type = 'allpass'; ap2.frequency.value = 1500; ap2.Q.value = 1;
+  combSum.connect(ap1);
+  ap1.connect(ap2);
+  ap2.connect(wetGain);
+  wetGain.connect(output);
+
+  function setParams(p) {
+    const m = rbReverbParamMap(p);
+    rbRampParam(dryGain.gain, m.dryGain, ctx);
+    rbRampParam(wetGain.gain, m.wetGain, ctx);
+    rbRampParam(preDelay.delayTime, m.preDelaySec, ctx);
+    combs.forEach((c) => { rbRampParam(c.feedback.gain, m.feedback, ctx); rbRampParam(c.damp.frequency, m.dampFreq, ctx); });
+  }
+
+  function dispose() {
+    const all = [input, output, preDelay, dryGain, wetGain, combSum, ap1, ap2,
+      ...combs.map((c) => c.delay), ...combs.map((c) => c.feedback), ...combs.map((c) => c.damp)];
+    all.forEach((n) => { try { n.disconnect(); } catch (e) {} });
+  }
+
+  return { input, output, setParams, dispose };
+}
+
+function rbConnectRecordGraph(stream, at) {
+  const ctx = rbAudioCtx;
+  rbMicSource = ctx.createMediaStreamSource(stream);
+
+  // Low-cut ahead of everything else, including the input trim (Round 68)
+  // - see RB_MIC_HIGHPASS_HZ for the full investigation. Mirrors the same
+  // filter already applied in the armed/preview graph in rbArmMic().
+  rbMicHighpassNode = ctx.createBiquadFilter();
+  rbMicHighpassNode.type = 'highpass';
+  rbMicHighpassNode.frequency.value = RB_MIC_HIGHPASS_HZ;
+  rbMicSource.connect(rbMicHighpassNode);
+
+  // Input trim sits upstream of everything else and is shared by both
+  // branches below - there's no legitimate reason to want a different
+  // input gain for what you hear vs. what gets recorded, unlike autotune
+  // and reverb which are deliberately independently toggleable per branch
+  // (a real workflow: preview corrected pitch without committing to it).
+  rbInputGainNode = ctx.createGain();
+  rbInputGainNode.gain.value = rbDbToLinear(at.inputGainDb);
+  rbMicHighpassNode.connect(rbInputGainNode);
+  // Channel-safety sits here unconditionally - regardless of whether
+  // Autotune (monitor or bake) is even on - so a multi-channel interface
+  // that doesn't put the live mic on channel 0, or a stereo request that
+  // resolves to one real channel and one silently-unconnected one, can
+  // never reach the recorder/speakers as "audio in one channel only".
+  // See rb-channel-safety-worklet.js for the full rationale.
+  rbChannelSafetyNode = new AudioWorkletNode(ctx, 'rb-channel-safety-processor');
+  rbInputGainNode.connect(rbChannelSafetyNode);
+  const preAT = rbChannelSafetyNode;
+
+  rbAutotuneNode = null;
+  const needsAutotune = !!(at.monitor || at.bake);
+  if (needsAutotune) {
+    rbAutotuneNode = new AudioWorkletNode(ctx, 'autotune-processor');
+    rbAutotuneNode.port.postMessage({ type: 'params', params: rbAutotuneParamsForEngine(at) });
+    rbAutotuneNode.port.onmessage = rbHandleAutotuneNodeMessage;
+    preAT.connect(rbAutotuneNode);
+  }
+
+  rbRecNode = new AudioWorkletNode(ctx, 'rb-recorder-processor', { numberOfInputs: 1, numberOfOutputs: 0 });
+  rbRecChunks = [];
+  rbRecNumChannels = 0;
+  rbRecSampleRate = ctx.sampleRate;
+  rbRecNode.port.onmessage = (e) => {
+    const d = e.data;
+    if (!d) return;
+    if (d.type === 'chunk') {
+      rbRecChunks.push({ channels: d.channels });
+      rbRecNumChannels = d.numChannels || rbRecNumChannels;
+    } else if (d.type === 'flushed') {
+      if (rbRecFlushResolve) { const r = rbRecFlushResolve; rbRecFlushResolve = null; r(); }
+    }
+  };
+  // ── Print (recorder) branch: always exists, always feeds rbRecNode.
+  // Taps the corrected signal only when baking autotune in, and passes
+  // through its own reverb instance only when baking reverb in - a
+  // plain take still records the untouched (but gain-staged) dry mic.
+  rbPrintReverbUnit = null;
+  const printPreRV = (at.bake && rbAutotuneNode) ? rbAutotuneNode : preAT;
+  let printTail = printPreRV;
+  if (at.reverbBake) {
+    rbPrintReverbUnit = rbCreateReverbUnit(ctx);
+    rbPrintReverbUnit.setParams(rbReverbSettingsFrom(at));
+    printTail.connect(rbPrintReverbUnit.input);
+    printTail = rbPrintReverbUnit.output;
+  }
+  rbPrintOutputGainNode = ctx.createGain();
+  rbPrintOutputGainNode.gain.value = rbDbToLinear(at.outputGainDb);
+  printTail.connect(rbPrintOutputGainNode);
+  // Safety ceiling on what actually reaches the recorder - formant
+  // correction and reverb can both legitimately add gain beyond whatever
+  // Input Gain trimmed the mic down to, and nothing downstream used to
+  // compensate for that.
+  rbPrintLimiterNode = rbCreateLimiter(ctx);
+  rbPrintOutputGainNode.connect(rbPrintLimiterNode.input);
+  rbPrintLimiterNode.output.connect(rbRecNode);
+
+  // ── Monitor branch: only exists if something was explicitly asked to
+  // be heard live (autotune monitor and/or reverb monitor) - preserves
+  // the existing safety behavior of never routing the raw mic to the
+  // speakers unasked (feedback risk while the beat is also playing).
+  rbMonitorNode = null;
+  rbMonitorReverbUnit = null;
+  const anyMonitor = !!((at.monitor && rbAutotuneNode) || at.reverbMonitor);
+  if (anyMonitor) {
+    const monitorPreRV = (at.monitor && rbAutotuneNode) ? rbAutotuneNode : preAT;
+    let monitorTail = monitorPreRV;
+    if (at.reverbMonitor) {
+      rbMonitorReverbUnit = rbCreateReverbUnit(ctx);
+      rbMonitorReverbUnit.setParams(rbReverbSettingsFrom(at));
+      monitorTail.connect(rbMonitorReverbUnit.input);
+      monitorTail = rbMonitorReverbUnit.output;
+    }
+    rbMonitorOutputGainNode = ctx.createGain();
+    // Starts silent and ramps up rather than snapping straight to full
+    // level - the very first instant of monitoring is otherwise a hard
+    // pop at whatever volume Output Gain happens to be set to.
+    rbMonitorOutputGainNode.gain.value = 0;
+    monitorTail.connect(rbMonitorOutputGainNode);
+    rbMonitorLimiterNode = rbCreateLimiter(ctx);
+    rbMonitorOutputGainNode.connect(rbMonitorLimiterNode.input);
+    rbMonitorNode = rbMonitorLimiterNode.output;
+    rbMonitorNode.connect(ctx.destination);
+    rbRampParam(rbMonitorOutputGainNode.gain, rbDbToLinear(at.outputGainDb), ctx);
+  }
+  rbAutotuneActive = needsAutotune;
+  // Post-gain: the meter (and its clip indicator) now reflects what
+  // Input Gain actually left it with, not the raw, unattenuated mic.
+  rbStartLevelMeter(rbInputGainNode);
+}
+
+function rbTeardownRecordGraph() {
+  try { if (rbMonitorNode) rbMonitorNode.disconnect(); } catch (e) {}
+  try { if (rbMonitorLimiterNode) rbMonitorLimiterNode.dispose(); } catch (e) {}
+  try { if (rbMonitorOutputGainNode) rbMonitorOutputGainNode.disconnect(); } catch (e) {}
+  try { if (rbMonitorReverbUnit) rbMonitorReverbUnit.dispose(); } catch (e) {}
+  try { if (rbPrintLimiterNode) rbPrintLimiterNode.dispose(); } catch (e) {}
+  try { if (rbPrintOutputGainNode) rbPrintOutputGainNode.disconnect(); } catch (e) {}
+  try { if (rbPrintReverbUnit) rbPrintReverbUnit.dispose(); } catch (e) {}
+  try { if (rbAutotuneNode) rbAutotuneNode.disconnect(); } catch (e) {}
+  try { if (rbChannelSafetyNode) rbChannelSafetyNode.disconnect(); } catch (e) {}
+  try { if (rbInputGainNode) rbInputGainNode.disconnect(); } catch (e) {}
+  try { if (rbMicHighpassNode) rbMicHighpassNode.disconnect(); } catch (e) {}
+  try { if (rbRecNode) rbRecNode.disconnect(); } catch (e) {}
+  try { if (rbMicSource) rbMicSource.disconnect(); } catch (e) {}
+  rbMicSource = null; rbMicHighpassNode = null; rbInputGainNode = null; rbChannelSafetyNode = null; rbAutotuneNode = null; rbRecNode = null; rbMonitorNode = null;
+  rbPrintOutputGainNode = null; rbMonitorOutputGainNode = null;
+  rbPrintReverbUnit = null; rbMonitorReverbUnit = null;
+  rbPrintLimiterNode = null; rbMonitorLimiterNode = null;
+  rbAutotuneActive = false;
+  rbStopLevelMeter();
+}
+
+// ── Standalone monitoring ────────────────────────────────────────────
+// Hearing yourself (dry, or through autotune per the existing "Monitor
+// with Autotune" checkbox) without committing to a take - so dialing in
+// key/scale/retune/humanize, checking mic placement, or just hearing how
+// a corrected vocal sits on the beat doesn't require recording (and
+// possibly re-recording) something throwaway just to find out.
+async function rbToggleMonitor() {
+  if (rbMonitoring || rbMonitorStarting) { if (rbMonitoring) rbStopMonitor(); return; }
+  await rbStartMonitor();
+}
+
+async function rbStartMonitor() {
+  // rbStarting (not just rbRecording) - a take can be mid-permission-
+  // prompt, well before rbRecording flips true, and this needs to back
+  // off for that window too, not just once recording has fully started.
+  // rbStopping matters too: rbStopRecording() sets rbRecording = false
+  // immediately but the actual teardown (rbTeardownRecordGraph, which
+  // nulls the same rbMicSource/rbAutotuneNode/rbMonitorNode globals
+  // rbConnectMonitorGraph is about to write into) doesn't run until the
+  // worklet flush resolves, up to several hundred ms later - without
+  // this check a Monitor click in that window can build a graph that
+  // then gets silently torn down by the recording's own delayed cleanup.
+  if (rbRecording || rbStarting || rbStopping || rbMonitoring || rbMonitorStarting) return;
+  rbMonitorStarting = true;
+  const myGen = ++rbMonitorGeneration;
+  try {
+    await rbStartMonitorInner(myGen);
+  } finally {
+    rbMonitorStarting = false;
+  }
+}
+
+async function rbStartMonitorInner(myGen) {
+  rbLog('Monitor: starting…');
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    rbLog('Monitor: no getUserMedia available in this environment.', 'err');
+    showAppNotification(t('rbNoMic'), 'err');
+    return;
+  }
+  rbDisarmMic(); // monitoring supersedes the meter-only preview - it provides the same meter plus sound
+  const at = rbGetAutotuneSettings();
+  let stream;
+  try {
+    const result = await rbOpenMicStream(at.micDeviceId, at.micDeviceLabel);
+    rbApplyMicFallback(result, at.micDeviceId, at.micDeviceLabel);
+    stream = result.stream;
+  } catch (e) {
+    rbLog('Monitor: failed to open a mic - aborting start.', 'err');
+    showAppNotification((e && e.rbMicErrorHint) || t('rbMicDenied'), 'err');
+    return;
+  }
+  try {
+    // Round 73: match the context to the mic's own rate here too, so
+    // monitoring and recording never run the engine at different rates.
+    await rbEnsureWorklets(rbStreamSampleRate(stream));
+  } catch (e) {
+    rbLog('Monitor: audio worklets failed to load (' + (e && e.message) + ').', 'err');
+    showAppNotification(t('rbRecordUnsupported'), 'err');
+    try { stream.getTracks().forEach((tr) => tr.stop()); } catch (e2) {}
+    return;
+  }
+  if (rbRecording || rbStarting || rbStopping || rbMonitoring || myGen !== rbMonitorGeneration) {
+    rbLog('Monitor: superseded while opening the mic - abandoning this attempt.', 'warn');
+    try { stream.getTracks().forEach((tr) => tr.stop()); } catch (e) {}
+    return;
+  } // lost the race to an actual take, another monitor start, or was superseded (e.g. tab left) while awaiting
+  rbMonitorStream = stream;
+  stream.getAudioTracks().forEach((tr) => {
+    tr.onended = () => { rbLog('Monitor: mic track ended unexpectedly (device unplugged?).', 'warn'); if (rbMonitoring) rbStopMonitor(); };
+  });
+  try {
+    rbConnectMonitorGraph(stream, at);
+  } catch (e) {
+    rbLog('Monitor: failed to build the audio graph (' + (e && e.message) + ').', 'err');
+    showAppNotification(t('rbRecordUnsupported'), 'err');
+    try { stream.getTracks().forEach((tr) => tr.stop()); } catch (e2) {}
+    rbMonitorStream = null;
+    return;
+  }
+  rbMonitoring = true;
+  rbUpdateMonitorUI();
+  rbLog('Monitor: live (autotune=' + (at.monitor ? 'on' : 'off') + ', reverb=' + (at.reverbMonitor ? 'on' : 'off') + ').');
+}
+
+// mic -> optional autotune -> speakers. No recorder tap at all - this is
+// the same graph shape rbConnectRecordGraph builds for its monitor path,
+// minus the capture worklet, since nothing here is ever saved.
+function rbConnectMonitorGraph(stream, at) {
+  const ctx = rbAudioCtx;
+  rbMicSource = ctx.createMediaStreamSource(stream);
+  // Same low-cut as the record graph (Round 68) - see RB_MIC_HIGHPASS_HZ.
+  rbMicHighpassNode = ctx.createBiquadFilter();
+  rbMicHighpassNode.type = 'highpass';
+  rbMicHighpassNode.frequency.value = RB_MIC_HIGHPASS_HZ;
+  rbMicSource.connect(rbMicHighpassNode);
+  rbInputGainNode = ctx.createGain();
+  rbInputGainNode.gain.value = rbDbToLinear(at.inputGainDb);
+  rbMicHighpassNode.connect(rbInputGainNode);
+  // Same unconditional channel-safety stage as the record graph - see
+  // the comment there and rb-channel-safety-worklet.js.
+  rbChannelSafetyNode = new AudioWorkletNode(ctx, 'rb-channel-safety-processor');
+  rbInputGainNode.connect(rbChannelSafetyNode);
+  let tail = rbChannelSafetyNode;
+
+  rbAutotuneNode = null;
+  if (at.monitor) {
+    rbAutotuneNode = new AudioWorkletNode(ctx, 'autotune-processor');
+    rbAutotuneNode.port.postMessage({ type: 'params', params: rbAutotuneParamsForEngine(at) });
+    rbAutotuneNode.port.onmessage = rbHandleAutotuneNodeMessage;
+    tail.connect(rbAutotuneNode);
+    tail = rbAutotuneNode;
+  }
+
+  rbMonitorReverbUnit = null;
+  if (at.reverbMonitor) {
+    rbMonitorReverbUnit = rbCreateReverbUnit(ctx);
+    rbMonitorReverbUnit.setParams(rbReverbSettingsFrom(at));
+    tail.connect(rbMonitorReverbUnit.input);
+    tail = rbMonitorReverbUnit.output;
+  }
+
+  rbMonitorOutputGainNode = ctx.createGain();
+  // Same silent-start-then-ramp-up as the record graph's monitor branch -
+  // no hard pop at the instant Monitor (or a device switch, or a routing
+  // toggle rebuild) connects to the speakers.
+  rbMonitorOutputGainNode.gain.value = 0;
+  tail.connect(rbMonitorOutputGainNode);
+  rbMonitorLimiterNode = rbCreateLimiter(ctx);
+  rbMonitorOutputGainNode.connect(rbMonitorLimiterNode.input);
+  rbMonitorNode = rbMonitorLimiterNode.output;
+  rbMonitorNode.connect(ctx.destination);
+  rbRampParam(rbMonitorOutputGainNode.gain, rbDbToLinear(at.outputGainDb), ctx);
+  rbAutotuneActive = !!at.monitor;
+  rbStartLevelMeter(rbInputGainNode);
+}
+
+function rbStopMonitor() {
+  if (!rbMonitoring) return;
+  rbLog('Monitor: stopping.');
+  try { if (rbMonitorNode) rbMonitorNode.disconnect(); } catch (e) {}
+  try { if (rbMonitorLimiterNode) rbMonitorLimiterNode.dispose(); } catch (e) {}
+  try { if (rbMonitorOutputGainNode) rbMonitorOutputGainNode.disconnect(); } catch (e) {}
+  try { if (rbMonitorReverbUnit) rbMonitorReverbUnit.dispose(); } catch (e) {}
+  try { if (rbAutotuneNode) rbAutotuneNode.disconnect(); } catch (e) {}
+  try { if (rbChannelSafetyNode) rbChannelSafetyNode.disconnect(); } catch (e) {}
+  try { if (rbInputGainNode) rbInputGainNode.disconnect(); } catch (e) {}
+  try { if (rbMicHighpassNode) rbMicHighpassNode.disconnect(); } catch (e) {}
+  try { if (rbMicSource) rbMicSource.disconnect(); } catch (e) {}
+  try { if (rbMonitorStream) rbMonitorStream.getTracks().forEach((tr) => tr.stop()); } catch (e) {}
+  rbMicSource = null; rbMicHighpassNode = null; rbInputGainNode = null; rbChannelSafetyNode = null; rbAutotuneNode = null; rbMonitorNode = null; rbMonitorStream = null;
+  rbMonitorOutputGainNode = null; rbMonitorReverbUnit = null; rbMonitorLimiterNode = null;
+  rbAutotuneActive = false;
+  rbMonitoring = false;
+  rbStopLevelMeter();
+  rbUpdateMonitorUI();
+  // Mirrors rbFinishRecording()'s own re-arm: if the settings panel with
+  // the meter is still open, hand metering back to the preview-only arm
+  // instead of leaving the bar dead until the panel is closed/reopened.
+  const panel = document.getElementById('rb-autotune-panel');
+  if (panel && !panel.classList.contains('hidden') && !rbStarting && !rbMonitorStarting && rbTabIsActive()) rbArmMic();
+}
+
+// Tears down and immediately rebuilds the monitor graph with the latest
+// settings - used when a routing toggle (not just a continuous param)
+// changes while monitoring is already running.
+// Bumped by rbRestartMonitor() so a routing toggle flipped again before
+// the previous fade-out finished (rapid A/B toggling is a completely
+// normal way to dial in a sound) abandons its own stale rebuild instead
+// of both callbacks eventually racing to reconnect a graph to speakers.
+let rbMonitorRestartGeneration = 0;
+
+function rbRestartMonitor() {
+  if (!rbMonitoring) return;
+  const stream = rbMonitorStream;
+  if (!stream) { rbStopMonitor(); return; }
+  const myGen = ++rbMonitorRestartGeneration;
+  // Fade the currently-playing graph out before tearing it down instead
+  // of cutting it off mid-sample - an instant disconnect there is an
+  // audible pop every single time a routing toggle (Formant Correction,
+  // reverb monitor, etc.) is flipped while Monitor is running, which is
+  // routine while dialing in a vocal chain.
+  if (rbMonitorOutputGainNode && rbAudioCtx) rbRampParam(rbMonitorOutputGainNode.gain, 0, rbAudioCtx);
+  setTimeout(() => {
+    if (myGen !== rbMonitorRestartGeneration || !rbMonitoring || rbMonitorStream !== stream) return; // superseded or stopped while fading out
+    try { if (rbMonitorNode) rbMonitorNode.disconnect(); } catch (e) {}
+    // rbMonitorLimiterNode's dispose() was missing here - every routing
+    // toggle flipped while Monitor was running (Formant Correction,
+    // reverb monitor, etc.) rebuilt the graph but left the OLD
+    // compressor+waveshaper pair orphaned instead of freed, same class of
+    // leak already fixed elsewhere in rbSwitchMonitorDevice/rbStopMonitor/
+    // rbTeardownRecordGraph. A session with several toggle changes while
+    // monitoring would accumulate these silently, which is exactly the
+    // kind of thing that shows up later as the app getting sluggish.
+    try { if (rbMonitorLimiterNode) rbMonitorLimiterNode.dispose(); } catch (e) {}
+    try { if (rbMonitorOutputGainNode) rbMonitorOutputGainNode.disconnect(); } catch (e) {}
+    try { if (rbMonitorReverbUnit) rbMonitorReverbUnit.dispose(); } catch (e) {}
+    try { if (rbAutotuneNode) rbAutotuneNode.disconnect(); } catch (e) {}
+    try { if (rbChannelSafetyNode) rbChannelSafetyNode.disconnect(); } catch (e) {}
+    try { if (rbInputGainNode) rbInputGainNode.disconnect(); } catch (e) {}
+    try { if (rbMicSource) rbMicSource.disconnect(); } catch (e) {}
+    rbConnectMonitorGraph(stream, rbGetAutotuneSettings());
+  }, 30);
+}
+
+function rbUpdateMonitorUI() {
+  const btn = document.getElementById('rb-monitor-btn');
+  if (!btn) return;
+  btn.classList.toggle('active', rbMonitoring);
+  const lbl = document.getElementById('rb-monitor-lbl');
+  if (lbl) lbl.textContent = t(rbMonitoring ? 'rbMonitorStop' : 'rbMonitorStart');
+  btn.setAttribute('aria-pressed', rbMonitoring ? 'true' : 'false');
+}
+
+// ── Record a topline over the beat ──────────────────────────────────────
+// Captures the mic locally while the beat plays, then posts the raw take
+// to /random-beats/mixdown along with the measured start-gap so the
+// server can line the two up and bounce them into one WAV - "record and
+// it lands on the beat" rather than a vocal-only clip the user has to
+// combine by hand.
+function rbToggleRecording() {
+  if (rbStopping || rbStarting) return; // previous take is still wrapping up / already starting
+  if (rbRecording) { rbStopRecording(); return; }
+  rbStartRecording();
+}
+
+async function rbStartRecording() {
+  if (!rbCurrent || rbStopping || rbStarting) return;
+  rbStarting = true;
+  const myGen = ++rbRecordGeneration;
+  try {
+    await rbStartRecordingInner(myGen);
+  } finally {
+    // Structural, not per-return-site: whatever happens inside - a normal
+    // exit, an early return, or something throwing that nobody
+    // anticipated - Record is never left permanently disabled because one
+    // exit path forgot to clear this flag.
+    rbStarting = false;
+  }
+}
+
+async function rbStartRecordingInner(myGen) {
+  rbLog('Record: starting…');
+  rbRecordingBeatTrack = rbCurrent; // pinned now, not re-read from rbCurrent later - rbCurrent can change while this take is still in flight
+  if (rbReviewActive) rbExitReview(); // a fresh take abandons any un-saved review in progress
+  if (rbMonitoring) rbStopMonitor(); // hand the mic off to the real take instead of running two graphs at once
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    rbLog('Record: no getUserMedia available in this environment.', 'err');
+    showAppNotification(t('rbNoMic'), 'err');
+    return;
+  }
+  rbDisarmMic(); // hand the mic off to the real take instead of running two streams at once
+  const at = rbGetAutotuneSettings();
+  let stream;
+  try {
+    // Raw promise kept separate from the timeout race so a mic-open that
+    // eventually resolves AFTER the timeout already fired still gets its
+    // tracks stopped instead of leaking an orphaned, silently-open mic -
+    // the exact same superseded-generation cleanup pattern already used
+    // a few lines below for the "tab left while awaiting" case.
+    const micPromise = rbOpenMicStream(at.micDeviceId, at.micDeviceLabel);
+    micPromise.then((r) => { if (myGen !== rbRecordGeneration) { try { r.stream.getTracks().forEach(tr => tr.stop()); } catch {} } }).catch(() => {});
+    const result = await rbWithTimeout(micPromise, 10000, 'mic open');
+    rbApplyMicFallback(result, at.micDeviceId, at.micDeviceLabel);
+    stream = result.stream;
+  } catch (e) {
+    rbLog('Record: failed to open a mic - aborting start.' + (e && e.rbTimedOut ? ' (timed out - no response from the mic/OS after 10s)' : ''), 'err');
+    showAppNotification((e && e.rbMicErrorHint) || t('rbMicDenied'), 'err');
+    return;
+  }
+  if (myGen !== rbRecordGeneration) { try { stream.getTracks().forEach(tr => tr.stop()); } catch {} return; } // superseded (e.g. tab left) while awaiting mic permission
+  try {
+    // Round 73: build the context at the rate the mic is ACTUALLY delivering,
+    // not whatever the output device happens to default to. The stream is
+    // already open at this point, so its real rate is knowable here - which
+    // is exactly why this call sits after the getUserMedia above and not
+    // before it.
+    await rbWithTimeout(rbEnsureWorklets(rbStreamSampleRate(stream)), 8000, 'worklet load');
+  } catch (e) {
+    rbLog('Record: failed to load audio worklets - aborting start.' + (e && e.rbTimedOut ? ' (timed out after 8s)' : ''), 'err');
+    showAppNotification(t('rbRecordUnsupported'), 'err');
+    try { stream.getTracks().forEach(tr => tr.stop()); } catch {}
+    return;
+  }
+  if (myGen !== rbRecordGeneration) { try { stream.getTracks().forEach(tr => tr.stop()); } catch {} return; } // superseded while awaiting worklet load
+  rbMediaStream = stream;
+  // A device unplugged mid-take ends its track without any click from the
+  // user - route that through the exact same stop path so the UI/state
+  // always lands back in a consistent "not recording" place.
+  stream.getAudioTracks().forEach((tr) => {
+    tr.onended = () => { if (rbRecording) rbStopRecording(); };
+  });
+
+  try {
+    if (!globalPlayer.track || globalPlayer.track.id !== rbCurrent.id) {
+      playTrack(rbCurrent, 'random');
+    }
+    if (globalPlayer.audio) {
+      try { globalPlayer.audio.currentTime = 0; globalPlayer.audio.play().catch(() => {}); } catch {}
+    }
+  } catch (e) {
+    // Starting playback is not expected to throw, but if it somehow does,
+    // fail the recording cleanly rather than leaving the mic stream open
+    // and rbStarting stuck (the outer finally still runs regardless, but
+    // this keeps the stream/graph from leaking too).
+    showAppNotification(t('rbRecordUnsupported'), 'err');
+    try { stream.getTracks().forEach(tr => tr.stop()); } catch {}
+    rbMediaStream = null;
+    return;
+  }
+  if (myGen !== rbRecordGeneration || rbMonitoring || rbMonitorStarting) {
+    // Superseded (tab left) or lost a race to a monitor session that won
+    // in between - back out cleanly instead of committing to a take
+    // nobody asked for anymore.
+    try { stream.getTracks().forEach(tr => tr.stop()); } catch {}
+    rbTeardownRecordGraph();
+    rbMediaStream = null;
+    return;
+  }
+  rbBeatStartTs = performance.now();
+  try {
+    rbConnectRecordGraph(stream, at);
+  } catch (e) {
+    showAppNotification(t('rbRecordUnsupported'), 'err');
+    try { stream.getTracks().forEach(tr => tr.stop()); } catch {}
+    rbTeardownRecordGraph();
+    rbMediaStream = null;
+    return;
+  }
+  rbRecordStartTs = performance.now();
+  rbRecording = true;
+
+  const btn = document.getElementById('rb-record-btn');
+  if (btn) btn.classList.add('recording');
+  const lbl = document.getElementById('rb-record-lbl');
+  if (lbl) lbl.textContent = t('rbStopRecording');
+  const status = document.getElementById('rb-record-status');
+  if (status) status.classList.remove('hidden');
+  const hintEl = document.getElementById('rb-record-hint');
+  if (hintEl) hintEl.textContent = rbAutotuneActive ? t('rbRecordHintAt') : t('rbRecordHint');
+  const timeEl = document.getElementById('rb-record-time');
+  const t0 = Date.now();
+  rbRecordTimer = setInterval(() => {
+    if (timeEl) timeEl.textContent = fmt2time((Date.now() - t0) / 1000);
+  }, 200);
+}
+
+async function rbStopRecording() {
+  if (!rbRecording) return;
+  rbStopping = true;
+  const btn = document.getElementById('rb-record-btn');
+  if (btn) btn.disabled = true;
+  if (globalPlayer.audio) { try { globalPlayer.audio.pause(); } catch {} }
+  if (rbRecordTimer) { clearInterval(rbRecordTimer); rbRecordTimer = null; }
+  rbRecording = false;
+  if (btn) btn.classList.remove('recording');
+  const lbl = document.getElementById('rb-record-lbl');
+  if (lbl) lbl.textContent = t('rbRecordTopline');
+  const status = document.getElementById('rb-record-status');
+  if (status) status.classList.add('hidden');
+  await rbFlushRecorder();
+  rbFinishRecording();
+}
+
+// Asks the capture worklet to hand over whatever it's still buffering
+// (up to ~93ms of trailing audio) and resolves once that arrives - or
+// after a short safety timeout, so a dropped message can never hang the
+// UI on "stopping...".
+function rbFlushRecorder() {
+  return new Promise((resolve) => {
+    if (!rbRecNode) { resolve(); return; }
+    let settled = false;
+    const done = () => { if (!settled) { settled = true; resolve(); } };
+    rbRecFlushResolve = done;
+    try { rbRecNode.port.postMessage({ type: 'stop' }); } catch (e) { done(); }
+    setTimeout(done, 600);
+  });
+}
+
+async function rbFinishRecording() {
+  const stream = rbMediaStream;
+  rbMediaStream = null;
+  try { if (stream) stream.getTracks().forEach(tr => tr.stop()); } catch (e) {}
+  rbTeardownRecordGraph();
+  // Reset the full recording UI/state here unconditionally - whatever
+  // triggered this (user pressed Stop, or the mic track ended on its
+  // own), the UI always ends up consistent with "not recording" and the
+  // Record button is never left stuck disabled.
+  rbRecording = false;
+  const recBtn = document.getElementById('rb-record-btn');
+  if (recBtn) { recBtn.classList.remove('recording'); recBtn.disabled = false; }
+  const recLbl = document.getElementById('rb-record-lbl');
+  if (recLbl) recLbl.textContent = t('rbRecordTopline');
+  const recStatus = document.getElementById('rb-record-status');
+  if (recStatus) recStatus.classList.add('hidden');
+  rbStopping = false;
+
+  const panel = document.getElementById('rb-autotune-panel');
+  if (panel && !panel.classList.contains('hidden') && !rbStarting && rbTabIsActive()) rbArmMic();
+
+  try {
+    const beatTrack = rbRecordingBeatTrack;
+    rbRecordingBeatTrack = null;
+    if (!rbRecChunks.length || !beatTrack) return;
+    const offsetMs = Math.max(0, Math.round(rbRecordStartTs - rbBeatStartTs));
+    const built = rbBuildRecordedTake();
+    rbRecChunks = [];
+    if (!built) return;
+    if (lastTab !== 'random') {
+      // Don't pop the review panel up on whatever tab the user is
+      // actually looking at right now - hold onto the take and show it
+      // the moment they come back to Random Beats instead.
+      rbPendingReviewTake = { buffer: built.buffer, blob: built.blob, offsetMs, beatTrack };
+      return;
+    }
+    await rbEnterReview(built.buffer, built.blob, offsetMs, beatTrack);
+  } catch (e) {
+    showAppNotification(t('rbMixFailed').replace('{e}', e.message), 'err');
+  }
+}
+
+// Concatenates the worklet's posted chunks into one AudioBuffer and
+// encodes it straight to 16-bit PCM WAV with the app's existing encoder
+// (encodeWAV, used elsewhere for drag-out export) - no lossy step
+// anywhere between the mic and this blob.
+function rbBuildRecordedTake() {
+  if (!rbRecChunks.length || !rbAudioCtx) return null;
+  const nCh = rbRecNumChannels || 1;
+  let total = 0;
+  for (const c of rbRecChunks) { const ch0 = c.channels[0]; if (ch0) total += ch0.length; }
+  if (!total) return null;
+  const buffer = rbAudioCtx.createBuffer(nCh, total, rbRecSampleRate);
+  for (let ch = 0; ch < nCh; ch++) {
+    const out = buffer.getChannelData(ch);
+    let o = 0;
+    for (const c of rbRecChunks) {
+      const seg = c.channels[ch];
+      const len = c.channels[0] ? c.channels[0].length : 0;
+      if (seg) out.set(seg, o);
+      o += len;
+    }
+  }
+  const wavArrayBuf = encodeWAV(buffer);
+  const blob = new Blob([wavArrayBuf], { type: 'audio/wav' });
+  return { buffer, blob };
+}
+
+// Generic peak computation (min/max per column, mono-mixed), lifted out
+// of computeWavePeaks() so both the Analyze tab and this review timeline
+// share the exact same, already-verified approach instead of two
+// slightly different waveform algorithms drifting apart over time.
+function rbComputePeaks(audioBuffer, columns) {
+  if (!audioBuffer || !audioBuffer.length) return null;
+  const ch0 = audioBuffer.getChannelData(0);
+  const ch1 = audioBuffer.numberOfChannels > 1 ? audioBuffer.getChannelData(1) : null;
+  const n = ch0.length;
+  const per = Math.max(1, Math.floor(n / columns));
+  const peaks = new Float32Array(columns * 2);
+  for (let c = 0; c < columns; c++) {
+    let mn = 1, mx = -1;
+    const start = c * per, end = Math.min(n, start + per);
+    const step = per > 4000 ? 4 : 1;
+    for (let i = start; i < end; i += step) {
+      const v = ch1 ? (ch0[i] + ch1[i]) * 0.5 : ch0[i];
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+    }
+    peaks[c * 2] = mn === 1 ? 0 : mn;
+    peaks[c * 2 + 1] = mx === -1 ? 0 : mx;
+  }
+  return peaks;
+}
+
+// Fetches the beat through the app's existing /convert-wav + parseWAV
+// path (same one the Analyze tab uses) rather than decodeAudioData,
+// which is confirmed to hang the renderer in packaged Electron on
+// Windows. Cached per track id so re-entering review for the same beat
+// (re-record, then review again) doesn't re-fetch and re-parse it.
+async function rbLoadBeatWaveform(track) {
+  if (!track) return;
+  if (rbReviewBeatForTrackId === track.id && rbReviewBeatBuf) return;
+  if (!rbAudioCtx) await rbEnsureWorklets();
+  const r = await fetch(API + '/convert-wav?path=' + encodeURIComponent(track.file_path));
+  if (!r.ok) throw new Error('convert-wav failed');
+  const arrayBuf = await r.arrayBuffer();
+  const buf = parseWAV(arrayBuf, rbAudioCtx);
+  rbReviewBeatBuf = buf;
+  rbReviewBeatPeaks = rbComputePeaks(buf, RB_REVIEW_COLUMNS);
+  rbReviewBeatForTrackId = track.id;
+}
+
+// ── Graph Mode DSP (offline) ────────────────────────────────────────────
+// Mirrors the real-time engine in renderer/autotune-worklet.js (same
+// autocorrelation pitch detector, same LPC formant correction, same
+// granular pitch shifter) but driven by a MANUALLY EDITED target curve
+// instead of a Key/Scale, and run offline over an already-captured
+// AudioBuffer instead of live per-sample. Kept as its own copy rather
+// than a shared import: autotune-worklet.js only runs inside
+// AudioWorkletGlobalScope (loaded via audioWorklet.addModule(), not a
+// <script> tag) and this codebase has no bundler to share a module
+// between that scope and the main thread. If the pitch detector or LPC
+// math in autotune-worklet.js changes, this copy needs the same change -
+// tools/test-autotune.js and a matching test for this file both guard
+// the numeric behavior so a drift between the two would show up as a
+// failing check, not just a code-review miss.
+// ─── BEGIN RB GRAPH DSP CORE (pure - no DOM/app-state references below
+//     this line until the closing marker. Kept dependency-free so
+//     tools/test-rb-graph.js can load just this section in Node and
+//     verify it numerically, the same technique tools/test-autotune.js
+//     and tools/test-rb-recorder.js already use for their files.)
+// Known limitation, same as the real-time engine in autotune-worklet.js
+// this mirrors: whitening works by predicting each sample from the LPC
+// filter and shifting only what's LEFT UNPREDICTED (the residual/
+// excitation) - a real voice always leaves a meaningful residual
+// (glottal pulses, breath noise), but a near-perfectly periodic input
+// (a synthesized test tone, or an extremely clean sustained vowel with
+// almost no noise) can leave almost nothing TO shift, in which case the
+// resynthesis mostly free-rings at the ORIGINAL pitch instead of the
+// edited target. Not expected to matter for actual sung/spoken
+// recordings, which are never that clean, but noted here rather than
+// left as a silent surprise.
+const RB_GRAPH_LPC_ORDER = 24;
+
+function rbGraphMidiToHz(m) { return 440 * Math.pow(2, (m - 69) / 12); }
+function rbGraphHzToMidi(hz) { return 69 + 12 * Math.log2(hz / 440); }
+
+function rbGraphAutocorrelate(buf, order) {
+  const n = buf.length;
+  const R = new Float64Array(order + 1);
+  for (let lag = 0; lag <= order; lag++) {
+    let sum = 0;
+    for (let i = 0; i + lag < n; i++) sum += buf[i] * buf[i + lag];
+    R[lag] = sum;
+  }
+  return R;
+}
+
+function rbGraphLevinsonDurbin(R, order) {
+  const a = new Float64Array(order + 1);
+  let err = R[0];
+  if (err <= 1e-12) return a;
+  for (let i = 1; i <= order; i++) {
+    let acc = R[i];
+    for (let j = 1; j < i; j++) acc -= a[j] * R[i - j];
+    const k = acc / err;
+    const prev = a.slice();
+    a[i] = k;
+    for (let j = 1; j < i; j++) a[j] = prev[j] - k * prev[i - j];
+    err *= (1 - k * k);
+    if (err <= 1e-12) break;
+  }
+  return a;
+}
+
+// Bandwidth expansion (shrink every pole slightly toward the origin) -
+// same fix, same reasoning, as autotune-worklet.js's applyBandwidthExpansion.
+// Discovered directly: an unexpanded LPC resynthesis filter can diverge
+// wildly (measured 1500x+ amplitude overshoot on a silence-to-voice
+// onset - every take starts with one) once its coefficients are used
+// across more than a single instant, whether via real-time gliding or
+// this file's own block-to-block interpolation.
+const RB_GRAPH_LPC_BANDWIDTH_EXPANSION = 0.999;
+function rbGraphApplyBandwidthExpansion(coeffs, order) {
+  let g = 1;
+  for (let k = 1; k <= order; k++) { g *= RB_GRAPH_LPC_BANDWIDTH_EXPANSION; coeffs[k] *= g; }
+  return coeffs;
+}
+
+function rbGraphComputeLPC(buf, order) {
+  const n = buf.length;
+  const windowed = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const w = 0.54 - 0.46 * Math.cos((2 * Math.PI * i) / (n - 1));
+    windowed[i] = buf[i] * w;
+  }
+  const R = rbGraphAutocorrelate(windowed, order);
+  if (R[0] <= 1e-9) return null;
+  return rbGraphApplyBandwidthExpansion(rbGraphLevinsonDurbin(R, order), order);
+}
+
+// Autocorrelation pitch detector - identical approach to autotune-
+// worklet.js's detectPitch (shortest local-maximum lag above threshold,
+// parabolic sub-bin refinement), reimplemented here since that file
+// isn't reachable from the main thread. Returns null on silence/no clear
+// periodicity.
+function rbGraphDetectPitch(buf, sampleRate, minHz, maxHz) {
+  minHz = minHz || 70; maxHz = maxHz || 1000;
+  const n = buf.length;
+  let energy = 0;
+  for (let i = 0; i < n; i++) energy += buf[i] * buf[i];
+  if (energy / n < 1e-6) return null;
+
+  const minLag = Math.max(1, Math.floor(sampleRate / maxHz));
+  const maxLag = Math.min(n - 1, Math.floor(sampleRate / minHz));
+  let mean = 0;
+  for (let i = 0; i < n; i++) mean += buf[i];
+  mean /= n;
+  const x = new Float32Array(n);
+  for (let i = 0; i < n; i++) x[i] = buf[i] - mean;
+
+  const vals = new Float32Array(maxLag - minLag + 1);
+  let bestVal = 0;
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    let sum = 0, norm1 = 0, norm2 = 0;
+    for (let i = 0; i + lag < n; i++) {
+      sum += x[i] * x[i + lag]; norm1 += x[i] * x[i]; norm2 += x[i + lag] * x[i + lag];
+    }
+    const denom = Math.sqrt(norm1 * norm2) || 1e-9;
+    const val = sum / denom;
+    vals[lag - minLag] = val;
+    if (val > bestVal) bestVal = val;
+  }
+  if (bestVal < 0.3) return null;
+  let bestLag = -1;
+  const acceptThreshold = Math.max(0.3, bestVal * 0.9);
+  for (let lag = minLag + 1; lag < maxLag; lag++) {
+    const v = vals[lag - minLag];
+    if (v < acceptThreshold) continue;
+    const prev = vals[lag - minLag - 1], next = vals[lag - minLag + 1];
+    if (v >= prev && v >= next) { bestLag = lag; bestVal = v; break; }
+  }
+  if (bestLag < 0) {
+    for (let lag = minLag; lag <= maxLag; lag++) {
+      if (vals[lag - minLag] === bestVal) { bestLag = lag; break; }
+    }
+  }
+  if (bestLag < 0) return null;
+
+  let refinedLag = bestLag;
+  if (bestLag > minLag && bestLag < maxLag) {
+    const corrAt = (lag) => {
+      let sum = 0, norm1 = 0, norm2 = 0;
+      for (let i = 0; i + lag < n; i++) {
+        sum += x[i] * x[i + lag]; norm1 += x[i] * x[i]; norm2 += x[i + lag] * x[i + lag];
+      }
+      const denom = Math.sqrt(norm1 * norm2) || 1e-9;
+      return sum / denom;
+    };
+    const yL = corrAt(bestLag - 1), yC = bestVal, yR = corrAt(bestLag + 1);
+    const denom2 = (yL - 2 * yC + yR);
+    if (Math.abs(denom2) > 1e-9) {
+      const shift = 0.5 * (yL - yR) / denom2;
+      if (Math.abs(shift) < 1) refinedLag = bestLag + shift;
+    }
+  }
+  return { hz: sampleRate / refinedLag, confidence: bestVal };
+}
+
+// Same variable-rate granular shifter as autotune-worklet.js's
+// PitchShifter (identical algorithm - jump-and-crossfade the read
+// pointer once it drifts too far from its ideal delay - just namespaced
+// separately since this file can't import that one).
+class RBGraphPitchShifter {
+  constructor(sampleRate, bufferSeconds, grainMs) {
+    this.sr = sampleRate;
+    this.bufLen = Math.max(4096, Math.floor(sampleRate * (bufferSeconds || 1.0)));
+    this.ring = new Float32Array(this.bufLen);
+    this.writeCount = 0;
+    this.grainSize = Math.max(256, Math.floor(this.sr * (grainMs || 25) / 1000));
+    this.fadeLen = Math.max(32, Math.floor(this.grainSize * 0.5));
+    this.readPos = null;
+    this.fadePos = null;
+    this.fadeT = 0;
+  }
+  writeSample(s) { this.ring[this.writeCount % this.bufLen] = s; this.writeCount++; }
+  _readRing(pos) {
+    const bl = this.bufLen;
+    let p = pos % bl; if (p < 0) p += bl;
+    const i0 = Math.floor(p), i1 = (i0 + 1) % bl, frac = p - i0;
+    return this.ring[i0] * (1 - frac) + this.ring[i1] * frac;
+  }
+  readSample(ratio) {
+    const idealDelay = this.grainSize;
+    if (this.readPos === null) this.readPos = this.writeCount - idealDelay;
+    let out;
+    if (this.fadePos !== null) {
+      const w = 0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, this.fadeT));
+      out = this._readRing(this.fadePos) * (1 - w) + this._readRing(this.readPos) * w;
+      this.fadePos += ratio;
+      this.fadeT += 1 / this.fadeLen;
+      if (this.fadeT >= 1) this.fadePos = null;
+    } else {
+      out = this._readRing(this.readPos);
+    }
+    this.readPos += ratio;
+    const actualDelay = this.writeCount - this.readPos;
+    if (Math.abs(actualDelay - idealDelay) > this.grainSize / 2 && this.fadePos === null) {
+      this.fadePos = this.readPos;
+      this.readPos = this.writeCount - idealDelay;
+      this.fadeT = 0;
+    }
+    return out;
+  }
+}
+
+// ─── END RB GRAPH DSP CORE ─────────────────────────────────────────────
+
+// ── Review / micro-DAW ────────────────────────────────────────────────
+// Shown right after a take is captured. The vocal isn't uploaded yet -
+// the user can drag it to nudge its timing against the beat, listen
+// through the result, and only then Save (mixdown), Re-record, or
+// Discard. rbReviewBeatTrack pins the exact beat this take belongs to,
+// independent of whatever rbCurrent becomes later.
+async function rbEnterReview(vocalBuf, vocalBlob, offsetMs, beatTrack) {
+  const myToken = ++rbReviewToken;
+  rbReviewActive = true;
+  rbSetReviewButtonsDisabled(false); // independent safety net - a fresh session must never inherit a stuck-disabled state
+  rbReviewBeatTrack = beatTrack || rbCurrent; // fallback only covers a caller that forgot to pass it - normal callers always do
+  rbReviewVocalBuf = vocalBuf;
+  rbReviewVocalBlob = vocalBlob;
+  rbReviewVocalPeaks = rbComputePeaks(vocalBuf, RB_REVIEW_COLUMNS);
+  rbReviewOffsetMs = offsetMs;
+  rbReviewPlayheadSec = 0;
+  rbReviewPlaying = false;
+  rbReviewZoom = 1;
+  rbReviewScrollSec = 0;
+  rbReviewBeatGain = 1;
+  rbReviewVocalGain = 1;
+  rbReviewSyncFaderUI();
+  rbReviewSyncZoomUI();
+  rbGraphModeActive = false;
+  rbGraphContour = null;
+  rbGraphEditedMidi = null;
+  rbGraphOriginalVocalBuf = null;
+  rbGraphOriginalVocalBlob = null;
+  rbGraphApplied = false;
+  rbGraphAnalyzing = false;
+  const graphBtn = document.getElementById('rb-graph-toggle');
+  if (graphBtn) { graphBtn.classList.remove('active'); graphBtn.setAttribute('aria-pressed', 'false'); }
+  const graphRow = document.getElementById('rb-graph-row');
+  if (graphRow) graphRow.classList.add('hidden');
+
+  const panel = document.getElementById('rb-review-panel');
+  const normalTransport = document.getElementById('rb-normal-transport');
+  const actions = document.getElementById('rb-actions-row');
+  if (panel) panel.classList.remove('hidden');
+  if (normalTransport) normalTransport.classList.add('hidden');
+  if (actions) actions.classList.add('hidden');
+  rbReviewUpdatePlayIcon();
+
+  rbSetReviewStatus(t('rbReviewLoadingWave'));
+  try {
+    await rbLoadBeatWaveform(rbReviewBeatTrack);
+  } catch (e) {
+    // The waveform is a nicety - if it can't be fetched/parsed, the user
+    // can still listen, drag (against a blank beat lane) and save. But a
+    // STALE buffer from a previously-cached, different track must never
+    // be reused here - that would silently play/paint the wrong beat.
+    rbReviewBeatBuf = null;
+    rbReviewBeatPeaks = null;
+    rbReviewBeatForTrackId = null;
+  }
+  if (myToken !== rbReviewToken) return; // superseded (re-record / discard / new take) while we awaited
+  rbSetReviewStatus('');
+  rbReviewDuration = Math.max(
+    rbReviewBeatBuf ? rbReviewBeatBuf.duration : 0,
+    (offsetMs / 1000) + vocalBuf.duration
+  );
+  rbPaintReview();
+  rbWireReviewDrag();
+}
+
+function rbExitReview() {
+  rbReviewToken++; // invalidate any in-flight rbEnterReview waveform fetch (also cancels a running rbGraphExtractContour())
+  rbGraphModeActive = false;
+  rbGraphContour = null;
+  rbGraphEditedMidi = null;
+  rbGraphOriginalVocalBuf = null;
+  rbGraphOriginalVocalBlob = null;
+  rbGraphApplied = false;
+  rbReviewPause();
+  rbReviewStopSources();
+  if (rbReviewRAF) { cancelAnimationFrame(rbReviewRAF); rbReviewRAF = null; }
+  rbReviewActive = false;
+  rbReviewBeatTrack = null;
+  rbReviewVocalBuf = null;
+  rbReviewVocalBlob = null;
+  rbReviewVocalPeaks = null;
+  rbReviewPlayheadSec = 0;
+  const panel = document.getElementById('rb-review-panel');
+  const normalTransport = document.getElementById('rb-normal-transport');
+  const actions = document.getElementById('rb-actions-row');
+  if (panel) panel.classList.add('hidden');
+  if (normalTransport) normalTransport.classList.remove('hidden');
+  if (actions) actions.classList.remove('hidden');
+  rbReviewZoom = 1;
+  rbReviewScrollSec = 0;
+}
+
+function rbSetReviewStatus(text) {
+  const el = document.getElementById('rb-review-status');
+  if (el) el.textContent = text;
+}
+
+function rbReviewCurrentTime() {
+  if (!rbReviewPlaying) return rbReviewPlayheadSec;
+  const elapsed = rbAudioCtx.currentTime - rbReviewCtxStartTime;
+  return rbReviewPlayheadSec + elapsed;
+}
+
+function rbReviewTogglePlay() {
+  if (rbReviewPlaying) rbReviewPause(); else rbReviewPlay();
+}
+
+function rbReviewPlay() {
+  if (!rbAudioCtx || rbReviewPlaying || !rbReviewActive) return;
+  if (rbReviewPlayheadSec >= rbReviewDuration - 0.05) rbReviewPlayheadSec = 0;
+  const startAt = rbReviewPlayheadSec;
+  const ctxNow = rbAudioCtx.currentTime + 0.05; // small lead-in so both sources schedule cleanly
+  rbReviewStopSources();
+
+  if (rbReviewBeatBuf) {
+    const src = rbAudioCtx.createBufferSource();
+    src.buffer = rbReviewBeatBuf;
+    rbReviewBeatGainNode = rbAudioCtx.createGain();
+    rbReviewBeatGainNode.gain.value = rbReviewBeatGain;
+    src.connect(rbReviewBeatGainNode).connect(rbAudioCtx.destination);
+    const beatOffset = Math.max(0, startAt);
+    if (beatOffset < rbReviewBeatBuf.duration) src.start(ctxNow, beatOffset);
+    rbReviewBeatSrc = src;
+  }
+  if (rbReviewVocalBuf) {
+    const src = rbAudioCtx.createBufferSource();
+    src.buffer = rbReviewVocalBuf;
+    rbReviewVocalGainNode = rbAudioCtx.createGain();
+    rbReviewVocalGainNode.gain.value = rbReviewVocalGain;
+    src.connect(rbReviewVocalGainNode).connect(rbAudioCtx.destination);
+    const vocalTimelineStart = rbReviewOffsetMs / 1000;
+    if (startAt <= vocalTimelineStart) {
+      src.start(ctxNow + (vocalTimelineStart - startAt));
+    } else {
+      const into = startAt - vocalTimelineStart;
+      if (into < rbReviewVocalBuf.duration) src.start(ctxNow, into);
+    }
+    rbReviewVocalSrc = src;
+  }
+  rbReviewCtxStartTime = ctxNow;
+  rbReviewPlaying = true;
+  rbReviewUpdatePlayIcon();
+  rbReviewRAFLoop();
+}
+
+function rbReviewPause() {
+  if (rbReviewPlaying) rbReviewPlayheadSec = rbReviewCurrentTime();
+  rbReviewStopSources();
+  rbReviewPlaying = false;
+  rbReviewUpdatePlayIcon();
+  if (rbReviewRAF) { cancelAnimationFrame(rbReviewRAF); rbReviewRAF = null; }
+  rbPaintReview();
+}
+
+function rbReviewStopSources() {
+  try { if (rbReviewBeatSrc) rbReviewBeatSrc.stop(); } catch (e) {}
+  try { if (rbReviewVocalSrc) rbReviewVocalSrc.stop(); } catch (e) {}
+  try { if (rbReviewBeatGainNode) rbReviewBeatGainNode.disconnect(); } catch (e) {}
+  try { if (rbReviewVocalGainNode) rbReviewVocalGainNode.disconnect(); } catch (e) {}
+  rbReviewBeatSrc = null; rbReviewVocalSrc = null;
+  rbReviewBeatGainNode = null; rbReviewVocalGainNode = null;
+}
+
+// Faders: live-update the gain node while playing (no need to restart
+// playback to hear a fader move), and just remember the value otherwise
+// so the next rbReviewPlay() picks it up.
+function rbReviewSetBeatGain(v) {
+  rbReviewBeatGain = Math.max(0, Math.min(1.5, parseFloat(v) || 0));
+  if (rbReviewBeatGainNode) rbReviewBeatGainNode.gain.value = rbReviewBeatGain;
+  rbReviewSyncFaderUI();
+}
+function rbReviewSetVocalGain(v) {
+  rbReviewVocalGain = Math.max(0, Math.min(1.5, parseFloat(v) || 0));
+  if (rbReviewVocalGainNode) rbReviewVocalGainNode.gain.value = rbReviewVocalGain;
+  rbReviewSyncFaderUI();
+}
+function rbReviewSyncFaderUI() {
+  const beatSl = document.getElementById('rb-review-beat-gain');
+  const vocalSl = document.getElementById('rb-review-vocal-gain');
+  const beatVal = document.getElementById('rb-review-beat-gain-val');
+  const vocalVal = document.getElementById('rb-review-vocal-gain-val');
+  if (beatSl) beatSl.value = Math.round(rbReviewBeatGain * 100);
+  if (vocalSl) vocalSl.value = Math.round(rbReviewVocalGain * 100);
+  if (beatVal) beatVal.textContent = Math.round(rbReviewBeatGain * 100) + '%';
+  if (vocalVal) vocalVal.textContent = Math.round(rbReviewVocalGain * 100) + '%';
+  // Drive the same --fill custom-property gradient trick the Recording
+  // panel's sliders already use (see rbUpdateSliderFill) - without this
+  // the faders were the one remaining pair of bare browser-default
+  // sliders on the whole page.
+  if (beatSl) rbUpdateSliderFill(beatSl);
+  if (vocalSl) rbUpdateSliderFill(vocalSl);
+}
+
+function rbReviewRAFLoop() {
+  if (!rbReviewPlaying) return;
+  const cur = rbReviewCurrentTime();
+  if (cur >= rbReviewDuration) {
+    rbReviewStopSources();
+    rbReviewPlaying = false;
+    rbReviewPlayheadSec = 0;
+    rbReviewUpdatePlayIcon();
+    rbPaintReview();
+    return;
+  }
+  rbPaintReview();
+  rbReviewRAF = requestAnimationFrame(rbReviewRAFLoop);
+}
+
+function rbReviewUpdatePlayIcon() {
+  const svg = document.getElementById('rb-review-play-svg');
+  if (!svg) return;
+  svg.innerHTML = rbReviewPlaying
+    ? '<rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/>'
+    : '<polygon points="7,5 7,19 19,12"/>';
+}
+
+function rbReviewSeekClick(evt) {
+  const cv = document.getElementById('rb-review-canvas');
+  if (!cv || !rbReviewDuration) return;
+  const rect = cv.getBoundingClientRect();
+  const wasPlaying = rbReviewPlaying;
+  if (wasPlaying) rbReviewPause();
+  rbReviewPlayheadSec = Math.max(0, Math.min(rbReviewDuration, rbReviewXToTime(evt.clientX - rect.left, rect.width)));
+  rbPaintReview();
+  if (wasPlaying) rbReviewPlay();
+}
+
+// Two-lane canvas: beat on top (fixed), vocal on the bottom (positioned
+// at its current offset), plus a shared playhead. Redrawn on every drag
+// move and every animation frame during playback.
+// ── Zoom/pan viewport math ──────────────────────────────────────────
+// At zoom 1x the whole timeline fits the canvas (the original
+// behavior); at higher zoom only a rbReviewVisibleSec()-wide window,
+// starting at rbReviewScrollSec, is shown - panned via the range input
+// under the canvas.
+function rbReviewVisibleSec() {
+  return rbReviewZoom > 1 ? rbReviewDuration / rbReviewZoom : rbReviewDuration;
+}
+function rbReviewMaxScroll() {
+  return Math.max(0, rbReviewDuration - rbReviewVisibleSec());
+}
+function rbReviewClampScroll() {
+  rbReviewScrollSec = Math.max(0, Math.min(rbReviewMaxScroll(), rbReviewScrollSec));
+}
+function rbReviewTimeToX(sec, w) {
+  return ((sec - rbReviewScrollSec) / rbReviewVisibleSec()) * w;
+}
+function rbReviewXToTime(x, w) {
+  return rbReviewScrollSec + (x / w) * rbReviewVisibleSec();
+}
+
+function rbPaintReview() {
+  const cv = document.getElementById('rb-review-canvas');
+  if (!cv || !rbReviewDuration) return;
+  rbReviewClampScroll();
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth, h = cv.clientHeight;
+  if (!w || !h) return;
+  const pxW = Math.round(w * dpr), pxH = Math.round(h * dpr);
+  // Assigning canvas.width/height forces the browser to reallocate and
+  // wipe the whole backing bitmap, even when set to the value it already
+  // has - a genuinely expensive reset, not a no-op. This function runs
+  // on every single animation frame during playback (rbReviewRAFLoop),
+  // so doing that unconditionally meant re-allocating a full,
+  // devicePixelRatio-scaled canvas up to 60 times a second for as long
+  // as review was open - worse the bigger the window (full-screened,
+  // or on a HiDPI display), which lines up with "laggy... on the Random
+  // Beats page" exactly. Only touch it when the pixel size actually
+  // changed (real resize), not every paint.
+  if (cv.width !== pxW || cv.height !== pxH) { cv.width = pxW; cv.height = pxH; }
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+
+  const laneH = h / 2;
+  const visibleSec = rbReviewVisibleSec();
+
+  if (rbReviewBeatPeaks) {
+    const cols = rbReviewBeatPeaks.length / 2;
+    const mid = laneH / 2;
+    const fullColW = (rbReviewDuration / cols / visibleSec) * w;
+    ctx.fillStyle = 'rgba(255,255,255,.22)';
+    for (let c = 0; c < cols; c++) {
+      const x = rbReviewTimeToX((c / cols) * rbReviewDuration, w);
+      if (x + fullColW < 0 || x > w) continue; // outside the zoomed viewport - skip drawing it
+      const mn = rbReviewBeatPeaks[c * 2], mx = rbReviewBeatPeaks[c * 2 + 1];
+      const y0 = mid - mx * (laneH / 2) * 0.9;
+      const y1 = mid - mn * (laneH / 2) * 0.9;
+      ctx.fillRect(x, y0, Math.max(fullColW, 0.8), Math.max(y1 - y0, 0.8));
+    }
+  }
+
+  if (rbReviewVocalPeaks && rbReviewVocalBuf) {
+    const cols = rbReviewVocalPeaks.length / 2;
+    const vocalStartSec = rbReviewOffsetMs / 1000;
+    const fullColW = (rbReviewVocalBuf.duration / cols / visibleSec) * w;
+    const mid = laneH + laneH / 2;
+    ctx.fillStyle = 'rgba(124,196,255,.9)';
+    for (let c = 0; c < cols; c++) {
+      const x = rbReviewTimeToX(vocalStartSec + (c / cols) * rbReviewVocalBuf.duration, w);
+      if (x + fullColW < 0 || x > w) continue;
+      const mn = rbReviewVocalPeaks[c * 2], mx = rbReviewVocalPeaks[c * 2 + 1];
+      const y0 = mid - mx * (laneH / 2) * 0.9;
+      const y1 = mid - mn * (laneH / 2) * 0.9;
+      ctx.fillRect(x, y0, Math.max(fullColW, 0.8), Math.max(y1 - y0, 0.8));
+    }
+  }
+
+  // Keep the playhead in view during playback - jump the window forward
+  // by a full page when it would otherwise scroll off the right edge,
+  // rather than redrawing every frame with the line pinned to the edge.
+  const curTime = rbReviewCurrentTime();
+  if (rbReviewPlaying) {
+    if (curTime > rbReviewScrollSec + visibleSec || curTime < rbReviewScrollSec) {
+      rbReviewScrollSec = curTime;
+      rbReviewClampScroll();
+      rbReviewSyncPanUI();
+    }
+  }
+
+  if (rbGraphModeActive && rbGraphContour && rbGraphEditedMidi) {
+    rbPaintGraphOverlay(ctx, w, h, visibleSec);
+  }
+
+  ctx.fillStyle = 'rgba(255,255,255,.9)';
+  const phX = rbReviewTimeToX(curTime, w);
+  if (phX >= -2 && phX <= w + 2) ctx.fillRect(Math.max(0, Math.min(w - 1.5, phX)), 0, 1.5, h);
+
+  const timeEl = document.getElementById('rb-review-time');
+  if (timeEl) timeEl.textContent = fmt2time(curTime) + ' / ' + fmt2time(rbReviewDuration);
+}
+
+function rbGraphMidiToY(midi, h) {
+  const clamped = Math.max(rbGraphMinMidi, Math.min(rbGraphMaxMidi, midi));
+  const span = Math.max(1, rbGraphMaxMidi - rbGraphMinMidi);
+  const frac = (clamped - rbGraphMinMidi) / span;
+  return h - frac * h; // higher pitch draws higher on screen
+}
+function rbGraphYToMidi(y, h) {
+  const span = Math.max(1, rbGraphMaxMidi - rbGraphMinMidi);
+  const frac = 1 - Math.max(0, Math.min(1, y / h));
+  return rbGraphMinMidi + frac * span;
+}
+
+// Piano-roll-style gridlines (octave lines a touch brighter than the
+// rest) plus the detected pitch contour (dim reference) and the edited
+// target curve (bright, what will actually be applied) - all mapped
+// through the SAME rbReviewTimeToX the waveforms use, so it stays lined
+// up under any zoom/pan state.
+function rbPaintGraphOverlay(ctx, w, h, visibleSec) {
+  ctx.save();
+  ctx.fillStyle = 'rgba(10,14,20,.55)';
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.lineWidth = 1;
+  for (let m = Math.ceil(rbGraphMinMidi); m <= Math.floor(rbGraphMaxMidi); m++) {
+    const y = rbGraphMidiToY(m, h);
+    ctx.strokeStyle = (m % 12 === 0) ? 'rgba(255,255,255,.16)' : 'rgba(255,255,255,.05)';
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+  }
+
+  const contour = rbGraphContour, edited = rbGraphEditedMidi;
+  if (contour && edited && contour.length) {
+    ctx.strokeStyle = 'rgba(255,255,255,.35)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    let started = false;
+    for (let f = 0; f < contour.length; f++) {
+      const x = rbReviewTimeToX(contour[f].tSec, w);
+      if (x < -4 || x > w + 4) { started = false; continue; }
+      const y = rbGraphMidiToY(contour[f].midi, h);
+      if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
+    }
+    ctx.stroke();
+
+    ctx.strokeStyle = 'var(--accent, #7cc4ff)';
+    ctx.strokeStyle = '#7cc4ff';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    started = false;
+    for (let f = 0; f < edited.length; f++) {
+      const x = rbReviewTimeToX(contour[f].tSec, w);
+      if (x < -4 || x > w + 4) { started = false; continue; }
+      const y = rbGraphMidiToY(edited[f], h);
+      if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+async function rbToggleGraphMode() {
+  if (!rbReviewActive || !rbReviewVocalBuf) return;
+  rbGraphModeActive = !rbGraphModeActive;
+  const btn = document.getElementById('rb-graph-toggle');
+  if (btn) { btn.classList.toggle('active', rbGraphModeActive); btn.setAttribute('aria-pressed', rbGraphModeActive ? 'true' : 'false'); }
+  const row = document.getElementById('rb-graph-row');
+  if (row) row.classList.toggle('hidden', !rbGraphModeActive);
+  if (rbGraphModeActive && !rbGraphContour && !rbGraphAnalyzing) {
+    await rbGraphExtractContour();
+  }
+  rbPaintReview();
+}
+
+// Runs the offline autocorrelation pitch detector across the whole
+// captured vocal in RB_GRAPH_HOP_SEC hops, building the editable
+// contour. Chunked with a periodic yield (rather than one long
+// synchronous loop) so a longer take doesn't freeze the UI while
+// analyzing, and token-guarded the same way rbEnterReview's own
+// beat-waveform fetch is, so leaving/re-recording mid-analysis abandons
+// this cleanly instead of writing into a review session that's moved on.
+async function rbGraphExtractContour() {
+  if (!rbReviewVocalBuf || rbGraphAnalyzing) return;
+  rbGraphAnalyzing = true;
+  const myToken = rbReviewToken;
+  rbGraphOriginalVocalBuf = rbReviewVocalBuf;
+  rbGraphOriginalVocalBlob = rbReviewVocalBlob;
+  rbSetReviewStatus(t('rbGraphAnalyzing'));
+  const buf = rbReviewVocalBuf;
+  const sr = buf.sampleRate;
+  const ch0 = buf.getChannelData(0);
+  const hopLen = Math.max(1, Math.round(sr * RB_GRAPH_HOP_SEC));
+  const winLen = Math.max(hopLen, Math.round(sr * 0.04));
+  const nFrames = Math.max(1, Math.floor(buf.length / hopLen));
+  const contour = new Array(nFrames);
+  let lastHz = 220;
+  const win = new Float32Array(winLen);
+  for (let f = 0; f < nFrames; f++) {
+    const center = f * hopLen + Math.floor(hopLen / 2);
+    const start = Math.max(0, Math.min(Math.max(0, buf.length - winLen), center - Math.floor(winLen / 2)));
+    for (let i = 0; i < winLen; i++) { const idx = start + i; win[i] = idx < buf.length ? ch0[idx] : 0; }
+    const pitch = rbGraphDetectPitch(win, sr);
+    const tSec = f * RB_GRAPH_HOP_SEC;
+    if (pitch) { lastHz = pitch.hz; contour[f] = { tSec, hz: pitch.hz, midi: rbGraphHzToMidi(pitch.hz), voiced: true }; }
+    else { contour[f] = { tSec, hz: lastHz, midi: rbGraphHzToMidi(lastHz), voiced: false }; }
+    if (f % 40 === 39) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (myToken !== rbReviewToken) { rbGraphAnalyzing = false; return; }
+    }
+  }
+  if (myToken !== rbReviewToken) { rbGraphAnalyzing = false; return; }
+  rbGraphContour = contour;
+  rbGraphEditedMidi = new Float32Array(nFrames);
+  for (let f = 0; f < nFrames; f++) rbGraphEditedMidi[f] = contour[f].midi;
+  let minM = Infinity, maxM = -Infinity;
+  for (const c of contour) { if (c.voiced) { minM = Math.min(minM, c.midi); maxM = Math.max(maxM, c.midi); } }
+  if (!isFinite(minM)) { minM = 55; maxM = 67; }
+  rbGraphMinMidi = Math.floor(minM) - 4;
+  rbGraphMaxMidi = Math.ceil(maxM) + 4;
+  rbGraphAnalyzing = false;
+  rbSetReviewStatus('');
+  rbPaintReview();
+}
+
+// Discards edits and, if they'd already been Applied (baked into
+// rbReviewVocalBuf/Blob), restores the untouched original capture too -
+// the cached rbGraphOriginalVocalBuf/Blob mean this never needs to
+// re-run the resynthesis or lose the true original to a previous edit.
+function rbGraphReset() {
+  // Blocked while an Apply is crunching (it now snapshots the curve at
+  // start, so this can no longer corrupt that in-flight result - this
+  // guard is purely so Reset doesn't silently do nothing useful/visible
+  // while the button underneath it is disabled anyway).
+  if (!rbGraphContour || !rbGraphEditedMidi || rbGraphApplying) return;
+  for (let f = 0; f < rbGraphEditedMidi.length; f++) rbGraphEditedMidi[f] = rbGraphContour[f].midi;
+  if (rbGraphApplied && rbGraphOriginalVocalBuf) {
+    rbReviewVocalBuf = rbGraphOriginalVocalBuf;
+    rbReviewVocalBlob = rbGraphOriginalVocalBlob;
+    rbReviewVocalPeaks = rbComputePeaks(rbReviewVocalBuf, RB_REVIEW_COLUMNS);
+    rbGraphApplied = false;
+    rbReviewStopSources();
+  }
+  rbPaintReview();
+}
+
+// Offline resynthesis: whitens the ORIGINAL captured vocal through LPC
+// coefficients computed from itself (real formants), pitch-shifts the
+// resulting excitation by a per-sample ratio interpolated from the
+// edited curve (rbGraphEditedMidi vs. the detected contour), then
+// resynthesizes through the same original coefficients - the exact same
+// three-step pipeline autotune-worklet.js's real-time engine runs when
+// Formant Correction is on, just driven by a hand-drawn curve instead of
+// a Key/Scale and run once over the whole buffer instead of per sample
+// in a live callback.
+async function rbGraphApplyEdits() {
+  if (!rbGraphContour || !rbGraphEditedMidi || !rbGraphOriginalVocalBuf || rbGraphApplying) return;
+  const myToken = rbReviewToken;
+  rbGraphApplying = true;
+  const btn = document.getElementById('rb-graph-apply');
+  if (btn) btn.disabled = true;
+  rbSetReviewButtonsDisabled(true); // Discard/Re-record/Save must not run ahead of this multi-second crunch
+  rbSetReviewStatus(t('rbGraphApplying'));
+  await new Promise((resolve) => setTimeout(resolve, 0)); // let the status text paint before the synchronous crunch below
+  try {
+    const src = rbGraphOriginalVocalBuf;
+    const sr = src.sampleRate;
+    const nCh = src.numberOfChannels;
+    const n = src.length;
+    const hopLen = Math.max(1, Math.round(sr * RB_GRAPH_HOP_SEC));
+    // Snapshot the edited curve rather than holding a live reference -
+    // found by adversarial review: nothing stops the user from dragging
+    // the curve again, or clicking Reset, WHILE this multi-second crunch
+    // is still running in the same review session (the token guard below
+    // only catches a DIFFERENT session replacing this one, not further
+    // edits within this same one) - without a snapshot, samples already
+    // resynthesized would reflect the old curve and samples processed
+    // after the further edit would reflect the new one, committing a
+    // discontinuous hybrid as the final "applied" take.
+    const contour = rbGraphContour, edited = Float32Array.from(rbGraphEditedMidi);
+
+    const outBuf = rbAudioCtx.createBuffer(nCh, n, sr);
+    const order = RB_GRAPH_LPC_ORDER;
+    for (let ch = 0; ch < nCh; ch++) {
+      const inData = src.getChannelData(ch);
+      // LPC coefficients from the WHOLE-CHANNEL signal, computed once
+      // every ~4 hops (a "block") from a window centered on that block -
+      // gives formants a chance to track a moving vowel without
+      // recomputing on every single 20ms hop. Unlike the real-time
+      // engine (which can only glide forward from whatever coefficients
+      // it already has, one direction, causally), this runs offline with
+      // the whole take available up front, so instead of snapping to a
+      // new block's coefficients every ~80ms (audible as a click at each
+      // boundary), every SAMPLE interpolates between the two nearest
+      // block centers - smooth by construction, no glide time-constant
+      // to tune.
+      const lpcWin = Math.max(hopLen * 4, Math.round(sr * 0.04));
+      const lpcEvery = hopLen * 4;
+      const blockCenters = [];
+      const blockCoeffs = [];
+      let lastGood = new Float64Array(order + 1);
+      for (let center = 0; center < n; center += lpcEvery) {
+        const start = Math.max(0, Math.min(Math.max(0, n - lpcWin), center - Math.floor(lpcWin / 2)));
+        const block = new Float32Array(lpcWin);
+        for (let k = 0; k < lpcWin; k++) { const idx = start + k; block[k] = idx < n ? inData[idx] : 0; }
+        const c = rbGraphComputeLPC(block, order);
+        if (c) lastGood = c;
+        blockCenters.push(center);
+        blockCoeffs.push(lastGood);
+        if (blockCenters.length % 200 === 199) await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      if (!blockCenters.length) { blockCenters.push(0); blockCoeffs.push(lastGood); }
+
+      const shifter = new RBGraphPitchShifter(sr, 1.0, 25);
+      const coeffs = new Float64Array(order + 1);
+      const historyIn = new Float64Array(order), historyOut = new Float64Array(order);
+      const outData = outBuf.getChannelData(ch);
+      let bi = 0;
+      for (let i = 0; i < n; i++) {
+        while (bi < blockCenters.length - 2 && i >= blockCenters[bi + 1]) bi++;
+        const c0 = blockCoeffs[bi], c1 = blockCoeffs[Math.min(bi + 1, blockCoeffs.length - 1)];
+        const t0 = blockCenters[bi], t1 = blockCenters[Math.min(bi + 1, blockCenters.length - 1)];
+        const frac = t1 > t0 ? Math.max(0, Math.min(1, (i - t0) / (t1 - t0))) : 0;
+        for (let k = 1; k <= order; k++) coeffs[k] = c0[k] + (c1[k] - c0[k]) * frac;
+
+        const tSec = i / sr;
+        const frame = Math.max(0, Math.min(contour.length - 1, Math.floor(tSec / RB_GRAPH_HOP_SEC)));
+        const detectedHz = contour[frame].hz;
+        const targetHz = rbGraphMidiToHz(edited[frame]);
+        const ratio = detectedHz > 1 ? Math.max(0.25, Math.min(4, targetHz / detectedHz)) : 1;
+
+        const x = inData[i];
+        let predIn = 0;
+        for (let k = 1; k <= order; k++) predIn += coeffs[k] * historyIn[k - 1];
+        let residual = x - predIn;
+        // Safety clamp, same reasoning and same limit as autotune-
+        // worklet.js's RB_AT_SAFETY_LIMIT: the resynthesis filter below
+        // is recursive (its own past output feeds back into itself), so
+        // a divergence compounds sample over sample instead of self-
+        // correcting - measured directly, an unguarded version of this
+        // exact pipeline could overshoot input amplitude by 1000x+ on a
+        // silence-to-voice onset. Detect it and reset both history rings
+        // rather than let a bad sample ring out as a scream in the saved
+        // file.
+        if (!isFinite(residual) || Math.abs(residual) > 1.5) {
+          historyIn.fill(0); historyOut.fill(0);
+          residual = Math.max(-1, Math.min(1, x));
+        }
+        for (let k = order - 1; k > 0; k--) historyIn[k] = historyIn[k - 1];
+        historyIn[0] = x;
+
+        shifter.writeSample(residual);
+        const shiftedResidual = shifter.readSample(ratio);
+
+        let predOut = 0;
+        for (let k = 1; k <= order; k++) predOut += coeffs[k] * historyOut[k - 1];
+        let y = shiftedResidual + predOut;
+        if (!isFinite(y) || Math.abs(y) > 1.5) {
+          historyIn.fill(0); historyOut.fill(0);
+          y = Math.max(-1, Math.min(1, shiftedResidual));
+        }
+        for (let k = order - 1; k > 0; k--) historyOut[k] = historyOut[k - 1];
+        historyOut[0] = y;
+        outData[i] = y;
+        if ((i & 65535) === 65535) await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    }
+
+    if (myToken !== rbReviewToken) return; // superseded (discard/re-record/tab-leave) while this was crunching - the buffer we built belongs to a review session that no longer exists, don't let it land on whatever replaced it
+    const wavArrayBuf = encodeWAV(outBuf);
+    rbReviewVocalBuf = outBuf;
+    rbReviewVocalBlob = new Blob([wavArrayBuf], { type: 'audio/wav' });
+    rbReviewVocalPeaks = rbComputePeaks(outBuf, RB_REVIEW_COLUMNS);
+    rbGraphApplied = true;
+    rbReviewStopSources();
+    rbSetReviewStatus('');
+  } catch (e) {
+    if (myToken === rbReviewToken) {
+      rbSetReviewStatus('');
+      showAppNotification(t('rbGraphApplyFailed'), 'err');
+    }
+  } finally {
+    rbGraphApplying = false;
+    if (btn) btn.disabled = false;
+    // Always, not just "if this session is still current" - matches
+    // rbReviewSave()'s own finally: a completed (or abandoned) Apply
+    // must never be the reason a DIFFERENT, newer review session's
+    // buttons stay stuck disabled.
+    rbSetReviewButtonsDisabled(false);
+    if (myToken === rbReviewToken) rbPaintReview();
+  }
+}
+
+function rbReviewSyncZoomUI() {
+  const lvl = document.getElementById('rb-review-zoom-lvl');
+  if (lvl) lvl.textContent = rbReviewZoom + 'x';
+  const outBtn = document.getElementById('rb-review-zoom-out');
+  const inBtn = document.getElementById('rb-review-zoom-in');
+  if (outBtn) outBtn.disabled = rbReviewZoom <= RB_REVIEW_ZOOM_LEVELS[0];
+  if (inBtn) inBtn.disabled = rbReviewZoom >= RB_REVIEW_ZOOM_LEVELS[RB_REVIEW_ZOOM_LEVELS.length - 1];
+  rbReviewSyncPanUI();
+}
+
+function rbReviewSyncPanUI() {
+  const wrap = document.getElementById('rb-review-pan-row');
+  const pan = document.getElementById('rb-review-pan');
+  if (wrap) wrap.classList.toggle('hidden', rbReviewZoom <= 1);
+  if (pan) {
+    pan.max = String(Math.max(0, Math.round(rbReviewMaxScroll() * 10)));
+    pan.value = String(Math.round(rbReviewScrollSec * 10));
+  }
+}
+
+function rbReviewZoomStep(dir) {
+  const i = RB_REVIEW_ZOOM_LEVELS.indexOf(rbReviewZoom);
+  const next = RB_REVIEW_ZOOM_LEVELS[Math.max(0, Math.min(RB_REVIEW_ZOOM_LEVELS.length - 1, (i < 0 ? 0 : i) + dir))];
+  if (next === rbReviewZoom) return;
+  // Keep the playhead roughly centered in the new view instead of
+  // jumping back to the start of the timeline on every zoom change.
+  const center = rbReviewCurrentTime();
+  rbReviewZoom = next;
+  rbReviewScrollSec = center - rbReviewVisibleSec() / 2;
+  rbReviewClampScroll();
+  rbReviewSyncZoomUI();
+  rbPaintReview();
+}
+function rbReviewZoomIn() { rbReviewZoomStep(1); }
+function rbReviewZoomOut() { rbReviewZoomStep(-1); }
+function rbReviewZoomFit() {
+  rbReviewZoom = 1;
+  rbReviewScrollSec = 0;
+  rbReviewSyncZoomUI();
+  rbPaintReview();
+}
+function rbReviewPanInput(v) {
+  rbReviewScrollSec = (parseFloat(v) || 0) / 10;
+  rbReviewClampScroll();
+  rbPaintReview();
+}
+
+// Pointer-drag on the vocal lane moves it in time; a click anywhere else
+// (or a press-without-drag anywhere) seeks the shared playhead instead.
+function rbWireReviewDrag() {
+  const cv = document.getElementById('rb-review-canvas');
+  if (!cv || cv._rbWired) return;
+  cv._rbWired = true;
+  let dragging = false, isVocalDrag = false, startX = 0, startOffsetMs = 0, moved = false, pid = null;
+  let graphDragging = false, graphLastFrame = -1;
+
+  // Paints rbGraphEditedMidi for every frame between the previous drag
+  // position and this one (not just the single frame under the cursor
+  // right now) - without this, a fast drag leaves gaps of un-edited
+  // frames between two pointermove events, which shows up as the curve
+  // snapping back to the original contour in short flashes along the
+  // drag path.
+  function graphPaintAt(clientX, clientY) {
+    if (!rbGraphEditedMidi || !rbGraphContour) return;
+    const rect = cv.getBoundingClientRect();
+    const w = rect.width, h = rect.height;
+    const tSec = rbReviewXToTime(clientX - rect.left, w);
+    const midi = rbGraphYToMidi(clientY - rect.top, h);
+    const frame = Math.max(0, Math.min(rbGraphEditedMidi.length - 1, Math.round(tSec / RB_GRAPH_HOP_SEC)));
+    if (graphLastFrame < 0 || Math.abs(frame - graphLastFrame) <= 1) {
+      rbGraphEditedMidi[frame] = midi;
+    } else {
+      const lo = Math.min(graphLastFrame, frame), hi = Math.max(graphLastFrame, frame);
+      const midiAtLo = graphLastFrame < frame ? rbGraphEditedMidi[graphLastFrame] : midi;
+      const midiAtHi = graphLastFrame < frame ? midi : rbGraphEditedMidi[graphLastFrame];
+      for (let f = lo; f <= hi; f++) {
+        const t = hi === lo ? 0 : (f - lo) / (hi - lo);
+        rbGraphEditedMidi[f] = midiAtLo + (midiAtHi - midiAtLo) * t;
+      }
+    }
+    graphLastFrame = frame;
+    rbPaintReview();
+  }
+
+  cv.addEventListener('pointerdown', (e) => {
+    if (!rbReviewDuration) return;
+    if (rbGraphModeActive) {
+      if (!rbGraphEditedMidi || rbGraphApplying) return; // still analyzing, nothing captured yet, or an Apply crunch is using the (now-snapshotted) curve
+      graphDragging = true;
+      graphLastFrame = -1;
+      pid = e.pointerId;
+      try { cv.setPointerCapture(pid); } catch (err) {}
+      graphPaintAt(e.clientX, e.clientY);
+      return;
+    }
+    const rect = cv.getBoundingClientRect();
+    const localY = e.clientY - rect.top;
+    const inVocalLane = localY > rect.height / 2;
+    const w = rect.width;
+    const startPx = rbReviewTimeToX(rbReviewOffsetMs / 1000, w);
+    const spanPx = rbReviewVocalBuf ? (rbReviewVocalBuf.duration / rbReviewVisibleSec()) * w : 0;
+    const localX = e.clientX - rect.left;
+    const overVocal = inVocalLane && rbReviewVocalBuf && localX >= startPx - 8 && localX <= startPx + spanPx + 8;
+    dragging = true;
+    isVocalDrag = !!overVocal;
+    startX = e.clientX;
+    startOffsetMs = rbReviewOffsetMs;
+    moved = false;
+    pid = e.pointerId;
+    try { cv.setPointerCapture(pid); } catch (err) {}
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (graphDragging) { graphPaintAt(e.clientX, e.clientY); return; }
+    if (!dragging) return;
+    const dx = e.clientX - startX;
+    if (Math.abs(dx) > 2) moved = true;
+    if (!isVocalDrag) return;
+    const rect = cv.getBoundingClientRect();
+    // Zoomed-in drag moves the SAME number of screen pixels for a much
+    // smaller time delta - dividing by the visible window (not the full
+    // duration) is what makes higher zoom mean finer-grained dragging.
+    const deltaSec = (dx / rect.width) * rbReviewVisibleSec();
+    const newOffsetMs = Math.max(0, Math.round(startOffsetMs + deltaSec * 1000));
+    if (newOffsetMs !== rbReviewOffsetMs) {
+      rbReviewOffsetMs = newOffsetMs;
+      rbReviewDuration = Math.max(
+        rbReviewBeatBuf ? rbReviewBeatBuf.duration : rbReviewDuration,
+        (rbReviewOffsetMs / 1000) + (rbReviewVocalBuf ? rbReviewVocalBuf.duration : 0)
+      );
+      // Dragging the vocal far enough right can extend the timeline past
+      // what it was when the pan slider's range was last set - keep that
+      // bound (and, for a screen reader, its reported range) in sync
+      // instead of only refreshing it on the next zoom change or replay.
+      rbReviewSyncPanUI();
+      rbPaintReview();
+    }
+  });
+  const endDrag = (e) => {
+    if (graphDragging) {
+      graphDragging = false;
+      graphLastFrame = -1;
+      try { cv.releasePointerCapture(pid); } catch (err) {}
+      return;
+    }
+    if (!dragging) return;
+    dragging = false;
+    try { cv.releasePointerCapture(pid); } catch (err) {}
+    if (!isVocalDrag && !moved) rbReviewSeekClick(e);
+    isVocalDrag = false;
+  };
+  cv.addEventListener('pointerup', endDrag);
+  cv.addEventListener('pointercancel', endDrag);
+  window.addEventListener('resize', () => { if (rbReviewActive) rbPaintReview(); });
+}
+
+// "Make it so u can individually grab the stem from the vocal or beat
+// after recording" - an artist drafting a topline over a beat, meaning
+// to build the real arrangement in FL Studio or another DAW afterward,
+// needs the two pieces separately, not just the mixed-together preview.
+// Both stems already exist independently at review time (that's exactly
+// what drives the separate Beat/Vocal faders above) - this just exposes
+// grabbing each one on its own, before or instead of committing to a
+// single mixed-down file.
+function rbSafeFilenamePart(s) {
+  return String(s || '').replace(/[^\w\-]+/g, '_').replace(/^_+|_+$/g, '') || 'topline';
+}
+function rbDownloadVocalStem() {
+  if (!rbReviewVocalBlob) { showAppNotification(t('rbStemNoVocal'), 'err'); return; }
+  try {
+    const url = URL.createObjectURL(rbReviewVocalBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = rbSafeFilenamePart(rbReviewBeatTrack && rbReviewBeatTrack.title) + '_vocal.wav';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // Objection URLs aren't reclaimed by GC on their own - revoke it
+    // once the download has had time to actually start, not immediately
+    // (revoking too early can cancel an in-flight save on some setups).
+    setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) {} }, 4000);
+    showAppNotification(t('rbStemVocalSaved'), 'done');
+  } catch (e) {
+    showAppNotification(t('rbStemVocalFailed') + ': ' + e.message, 'err');
+  }
+}
+function rbRevealBeatStem() {
+  const p = rbReviewBeatTrack && rbReviewBeatTrack.file_path;
+  if (!p) { showAppNotification(t('rbStemNoBeat'), 'err'); return; }
+  if (!api.showInFolder) { showAppNotification(t('rbStemNoBeat'), 'err'); return; }
+  // The beat is already a real file on disk (whatever was downloaded to
+  // build this take) - no copy/re-encode needed, just surface it in the
+  // OS file browser so it can be dragged straight into a DAW, same as
+  // any other file on the user's machine.
+  api.showInFolder(p);
+  showAppNotification(t('rbStemBeatRevealed'), 'done');
+}
+async function rbReviewSave() {
+  // Defense in depth alongside the button-disable in rbGraphApplyEdits() -
+  // that disables the Save button in the UI while a pitch-edit crunch is
+  // running, this stops the underlying function too, so a click that
+  // slipped in before the disable took effect can't upload the pre-edit
+  // audio while the user believes their edits were included.
+  if (!rbReviewVocalBlob || !rbReviewBeatTrack || rbSaving || rbGraphApplying) return;
+  rbSaving = true;
+  rbReviewPause();
+  const beatForMix = rbReviewBeatTrack;
+  const offsetMs = rbReviewOffsetMs;
+  const blob = rbReviewVocalBlob;
+  const beatGain = rbReviewBeatGain;
+  const vocalGain = rbReviewVocalGain;
+  const myToken = rbReviewToken;
+  rbSetReviewStatus(t('rbMixing'));
+  rbSetReviewButtonsDisabled(true);
+  try {
+    const form = new FormData();
+    form.append('vocal', blob, 'topline.wav');
+    form.append('beatPath', beatForMix.file_path);
+    form.append('beatId', beatForMix.id || '');
+    form.append('offsetMs', String(offsetMs));
+    form.append('beatGain', String(beatGain));
+    form.append('vocalGain', String(vocalGain));
+    const r = await fetch(API + '/random-beats/mixdown', { method: 'POST', body: form });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'mixdown failed');
+    // If the user Re-recorded or Discarded while this upload was in
+    // flight, rbReviewToken has already moved on - the mixdown still
+    // saved successfully (it's in their history either way), but this
+    // stale call must NOT touch a review session that isn't its own:
+    // no rbExitReview() (would blow away the newer take's state) and no
+    // status text over a panel that's now showing something else.
+    if (myToken === rbReviewToken) {
+      rbSetReviewStatus('');
+      rbExitReview();
+    }
+    showAppNotification(t('rbMixSaved').replace('{f}', j.filename), 'done', () => {
+      loadHistory().then(() => {
+        const row = (histData || []).find(h => h.id === j.historyId);
+        if (row) playTrack(row, 'random');
+      });
+    }, 8000);
+    if (typeof loadHistory === 'function') loadHistory().catch(() => {});
+  } catch (e) {
+    if (myToken === rbReviewToken) {
+      rbSetReviewStatus('');
+      showAppNotification(t('rbMixFailed').replace('{e}', e.message), 'err');
+    }
+  } finally {
+    rbSaving = false;
+    // Always, not just "if this is still the current session" - a
+    // completed save should never be the reason a future review's
+    // buttons stay disabled, whether that's this same session (now
+    // hidden) or a newer one that's since taken its place.
+    rbSetReviewButtonsDisabled(false);
+  }
+}
+
+function rbSetReviewButtonsDisabled(disabled) {
+  ['rb-review-save', 'rb-review-rerecord', 'rb-review-discard'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = disabled;
+  });
+}
+
+function rbReviewRerecord() {
+  if (rbSaving) return; // a save is committing this take right now - don't pull it out from under itself
+  rbExitReview();
+  rbStartRecording();
+}
+
+function rbReviewDiscard() {
+  if (rbSaving) return;
+  rbExitReview();
+}
+
+// ── First-run Stockpile setup ────────────────────────────────────────────
+// New users have no Stockpile root, which means "download to Stockpile"
+// has nowhere to put anything. Rather than leaving that switch silently
+// unreachable, offer to set the root once, right after the app is ready.
+// Skipping just means "ask me later" - it does not turn anything on.
+function rbMaybeShowFirstRunSetup() {
+  try {
+    if (stockpileFolder) return;
+    if (localStorage.getItem('fp_setup_seen') === '1') return;
+  } catch (e) { return; }
+  if (document.getElementById('first-run-modal')) return;
+  const modal = document.createElement('div');
+  modal.className = 'setup-modal';
+  modal.id = 'first-run-modal';
+  modal.style.display = 'flex';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-label', t('setupStockTitle'));
+  modal.innerHTML =
+    '<div class="setup-card" style="max-width:460px;padding:26px">' +
+      '<div style="font-size:17px;font-weight:700;margin-bottom:10px">' + escapeHtml(t('setupStockTitle')) + '</div>' +
+      '<div style="font-size:13.5px;color:var(--muted);line-height:1.55;margin-bottom:18px">' + escapeHtml(t('setupStockBody')) + '</div>' +
+      '<div class="row" style="justify-content:flex-end;gap:8px">' +
+        '<button class="btn sm" data-dismiss onclick="rbDismissFirstRunSetup()">' + escapeHtml(t('setupStockSkip')) + '</button>' +
+        '<button class="btn sm pri" onclick="rbPickFirstRunFolder()">' + escapeHtml(t('setupStockChoose')) + '</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+  if (typeof trapFocus === 'function') trapFocus(modal);
+}
+
+function rbDismissFirstRunSetup() {
+  try { localStorage.setItem('fp_setup_seen', '1'); } catch {}
+  const m = document.getElementById('first-run-modal');
+  if (m) m.remove();
+}
+
+async function rbPickFirstRunFolder() {
+  const folder = await api.pickFolder();
+  if (folder) {
+    stockpileFolder = folder;
+    localStorage.setItem('fp_stockpile', folder);
+    // New Stockpile users default to downloading straight into it - one
+    // less manual move for the exact workflow they just opted into.
+    localStorage.setItem('freqphull.downloadToStockpile', '1');
+    const pathEl = document.getElementById('stockpile-path');
+    if (pathEl) pathEl.textContent = folder;
+    const toggle = document.getElementById('dl-to-stock-toggle');
+    if (toggle) toggle.checked = true;
+    syncPrefsToServer();
+    showAppNotification(t('setupStockDone'), 'done', null, 4000);
+  }
+  rbDismissFirstRunSetup();
 }
 
 // Initial volume load happens on first DOMContentLoaded

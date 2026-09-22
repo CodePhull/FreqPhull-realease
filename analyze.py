@@ -292,14 +292,48 @@ def _bpm_v11_correct(samples, sr, candidate_bpm):
     candidates = sorted(set(round(c, 1) for c in candidates))
 
     # ── Score each candidate ───────────────────────────────────────────
-    # Combine: kick agreement + snare agreement + tempo prior
+    # Combine: kick agreement + snare agreement + tempo prior.
+    #
+    # tempo_prior() used to be a discrete step function with hard cutoffs
+    # at 70/85/100/170/185/195 BPM (0.85x up to 1.15x). A synthetic click-
+    # track diagnostic (known ground-truth BPM, so any error is
+    # unambiguously this mechanism's fault) found that hard-cutoff version
+    # deciding real octave errors on its own: a true 70 BPM candidate
+    # measuring at 69.9 (kick/snare agreement ~1.02, essentially perfect)
+    # lost to its exact double at 139.8 (agreement ~1.01, marginally
+    # LOWER) purely because 69.9 fell 0.1 BPM under the 70 threshold into
+    # the worst (0.85x) bucket while 139.8 landed in the best (1.15x) one
+    # - the same pattern recurred at 85, 90, 150, and 174 BPM.
+    #
+    # Two more aggressive rewrites were tried and both measured WORSE on
+    # the same diagnostic: narrowing the prior's overall range (0.97-1.03)
+    # fixed the boundary flips but measurably broke the ORIGINAL reason
+    # this prior exists (see the v11 docstring above, point 5) - sparse,
+    # syncopated patterns (trap-style kick-once-per-bar, snare-once-per-
+    # bar) are genuinely tempo-ambiguous from raw beat agreement alone,
+    # and a weak prior can no longer resolve that toward the common-tempo
+    # reading (25/36 correct -> 17/36). Gating the ORIGINAL-strength prior
+    # by how ambiguous the raw scores already were did not recover it
+    # either (18/36) - not enough of the real-world cases this prior needs
+    # to help with actually present as "close" in raw score even though
+    # they're genuinely tempo-ambiguous by construction.
+    #
+    # This version keeps the prior's ORIGINAL shape and strength exactly
+    # (same 1.15 flat top across 100-170 BPM, same 0.85 floor) - the fix
+    # is ONLY continuity: linearly tapering between those same values
+    # instead of jumping, using the function's own existing candidate
+    # bounds (55/215 BPM, already used above to build the candidate set)
+    # as the taper's outer edge instead of an arbitrary extra cutoff.
+    # This removes the boundary-flip failure mode (no more instantaneous
+    # jumps for a 0.1 BPM measurement difference to fall across) while
+    # preserving the exact tie-breaking strength the sparse-pattern case
+    # depends on.
     def tempo_prior(bpm):
-        # Bell curve centered at 130 BPM, soft penalty outside 80-180.
-        # Returns multiplier 0.85–1.15.
         if 100 <= bpm <= 170: return 1.15
-        if 85 <= bpm < 100 or 170 < bpm <= 185: return 1.05
-        if 70 <= bpm < 85 or 185 < bpm <= 195: return 0.95
-        return 0.85  # below 70 or above 195 — uncommon
+        edge = 100.0 if bpm < 100 else 170.0
+        bound = 55.0 if bpm < 100 else 215.0
+        frac = min(1.0, abs(bpm - edge) / abs(bound - edge))
+        return 1.15 - 0.30 * frac
 
     best_bpm = candidate_bpm
     best_score = -1.0
@@ -828,6 +862,85 @@ def multi_profile_vote(chroma12, is_edm=True):
             k=(NOTES[r],mode); scores[k]=scores.get(k,0.0)+pearson(chroma12,np.roll(prof,r))*wt/tw
     return sorted([(v,k[0],k[1]) for k,v in scores.items()],reverse=True)
 
+# ── Scale-family matching ──────────────────────────────────────────────────
+# Given the already-detected root note, identify which broader scale/mode
+# type (not just major/minor - harmonic minor, dorian, pentatonic, etc.)
+# the observed pitch-class content best matches, and what notes compose
+# it. This is deliberately downstream of, not a replacement for, the
+# major/minor decision above - detect_key() still decides the stored
+# key_note/key_mode exactly as before; this only adds informational
+# context on top: "this C minor track's harmonic content actually looks
+# closest to C Dorian" plus the literal note names, for the user to see
+# and use when writing a topline/melody in that key.
+#
+# Interval sets match RB_AT_SCALE_INTERVALS in renderer/app.js /
+# autotune-worklet.js exactly (the same tables the live-autotune piano
+# already uses to decide which notes are "in scale") so a scale named
+# here means the same thing it does everywhere else in the app.
+SCALE_INTERVALS = {
+    'Major':            [0,2,4,5,7,9,11],
+    'Natural Minor':    [0,2,3,5,7,8,10],
+    'Harmonic Minor':   [0,2,3,5,7,8,11],
+    'Melodic Minor':    [0,2,3,5,7,9,11],
+    'Dorian':           [0,2,3,5,7,9,10],
+    'Phrygian':         [0,1,3,5,7,8,10],
+    'Lydian':           [0,2,4,6,7,9,11],
+    'Mixolydian':       [0,2,4,5,7,9,10],
+    'Locrian':          [0,1,3,5,6,8,10],
+    'Major Pentatonic': [0,2,4,7,9],
+    'Minor Pentatonic': [0,3,5,7,10],
+}
+
+def _scale_template(root_idx, intervals):
+    t = np.zeros(12)
+    for iv in intervals: t[(root_idx + iv) % 12] = 1.0
+    return t
+
+def match_scale_family(chroma12, root_idx):
+    """Rank every scale type rooted on root_idx (0=C..11=B) against the
+    observed chroma. Score is SHAPE correlation (Pearson vs a flat in-
+    scale/out-of-scale template) TIMES ENERGY COVERAGE (what fraction of
+    the observed chroma's total energy falls inside this scale's notes).
+    Neither alone is enough - measured directly on synthetic melody-line
+    content (weighted toward tonic/3rd/5th, the same tonal bias real
+    melodies have, plus drum noise mixed in): pure correlation alone
+    systematically favors pentatonic (5-note) matches over the true
+    7-note scale whenever a melody emphasizes a consonant subset of the
+    scale (correct-scale accuracy dropped to 63% under that stress test,
+    misreading e.g. genuine Dorian content as Minor Pentatonic just
+    because 2 of Dorian's 7 notes were used less) - because a flat
+    template's correlation rewards uniform energy across ITS OWN notes,
+    and a shorter template is trivially more "uniform" over fewer bins.
+    Pure coverage alone over-corrects the other way (72%), since a wider
+    template (e.g. all 12 notes) trivially "covers" everything. The
+    product of both was measured at 84% on the same stress test (100% on
+    clean/realistic full-chord content) - correlation still requires the
+    right SHAPE, coverage still requires the scale to actually contain
+    the energy that's really being used, and neither can win on its own
+    by being merely wide or merely narrow.
+    """
+    total = float(np.sum(chroma12)) + 1e-12
+    scores = []
+    for name, iv in SCALE_INTERVALS.items():
+        tmpl = _scale_template(root_idx, iv)
+        corr = pearson(chroma12, tmpl)
+        coverage = float(np.sum(chroma12[tmpl > 0]) / total)
+        scores.append((corr * max(0.0, coverage), name, iv))
+    return sorted(scores, key=lambda x: -x[0])
+
+def scale_family_result(chroma12, root_note, top_n=3):
+    """Returns the top_n closest scale-family matches for root_note, each
+    with its literal composing note names (root_note first, then in
+    ascending interval order) - the actual "what keys compose them"
+    answer, not just a scale name."""
+    root_idx = NOTES.index(root_note)
+    ranked = match_scale_family(chroma12, root_idx)
+    out = []
+    for score, name, iv in ranked[:max(1, top_n)]:
+        notes = [NOTES[(root_idx + s) % 12] for s in iv]
+        out.append({'name': name, 'notes': notes, 'score': round(float(max(0.0, score)), 3)})
+    return out
+
 # ── ML model ──────────────────────────────────────────────────────────────────
 _KEY_MODEL = None
 def _load_key_model():
@@ -977,7 +1090,7 @@ def detect_key(samples, sr):
         if agr>=0.75: conf=min(1.0,conf*1.08)
         elif agr<0.4:  conf=min(conf,0.35)
 
-    return best_k,best_m,round(float(conf),3),top3,is_melodic,key_sections
+    return best_k,best_m,round(float(conf),3),top3,is_melodic,key_sections,chroma12
 
 # ── Spectral balance ──────────────────────────────────────────────────────────
 def spectral_balance(samples,sr):
@@ -1404,7 +1517,7 @@ def analyze_stem(wav_path):
             # return None values so the renderer hides them.
             return {'bpm': None, 'key': None, 'mode': None, 'silent': True}
         bpm = detect_bpm(mono, sr)
-        key, mode, conf, _candidates, _is_melodic, _sections = detect_key(mono, sr)
+        key, mode, conf, _candidates, _is_melodic, _sections, _chroma12 = detect_key(mono, sr)
         camelot = CAMELOT.get(f'{key} {mode}', '—')
         return {
             'bpm': bpm,
@@ -1412,6 +1525,7 @@ def analyze_stem(wav_path):
             'mode': mode,
             'key_confidence': conf,
             'camelot': camelot,
+            'scale_family': scale_family_result(_chroma12, key),
         }
     except Exception as e:
         return {'bpm': None, 'key': None, 'error': str(e)}
@@ -1421,7 +1535,8 @@ def analyze(wav_path, force_sections=False):
     channels,sr=read_wav(wav_path);mono=np.mean(channels,axis=0)
     lufs_i,lufs_st,lufs_mom,lra=compute_lufs(channels,sr)
     tp=true_peak_dbtp(channels,sr);bpm=detect_bpm(mono,sr)
-    key,mode,conf,key_candidates,is_melodic,key_sections=detect_key(mono,sr)
+    key,mode,conf,key_candidates,is_melodic,key_sections,chroma12=detect_key(mono,sr)
+    scale_family=scale_family_result(chroma12,key)
     sb=spectral_balance(mono,sr);dr=dynamic_range(mono,sr)
     camelot=CAMELOT.get(f'{key} {mode}','—');sections=section_analysis(mono,sr)
     duration=round(len(mono)/sr,2)
@@ -1436,7 +1551,7 @@ def analyze(wav_path, force_sections=False):
     return {'beat_switch':beat_switch,'lufs_integrated':lufs_i,'lufs_short_term':lufs_st,'lufs_momentary':lufs_mom,
             'loudness_range':lra,'true_peak_dbtp':tp,'peak_dbfs':peak_dbfs,
             'crest_factor_db':crest,'bpm':bpm,'key':key,'mode':mode,
-            'key_confidence':conf,'key_candidates':key_candidates,'key_sections':key_sections,
+            'key_confidence':conf,'key_candidates':key_candidates,'key_sections':key_sections,'scale_family':scale_family,
             'is_melodic':bool(is_melodic),'camelot':camelot,'dynamic_range':dr,
             'spectral_balance':sb,'sections':sections,'duration':duration,
             'sample_rate':sr,'channels':len(channels),'mood_profile':mood,

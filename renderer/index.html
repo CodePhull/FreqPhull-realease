@@ -71,7 +71,7 @@
   --z-splash: 100000;
   --border:#1e1e1e;--border2:#2a2a2a;--border3:#3a3a3a;
   --wbg:#161616;--wbg2:#1e1e1e;
-  --red:#e84040;--green:#4caf50;--r:6px;--rl:10px;
+  --red:#e84040;--green:#4caf50;--amber:#f59e0b;--r:6px;--rl:10px;
 
   /* ── Motion design tokens ──────────────────────────────────────────────
    * Single source of truth for animation timing + easing across the app.
@@ -98,16 +98,28 @@
   --e-linear: linear;
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-/* Kill the user-agent blue focus ring on buttons globally - Electron/Chrome
- * paints a thick blue dashed outline (and sometimes a box-shadow) by default
- * that fights with our dark theme. We suppress both outline AND box-shadow,
- * and on the mini-player buttons we ALSO call preventDefault() in mousedown
- * (see app.js setupMiniPlayerFocusKill) so the browser never assigns focus
- * to them at all - belt and suspenders. */
-button:focus,button:focus-visible{outline:none!important;box-shadow:none!important}
+/* Kill the user-agent blue focus ring on MOUSE-CLICK button focus only -
+ * Electron/Chrome paints a thick blue dashed outline (and sometimes a
+ * box-shadow) by default that fights with our dark theme when a button is
+ * clicked. Real accessibility fix: this used to also suppress
+ * :focus-visible (keyboard/programmatic focus) with !important, which
+ * silently defeated BOTH of the later, carefully-written WCAG-compliant
+ * focus-ring rules further down this file (search ":focus-visible") -
+ * every button in the entire app had NO visible focus indicator at all
+ * when tabbing via keyboard, a real WCAG 2.4.7 failure that two earlier
+ * accessibility passes both thought they'd already fixed. Scoping the
+ * suppression to :focus:not(:focus-visible) (the standard "hide the ring
+ * on mouse clicks, keep it for keyboard" pattern, already used correctly
+ * elsewhere in this file) fixes it at the root without touching the
+ * mouse-click behavior this was originally written for. On the mini-
+ * player buttons we ALSO call preventDefault() in mousedown (see app.js
+ * setupMiniPlayerFocusKill) so the browser never assigns focus to them
+ * from a mouse click at all - belt and suspenders. */
+button:focus:not(:focus-visible){outline:none;box-shadow:none}
 button::-moz-focus-inner{border:0;padding:0}
-/* Also kill it on SVGs inside buttons (sometimes the ring jumps inward) */
-button svg:focus,button svg:focus-visible{outline:none!important;box-shadow:none!important}
+/* Also kill it on SVGs inside buttons on mouse click (sometimes the ring
+   jumps inward) - same :focus-visible carve-out as above. */
+button svg:focus:not(:focus-visible){outline:none;box-shadow:none}
 html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--off);font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;font-size:15px;-webkit-font-smoothing:antialiased}
 
 /* Anti-flicker on startup: body starts faded out until JS marks itself
@@ -337,6 +349,13 @@ input::placeholder,textarea::placeholder{color:var(--muted)}
 .cam-key span{display:block;font-size:10px;font-weight:400;margin-top:2px;font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;letter-spacing:0}
 .cam-key.match{background:var(--wbg2);color:var(--white);border:1px solid var(--border3);box-shadow:0 0 8px rgba(255,255,255,0.04)}
 .cam-key.self{background:var(--white);color:#080808;font-weight:800;font-size:15px;box-shadow:0 0 12px rgba(255,255,255,0.12)}
+.scale-family-list{display:flex;flex-direction:column;gap:8px}
+.scale-family-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 8px;border-radius:6px;background:var(--bg4)}
+.scale-family-row.best{background:var(--wbg2);border:1px solid var(--border3)}
+.scale-family-name{font-size:13px;font-weight:700;color:var(--white);min-width:120px}
+.scale-family-notes{display:flex;gap:4px;flex-wrap:wrap}
+.scale-note-pill{padding:2px 8px;border-radius:10px;background:var(--bg3);border:1px solid var(--border2);font-size:12px;font-weight:600;color:var(--muted)}
+.scale-family-row.best .scale-note-pill{color:var(--white);border-color:var(--border3)}
 .pitch-row{display:flex;align-items:center;gap:10px;margin-bottom:10px}
 input[type=range]{flex:1;accent-color:var(--white)}
 .pitch-val{font-family:'Bebas Neue','Oswald','Anton','Impact','Haettenschweiler','Arial Narrow',sans-serif;font-size:28px;min-width:36px;text-align:center;color:var(--white)}
@@ -363,7 +382,17 @@ input[type=range]{flex:1;accent-color:var(--white)}
 #hist-list,#sep-hist-list{min-height:200px}
 .hist-row{display:flex;align-items:center;gap:14px;padding:14px 18px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);margin-bottom:7px;cursor:pointer;transition:background var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out),transform 80ms var(--e-out)}
 .hist-row:hover{border-color:var(--border2);background:var(--bg3)}
-.hist-row.selected{border-color:rgba(76,175,80,.4);background:rgba(76,175,80,.06)}
+/* select-mode's hover is a faint preview of the green a click will apply -
+   there's no checkbox anymore, so the row itself needs to read as
+   clickable-to-select at a glance. */
+.hist-row.select-mode:hover{border-color:rgba(76,175,80,.3);background:rgba(76,175,80,.05)}
+/* Selection is now shown ENTIRELY by this row treatment (there's no
+   per-row checkbox anymore - clicking anywhere on the row toggles it,
+   same as before). Strengthened from the old, subtle 6%-opacity wash
+   (which relied on a checked checkbox as the real, primary indicator)
+   to a clearly, unmistakably green selected state on its own. */
+.hist-row.selected{border-color:var(--green);background:rgba(76,175,80,.16);box-shadow:inset 0 0 0 1px rgba(76,175,80,.35)}
+.hist-row.selected:hover{background:rgba(76,175,80,.20)}
 /* Pulse a row when it arrives from elsewhere (extension download, another
    window, etc). Green glow that fades — draws the eye without yanking it. */
 .hist-row.row-pulse{animation:histRowPulse 1.7s var(--e-in-out) 2}
@@ -371,7 +400,6 @@ input[type=range]{flex:1;accent-color:var(--white)}
   0%,100%{background:var(--bg2);box-shadow:0 0 0 0 rgba(76,175,80,0)}
   50%{background:rgba(76,175,80,.07);box-shadow:0 0 0 2px rgba(76,175,80,.28)}
 }
-.hist-row .hist-check{width:18px;height:18px;accent-color:var(--green);flex-shrink:0;cursor:pointer}
 .hist-row .hist-play{width:32px;height:32px;border-radius:50%;border:1px solid var(--border);background:transparent;color:var(--white);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0;font-size:11px;line-height:1;outline:none;transition:transform .1s,background .1s,color .1s,border-color .1s}
 .hist-row .hist-play:hover{background:var(--white);color:#000;border-color:var(--white);transform:scale(1.06)}
 .hist-row .hist-play.active{background:var(--white);color:#000;border-color:var(--white)}
@@ -1724,14 +1752,21 @@ input[type=range]{flex:1;accent-color:var(--white)}
   pointer-events:none;
   transition:top 240ms cubic-bezier(.4,0,.2,1); /* slides down/up as the update banner appears/leaves */
 }
-/* ── Notifications redesigned v0.2.8 ─────────────────────────────
- *  • Monochrome: white-on-dark for every type (ok / info / warn).
- *    Only errors keep the red accent for instant recognition.
+/* ── Notifications redesigned v0.2.8, recolored v0.8.0 ────────────
+ *  • Each type carries the same accent it means everywhere else in
+ *    the app: ok=green, warn=amber, err=red (var(--green)/var(--amber)/
+ *    the existing error red). info stays neutral white - the app has
+ *    no other established "info" color and it's the lowest-urgency
+ *    type, so it reads correctly as "the quiet one" by contrast.
  *  • Subtle internal sheen via gradient - no flat color washes.
  *  • Spring entry is smoother (slightly slower, less overshoot, more
  *    "premium product" than "popup ad").
- *  • Bottom progress strip is white, depleting cleanly.
+ *  • Bottom progress strip matches the type's accent, depleting cleanly.
  *  • Lift on hover for a tactile feel.
+ *  • Entrance/exit is driven ONLY by this transition + the .show/.out
+ *    classes - a second, older @keyframes-based animation system used
+ *    to live further down this file and run at the same time as this
+ *    one, which is why the timing/pop-in used to look inconsistent.
  */
 .app-notif{
   position:relative;
@@ -1780,14 +1815,16 @@ input[type=range]{flex:1;accent-color:var(--white)}
   max-height:0;margin-top:-10px;padding-top:0;padding-bottom:0;
   border-top-width:0;border-bottom-width:0;
 }
-/* Type-specific accent line.
- *   • ok / info / warn  → white (matches the UI)
- *   • err               → red (the only color that survives)
- * Icon bubbles share the same monochrome treatment for ok/info/warn;
- * the icon glyph itself differentiates them at a glance. */
-.app-notif.ok,
-.app-notif.info,
-.app-notif.warn { border-left-color:rgba(255,255,255,.88); }
+/* Type-specific accent - reuses the app's existing semantic colors
+ * (var(--green)/var(--amber) already mean "done"/"warning" everywhere
+ * else: download queue rows, the setup-success icon, VU meters) so a
+ * notification's color means the same thing here as it does anywhere
+ * else in the app, instead of introducing its own one-off palette.
+ * info stays neutral white - it's the lowest-urgency type and the app
+ * has no other established "info" accent to draw from. */
+.app-notif.info { border-left-color:rgba(255,255,255,.88); }
+.app-notif.ok   { border-left-color:var(--green); }
+.app-notif.warn { border-left-color:var(--amber); }
 .app-notif.err  { border-left-color:#ff5e5e; }
 
 .app-notif-icon{
@@ -1796,11 +1833,17 @@ input[type=range]{flex:1;accent-color:var(--white)}
   margin-top:1px;
   transition:background 200ms ease, color 200ms ease;
 }
-.app-notif.ok   .app-notif-icon,
-.app-notif.info .app-notif-icon,
-.app-notif.warn .app-notif-icon{
+.app-notif.info .app-notif-icon{
   background:rgba(255,255,255,.08);
   color:rgba(255,255,255,.92);
+}
+.app-notif.ok   .app-notif-icon{
+  background:rgba(76,175,80,.14);
+  color:#7ed88a;
+}
+.app-notif.warn .app-notif-icon{
+  background:rgba(245,158,11,.14);
+  color:#ffc266;
 }
 .app-notif.err  .app-notif-icon{
   background:rgba(255,94,94,.14);
@@ -1842,9 +1885,9 @@ input[type=range]{flex:1;accent-color:var(--white)}
   animation-play-state:running;
 }
 .app-notif.paused .app-notif-timer-fill{animation-play-state:paused}
-.app-notif.ok   .app-notif-timer-fill,
-.app-notif.info .app-notif-timer-fill,
-.app-notif.warn .app-notif-timer-fill { background:rgba(255,255,255,.7); }
+.app-notif.info .app-notif-timer-fill { background:rgba(255,255,255,.7); }
+.app-notif.ok   .app-notif-timer-fill { background:var(--green); }
+.app-notif.warn .app-notif-timer-fill { background:var(--amber); }
 .app-notif.err  .app-notif-timer-fill { background:#ff5e5e; }
 @keyframes notifTimerShrink{from{transform:scaleX(1)}to{transform:scaleX(0)}}
 
@@ -2252,25 +2295,17 @@ input:focus-visible, select:focus-visible, textarea:focus-visible{outline:2px so
   .setup-modal{transition:none}
 }
 
-/* ── Toast notifications: slide-in from right, fade out gracefully ── */
-.app-notif{
-  animation: notif-in 260ms var(--ease-out-quart) both;
-  will-change:transform, opacity;
-}
-.app-notif.out{
-  animation: notif-out 200ms var(--ease-out-cubic) both;
-}
-@keyframes notif-in {
-  0%   { opacity:0; transform:translateX(40px) }
-  100% { opacity:1; transform:translateX(0) }
-}
-@keyframes notif-out {
-  0%   { opacity:1; transform:translateX(0) }
-  100% { opacity:0; transform:translateX(20px) }
-}
-@media (prefers-reduced-motion: reduce){
-  .app-notif{animation:none}
-}
+/* Toast entrance/exit animation lives in one place only, next to
+ * .app-notif's base rules above ("Notifications redesigned v0.2.8") -
+ * a second, older animation-keyframes system used to live here too and
+ * ran at the same time as the transition-based one above (both target
+ * transform/opacity on the same element, on different timelines - one
+ * fires immediately on DOM insertion via @keyframes, the other via the
+ * .show/.out class toggle), which is exactly the kind of thing that
+ * reads as "the popup timing doesn't make sense". Removed rather than
+ * merged - the transition-based system already handles hover-pause,
+ * reduced-motion, and the stack-collapse exit cleanly on its own.
+ */
 
 /* ── Tag chips: bounce-in on add, fade-zoom on remove ─────────── */
 .tag-chip, .stockpile-tag-chip, .sp-folder-chip{
@@ -3255,6 +3290,381 @@ button:focus:not(:focus-visible){outline:none}
   #boot-splash .bs-glow{animation:none; opacity:.5}
   #boot-splash .bs-status{animation:none; opacity:1}
 }
+
+/* ── Random Beats ─────────────────────────────────────────────────────── */
+.rb-hero{display:flex;justify-content:center}
+.rb-empty{max-width:420px;margin:60px auto;text-align:center;color:var(--hint)}
+.rb-empty svg{width:56px;height:56px;margin-bottom:16px;opacity:.5}
+.rb-empty-title{font-size:17px;font-weight:600;color:var(--off);margin-bottom:6px}
+.rb-empty-sub{font-size:14px;color:var(--hint);line-height:1.5}
+.rb-card{width:100%;max-width:620px;background:linear-gradient(180deg,var(--bg2) 0%,var(--bg) 100%);border:1px solid var(--border2);border-radius:20px;padding:36px 34px 28px;display:flex;flex-direction:column;align-items:center;position:relative}
+.rb-art-wrap{position:relative;width:220px;height:220px;margin-bottom:22px}
+.rb-art{width:220px;height:220px;border-radius:16px;background:var(--bg3);border:1px solid var(--border2);overflow:hidden;display:flex;align-items:center;justify-content:center;position:relative;z-index:1;box-shadow:0 18px 40px -12px rgba(0,0,0,.6)}
+.rb-art img{width:100%;height:100%;object-fit:cover;display:block}
+.rb-art-fallback{width:64px;height:64px;color:var(--hint);opacity:.6}
+.rb-art-glow{position:absolute;inset:-30px;border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.10) 0%,rgba(255,255,255,0) 70%);z-index:0;pointer-events:none}
+.rb-art-glow.playing{animation:rbPulse 2.4s ease-in-out infinite}
+@keyframes rbPulse{0%,100%{transform:scale(1);opacity:.85}50%{transform:scale(1.08);opacity:1}}
+.rb-meta{text-align:center;margin-bottom:22px;max-width:100%}
+.rb-tag{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--hint);margin-bottom:8px}
+.rb-title{font-family:'Bebas Neue','Oswald','Anton','Impact','Haettenschweiler','Arial Narrow',sans-serif;font-size:30px;letter-spacing:.03em;color:var(--white);line-height:1.15;margin-bottom:6px;max-width:480px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.rb-sub{font-size:13px;color:var(--muted);margin-bottom:10px}
+.rb-badges{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
+.rb-badge{font-size:12px;font-weight:600;color:var(--off);background:var(--bg3);border:1px solid var(--border2);border-radius:20px;padding:4px 12px}
+.rb-transport{display:flex;align-items:center;justify-content:center;gap:18px;width:100%;margin-bottom:16px}
+.rb-shuffle-btn{display:inline-flex;align-items:center;gap:7px;height:40px;padding:0 16px;border:1px solid var(--border2);border-radius:20px;background:transparent;color:var(--off);font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;font-size:12.5px;font-weight:500;cursor:pointer;transition:background var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out)}
+.rb-shuffle-btn:hover{background:var(--bg3);border-color:var(--accent-dim)}
+.rb-play-btn{width:60px;height:60px;border-radius:50%;background:var(--white);border:none;color:#080808;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;transition:transform 100ms var(--e-out)}
+.rb-play-btn:hover{transform:scale(1.05)}
+.rb-play-btn:active{transform:scale(.96)}
+.rb-vol-wrap{display:flex;align-items:center;gap:8px}
+.rb-vol-btn{width:32px;height:32px;border:none;background:transparent;color:var(--hint);cursor:pointer;display:flex;align-items:center;justify-content:center}
+.rb-vol-btn:hover{color:var(--off)}
+.rb-vol{width:64px;height:20px;display:flex;align-items:center;cursor:pointer}
+.rb-vol-track{width:100%;height:4px;background:var(--bg3);border-radius:2px;position:relative;overflow:hidden}
+.rb-vol-fill{height:100%;width:80%;background:var(--accent-dim);border-radius:2px}
+.rb-seek-row{display:flex;align-items:center;gap:10px;width:100%;margin-bottom:26px}
+.rb-time{font-size:11px;color:var(--hint);font-variant-numeric:tabular-nums;width:34px;flex-shrink:0}
+.rb-time:last-child{text-align:right}
+/* ══════════════════════════════════════════════════════════════════
+   TOPLINER HIDDEN FOR THE PUBLIC 0.7.38 BUILD
+   ──────────────────────────────────────────────────────────────────
+   The recording/autotune feature is not ready to ship: formant
+   correction still colours the signal (~3dB of presence and sibilance
+   lost while engaged - see PATCHNOTES 0.9.10), and the native capture
+   path and low-latency monitor path are both still unbuilt.
+
+   Hidden rather than removed. Nothing about the feature is deleted,
+   disabled or stubbed - the tab and its pane are simply not shown, so
+   development continues against exactly the same code.
+
+   TO BRING IT BACK: delete this one rule. That is the whole revert.
+   ══════════════════════════════════════════════════════════════════ */
+#nav-topliner, #tab-random { display: none !important; }
+
+/* Round 75 ("that pick a beat thing is ugly asf and overshoots"):
+   .rb-card is a column flex container with align-items:center, which makes
+   every child shrink-to-fit unless it declares a width. .rb-transport,
+   .rb-seek-row and .rb-actions all set width:100% - this wrapper was added
+   later (when record mode got its own transport) and never did, so it sized
+   to its widest MAX-CONTENT child instead. Its children include the picker
+   rows, whose untruncated beat titles are enormous, so the wrapper grew past
+   the card's 552px content box and the whole block - picker panel AND seek
+   bar - spilled out over the card's borders. min-width:0 lets the flex
+   children actually shrink so the titles ellipsis instead of pushing. */
+#rb-normal-transport{width:100%;min-width:0}
+.rb-picker-panel{width:100%;margin-top:14px;margin-bottom:12px;border:1px solid var(--border2);border-radius:14px;background:var(--bg2);overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.38),0 1px 0 rgba(255,255,255,.03) inset}
+.rb-picker-panel.hidden{display:none}
+.rb-picker-search-wrap{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border);position:relative}
+.rb-picker-search-ic{color:var(--hint);flex-shrink:0}
+.rb-picker-search-wrap input{flex:1;background:transparent;border:none;color:var(--white);font-size:13px;font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;outline:none;min-width:0}
+.rb-picker-search-wrap input::placeholder{color:var(--hint)}
+/* Round 75: this was a bare number sitting next to the input, which read as
+   a stray label rather than a count. Boxed as a pill so it belongs to the
+   search field. */
+.rb-picker-count{font-size:10.5px;color:var(--hint);flex-shrink:0;font-variant-numeric:tabular-nums;background:var(--bg4);border:1px solid var(--border);border-radius:999px;padding:2px 8px;line-height:1.5}
+.rb-picker-close{width:22px;height:22px;border:none;background:transparent;color:var(--hint);cursor:pointer;font-size:18px;line-height:1;display:flex;align-items:center;justify-content:center;flex-shrink:0;border-radius:4px}
+.rb-picker-close:hover{background:var(--bg4);color:var(--off)}
+/* Round 75: taller (a 2000-beat library through a 260px window is a lot of
+   scrolling), with padding so rows can carry their own rounded hover shape
+   instead of sitting edge-to-edge. scrollbar-gutter keeps the list from
+   shifting sideways the moment a search filters it down past the scroll
+   threshold. */
+.rb-picker-list{max-height:360px;overflow-y:auto;padding:6px;scrollbar-gutter:stable}
+/* Round 75: the hard 1px divider under EVERY row was the main thing making
+   this read as heavy - at a glance it was a wall of lines rather than a list
+   of beats. Rows are separated by spacing and a rounded hover instead. */
+.rb-picker-row{display:flex;align-items:center;gap:11px;padding:9px 10px;cursor:pointer;text-align:left;border:none;border-radius:10px;transition:background var(--t-base) var(--e-out)}
+.rb-picker-play{width:26px;height:26px;border-radius:50%;border:1px solid var(--border2);background:var(--bg2);color:var(--off);display:flex;align-items:center;justify-content:center;flex-shrink:0;cursor:pointer;padding:0;transition:background var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out)}
+.rb-picker-play:hover{background:var(--bg4);border-color:var(--accent-dim)}
+.rb-picker-play.playing{background:var(--white);color:#080808;border-color:var(--white)}
+.rb-picker-row:hover{background:var(--bg4)}
+/* Round 75: the current beat was marked with an inset bar on the row's left
+   edge, which stops reading as an edge now that rows are inset and rounded.
+   A full outline plus a brighter title carries it instead. */
+.rb-picker-row.current{background:var(--bg4);box-shadow:inset 0 0 0 1px rgba(255,255,255,.16)}
+.rb-picker-row.current .rb-picker-title{color:var(--white)}
+.rb-picker-thumb{width:34px;height:34px;border-radius:7px;background:var(--bg2);border:1px solid var(--border2);overflow:hidden;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.rb-picker-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.rb-picker-thumb svg{width:16px;height:16px;color:var(--hint);opacity:.6}
+.rb-picker-meta{flex:1;min-width:0}
+.rb-picker-title{font-size:13px;color:var(--off);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rb-picker-sub{font-size:11px;color:var(--hint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rb-picker-empty{padding:22px 12px;text-align:center;font-size:12.5px;color:var(--hint)}
+.rb-seek{flex:1;height:16px;display:flex;align-items:center;cursor:pointer}
+.rb-seek-track{width:100%;height:5px;background:var(--bg3);border-radius:3px;position:relative;overflow:visible}
+.rb-seek-fill{height:100%;width:0%;background:var(--white);border-radius:3px}
+.rb-seek-thumb{position:absolute;top:50%;left:0%;width:11px;height:11px;background:var(--white);border-radius:50%;transform:translate(-50%,-50%);box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.rb-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;width:100%;border-top:1px solid var(--border);padding-top:22px}
+.rb-act-btn{display:inline-flex;align-items:center;gap:7px;height:40px;padding:0 16px;border:1px solid var(--border2);border-radius:var(--r);background:transparent;color:var(--off);font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;font-size:13px;font-weight:500;cursor:pointer;transition:background var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out)}
+.rb-act-btn:hover{background:var(--bg3);border-color:var(--accent-dim)}
+.rb-act-record.recording{background:var(--red);border-color:var(--red);color:#fff}
+.rb-act-record.recording:hover{background:#d13636}
+.rb-record-status{display:flex;align-items:center;gap:8px;margin-top:16px;font-size:12.5px;color:var(--muted)}
+.rb-rec-dot{width:8px;height:8px;border-radius:50%;background:var(--red);animation:rbRecBlink 1.1s ease-in-out infinite}
+@keyframes rbRecBlink{0%,100%{opacity:1}50%{opacity:.25}}
+.rb-mix-status{margin-top:10px;font-size:12.5px;color:var(--hint);text-align:center;min-height:0}
+
+.rb-autotune-gear{width:40px;height:40px;padding:0;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--border2);border-radius:var(--r);background:transparent;color:var(--off);cursor:pointer;transition:background var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out)}
+.rb-autotune-gear:hover{background:var(--bg3);border-color:var(--accent-dim)}
+.rb-autotune-gear.on{background:var(--off);border-color:var(--off);color:#080808}
+.rb-autotune-panel{width:100%;margin-top:16px;padding:16px 18px 14px;border:1px solid var(--border2);border-radius:var(--rl);background:linear-gradient(180deg,var(--bg4) 0%,var(--bg3) 55%,var(--bg2) 100%);box-shadow:0 24px 60px -24px rgba(0,0,0,.65),inset 0 1px 0 rgba(255,255,255,.05)}
+.rb-at-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border2);font-size:12px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--off)}
+.rb-at-span2{grid-column:1/-1}
+.rb-at-gain-grid{display:grid;grid-template-columns:1fr 1fr;column-gap:16px;row-gap:8px;margin-top:2px}
+.rb-at-close{width:26px;height:26px;border:1px solid transparent;border-radius:50%;background:transparent;color:var(--hint);font-size:18px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background var(--t-base) var(--e-out),color var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out)}
+.rb-at-close:hover{color:var(--off);background:var(--bg5);border-color:var(--border3)}
+.rb-at-toggle{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--off);padding:7px 0;cursor:pointer}
+.rb-at-toggle input[type=checkbox]{position:absolute;opacity:0;width:0;height:0;pointer-events:none}
+/* Real toggle-switch look instead of a bare checkbox - the label still
+   toggles the (now visually hidden) input natively on click anywhere in
+   it, including on this decorative span, so no extra JS is needed. The
+   checked state picks up whichever group accent color is active
+   (--grp-accent, set per .rb-at-group-* below) instead of always plain
+   white, so a glance at which switches are lit also hints at which
+   section they belong to. */
+.rb-switch{position:relative;display:inline-block;flex-shrink:0;width:36px;height:20px;border-radius:10px;background:var(--bg);border:1px solid var(--border2);box-shadow:inset 0 1px 3px rgba(0,0,0,.5);transition:background var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out),box-shadow var(--t-base) var(--e-out)}
+.rb-switch::after{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:linear-gradient(180deg,#e8e8e8,#c8c8c8);box-shadow:0 1px 2px rgba(0,0,0,.4);transition:transform var(--t-base) var(--e-out),background var(--t-base) var(--e-out)}
+.rb-at-toggle input:checked ~ .rb-switch{background:var(--grp-accent,var(--off));border-color:var(--grp-accent,var(--off));box-shadow:inset 0 1px 3px rgba(0,0,0,.25),0 0 10px -2px var(--grp-accent,transparent)}
+.rb-at-toggle input:checked ~ .rb-switch::after{transform:translateX(16px);background:#0a0a0a}
+.rb-at-toggle input:focus-visible ~ .rb-switch{outline:2px solid var(--grp-accent,var(--off));outline-offset:2px}
+.rb-at-hint{font-size:11.5px;color:var(--hint);margin:2px 0 10px}
+/* Compact, truncated explainer text under a slider (2-line clamp) -
+   real plugins mostly skip these entirely and lean on the label alone;
+   keeping a short clamp instead of removing them outright preserves
+   the explanation for anyone who wants it without costing a full
+   paragraph of vertical space per slider. Deliberately separate from
+   .rb-at-hint above, which also carries functional, DYNAMIC hints (the
+   headphones/feedback warning, the "didn't check bake" reminder) that
+   must stay fully visible, not truncated. */
+.rb-at-hint-sm{font-size:10px;line-height:1.3;color:var(--hint);margin:1px 0 0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.rb-at-hint.warn{color:var(--red);font-weight:600}
+/* ── Compact, plugin-style 2-column control grids ───────────────────
+   Real DAW plugins are wide and short, not narrow and tall - the
+   biggest single win here is putting related sliders/toggles side by
+   side instead of stacking everything in one long column. Unlabeled
+   grid children (slider-rows, select rows) pair up two-to-a-row
+   automatically via normal grid auto-flow; items that need the full
+   width (toggles, dynamic status hints, the Formant Correction switch)
+   get .rb-at-span2 explicitly. */
+.rb-at-params{margin-top:6px;padding-top:10px;border-top:1px solid var(--border);display:grid;grid-template-columns:1fr 1fr;column-gap:16px;row-gap:8px}
+.rb-rv-params{margin-top:6px;padding-top:10px;border-top:1px solid var(--border);display:grid;grid-template-columns:1fr 1fr;column-gap:16px;row-gap:8px}
+.rb-at-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.rb-at-row label{font-size:12.5px;color:var(--muted);flex-shrink:0}
+.rb-at-row select{height:34px;font-size:12.5px;padding:0 10px;flex:1;max-width:180px}
+.rb-at-row select:disabled{opacity:.45;cursor:not-allowed}
+.rb-at-slider-row{display:flex;flex-direction:column;gap:6px}
+.rb-at-slider-head{display:flex;align-items:center;justify-content:space-between;font-size:12.5px;color:var(--muted)}
+.rb-at-val{color:var(--off);font-variant-numeric:tabular-nums;font-weight:600}
+.rb-at-mic-row select{max-width:220px}
+
+/* ── Live note view / per-note bypass piano (Round 48) - a real DAW/
+   plugin autotune shows which notes are in the active scale and lets
+   you toggle individual ones off; this is that, built as a compact
+   inline mini-keyboard rather than a separate page (see the recorded
+   decision: "upgrade the key selector", not a whole new view). 7 white
+   keys laid out in an even flex row; 5 black keys absolutely positioned
+   over the gaps between them, standard keyboard geometry (no black key
+   between E-F or B-C). Every key is clickable - toggles that pitch
+   class into/out of rb-at-excluded-notes (JS) - and .rb-piano-live
+   marks whichever note the engine is CURRENTLY locked onto, driven by
+   the worklet's throttled 'note' postMessage (see rbHandleAutotuneNodeMessage
+   in app.js), so this doubles as the "see the notes live" display. */
+.rb-at-piano-wrap{display:flex;flex-direction:column;gap:6px}
+.rb-at-piano-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.rb-at-piano-title{font-size:12.5px;color:var(--muted);font-weight:600}
+.rb-at-piano-hint{font-size:10.5px;color:var(--hint)}
+/* Round 52: a tiny, always-visible build stamp at the bottom of the
+   settings panel - direct answer to a real, painful support problem
+   this round: every build has shipped as the same "0.8.0" version
+   string, so there was no way for a user (or for us, from their side)
+   to ever confirm which actual round's code was running versus what
+   was just delivered. Opening this panel is already the exact
+   diagnostic step most bug reports start with. */
+.rb-at-buildid{margin-top:10px;padding-top:8px;border-top:1px solid var(--border2);font-size:9.5px;color:var(--hint);text-align:right;letter-spacing:.02em}
+/* Round 49 visual polish: a tuner-style readout strip above the piano -
+   a big note name plus a small cents-off meter, sourced from the same
+   throttled 'note' postMessage the piano's live-key highlight already
+   uses (rbHandleAutotuneNodeMessage in app.js). This is the fast, at-a-
+   glance version of "see the notes live" - the piano below stays the
+   scale-context + bypass control, this strip is the tuner. */
+.rb-at-readout{display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:7px;background:var(--bg2,rgba(0,0,0,.18));border:1px solid var(--border2);min-height:30px}
+.rb-at-readout-note{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;min-width:2.4em;color:var(--muted);transition:color var(--t-base,.15s) var(--e-out,ease)}
+.rb-at-readout.voiced .rb-at-readout-note{color:var(--grp-accent,#b47ee8)}
+.rb-at-readout.voiced.in-tune .rb-at-readout-note{color:var(--green,#5ec98a)}
+.rb-at-readout-meter{position:relative;flex:1;height:6px;border-radius:4px;background:linear-gradient(90deg,rgba(255,255,255,.05),rgba(255,255,255,.05));box-shadow:inset 0 1px 3px rgba(0,0,0,.5);overflow:visible}
+.rb-at-readout-meter-tick{position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:var(--border2)}
+.rb-at-readout-meter-fill{position:absolute;top:0;bottom:0;left:50%;width:0;background:color-mix(in srgb,var(--grp-accent,#b47ee8) 55%,transparent);border-radius:4px;transition:width var(--t-base,.15s) var(--e-out,ease),left var(--t-base,.15s) var(--e-out,ease)}
+.rb-at-readout-meter-dot{position:absolute;top:50%;left:50%;width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;background:var(--muted);box-shadow:0 0 0 2px var(--bg,#1a1720);opacity:0;transition:left var(--t-base,.15s) var(--e-out,ease),background var(--t-base,.15s) var(--e-out,ease),opacity var(--t-base,.15s) var(--e-out,ease)}
+.rb-at-readout.voiced .rb-at-readout-meter-dot{opacity:1;background:var(--grp-accent,#b47ee8)}
+.rb-at-readout.voiced.in-tune .rb-at-readout-meter-dot{background:var(--green,#5ec98a)}
+.rb-at-readout-cents{font-size:10.5px;color:var(--hint);min-width:4.2em;text-align:right;font-variant-numeric:tabular-nums}
+.rb-at-piano{position:relative;display:flex;height:72px;border-radius:9px;overflow:hidden;border:1px solid var(--border2);box-shadow:inset 0 1px 4px rgba(0,0,0,.5),0 6px 16px -12px rgba(0,0,0,.6);background:var(--bg)}
+.rb-piano-key{position:relative;display:flex;align-items:flex-end;justify-content:center;padding-bottom:6px;font-size:9.5px;font-weight:600;cursor:pointer;user-select:none;transition:background var(--t-base,.15s) var(--e-out,ease),opacity var(--t-base,.15s) var(--e-out,ease),box-shadow var(--t-base,.15s) var(--e-out,ease),transform var(--t-base,.15s) var(--e-out,ease)}
+.rb-piano-key:focus-visible{outline:2px solid var(--grp-accent,var(--accent));outline-offset:-2px;z-index:5}
+.rb-piano-white{flex:1;min-width:0;background:linear-gradient(180deg,#f4f2f6 0%,#e2dfe6 100%);color:#2a2530;border-right:1px solid var(--border2);border-radius:0 0 4px 4px}
+.rb-piano-white:last-child{border-right:none}
+.rb-piano-white:hover{background:linear-gradient(180deg,#fdfcfe 0%,#ece9f0 100%);transform:translateY(1px)}
+.rb-piano-black{position:absolute;top:0;width:8.2%;height:60%;background:linear-gradient(180deg,#2a2630 0%,#141117 100%);color:#cfc7da;border:1px solid #060608;border-top:none;border-radius:0 0 4px 4px;z-index:3;box-shadow:0 4px 8px -4px rgba(0,0,0,.8)}
+.rb-piano-black:hover{background:linear-gradient(180deg,#38323f 0%,#1c1822 100%);transform:translateY(1px)}
+/* in-scale = part of the currently selected key+scale (informational
+   highlight, not yet excluded) - purple to match the Pitch Correction
+   tab's own accent (--grp-accent, #b47ee8), so this reads as "belongs
+   to this tab" the same way the rest of the tab's controls do. */
+.rb-piano-white.rb-piano-inscale{background:linear-gradient(180deg,color-mix(in srgb,var(--grp-accent,#b47ee8) 38%,#f4f2f6) 0%,color-mix(in srgb,var(--grp-accent,#b47ee8) 30%,#e2dfe6) 100%)}
+.rb-piano-black.rb-piano-inscale{background:linear-gradient(180deg,color-mix(in srgb,var(--grp-accent,#b47ee8) 55%,#2a2630) 0%,color-mix(in srgb,var(--grp-accent,#b47ee8) 45%,#141117) 100%)}
+/* excluded = user has bypassed this note - dimmed, with a clean
+   corner-badge strike (softer/rounder than a raw diagonal scribble)
+   instead of a scratch across the whole key, still clickable to bring
+   it back. */
+.rb-piano-key.rb-piano-excluded{opacity:.34}
+.rb-piano-key.rb-piano-excluded::after{content:'';position:absolute;left:18%;right:18%;top:50%;height:2px;background:var(--red);border-radius:2px;transform:rotate(-10deg);box-shadow:0 0 0 1px rgba(0,0,0,.25)}
+/* live = the engine is CURRENTLY locked onto this note right now - a
+   real-time indicator, not a static config highlight, so it gets real
+   motion (a soft pulse) plus a brighter, layered glow ring rather than
+   just a color change. */
+.rb-piano-key.rb-piano-live{box-shadow:0 0 0 2px var(--grp-accent,#b47ee8),0 0 0 4px color-mix(in srgb,var(--grp-accent,#b47ee8) 25%,transparent),0 0 20px 3px color-mix(in srgb,var(--grp-accent,#b47ee8) 65%,transparent);z-index:4}
+.rb-piano-key.rb-piano-live::before{content:'';position:absolute;inset:0;background:var(--grp-accent,#b47ee8);opacity:0;pointer-events:none;animation:rbPianoLivePulse 900ms ease-in-out infinite}
+@keyframes rbPianoLivePulse{0%,100%{opacity:0;transform:scale(1)}50%{opacity:.4;transform:scale(1.04)}}
+@media (prefers-reduced-motion:reduce){.rb-piano-key.rb-piano-live{animation:none}}
+
+/* ── Custom slider: thin recessed track, filled up to the current value
+   in the section's own accent color, circular thumb with real depth -
+   the flat browser-default slider this used to be is the single
+   biggest thing that read as "not like plugins, hard to understand" in
+   the original feedback. --fill (0-100, set from JS on input/init) and
+   --grp-accent (set per .rb-at-group-* below) drive the look. */
+.rb-at-slider-row input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:16px;background:transparent;cursor:pointer;margin:0}
+.rb-at-slider-row input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:4px;background:linear-gradient(to right,var(--grp-accent,var(--off)) 0%,var(--grp-accent,var(--off)) var(--fill,50%),var(--bg) var(--fill,50%),var(--bg) 100%);border:1px solid var(--border2);box-shadow:inset 0 1px 2px rgba(0,0,0,.4)}
+.rb-at-slider-row input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:16px;height:16px;margin-top:-6px;border-radius:50%;background:linear-gradient(180deg,#fdfdfd,#c9c9c9);border:1px solid rgba(0,0,0,.3);box-shadow:0 2px 5px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.05);transition:transform var(--t-fast) var(--e-out)}
+.rb-at-slider-row input[type=range]:hover::-webkit-slider-thumb{transform:scale(1.12)}
+.rb-at-slider-row input[type=range]:active::-webkit-slider-thumb{transform:scale(1.2)}
+.rb-at-slider-row input[type=range]:focus-visible::-webkit-slider-thumb{outline:2px solid var(--grp-accent,var(--off));outline-offset:2px}
+
+/* ── Recording panel: grouped, channel-strip-style sections ─────────
+   Each group is its own card (a colored left rail identifies it at a
+   glance) instead of one long undifferentiated stack of controls -
+   ordered Input -> Pitch Correction -> Reverb -> Output to match the
+   actual signal flow, same as a real plugin's channel strip reads
+   top-to-bottom. Each also sets --grp-accent so its own toggles/sliders
+   pick up a matching tint instead of everything being one flat color. */
+.rb-at-group{margin-top:2px;padding:14px 16px 16px;border:1px solid var(--border);border-left:3px solid var(--grp-accent,var(--border2));border-radius:var(--rl);background:linear-gradient(165deg,rgba(255,255,255,.028) 0%,rgba(255,255,255,.008) 100%);box-shadow:0 8px 20px -14px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.03);flex-direction:column;gap:10px;transition:box-shadow var(--t-base) var(--e-out)}
+/* Tabbed panel: only the group whose data-at-tab matches the active tab is
+   shown. The [data-at-tab] attribute selector + .rb-at-tab-active class
+   combo beats the base .rb-at-group{display:flex} rule on specificity
+   regardless of source order, and the hidden state uses plain display:none
+   (no !important) - same lesson learned the hard way in the settings-panel
+   pass: never let a later same-specificity rule silently lose to an
+   earlier one, and never reach for !important when a specificity bump does
+   the job cleanly. */
+.rb-at-group[data-at-tab]{display:none}
+.rb-at-group[data-at-tab].rb-at-tab-active{display:flex}
+.rb-at-tabs{display:flex;gap:4px;margin:2px 0 12px;padding:3px;border:1px solid var(--border);border-radius:var(--rl);background:rgba(0,0,0,.18)}
+.rb-at-tab{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:8px 6px;border:none;border-radius:calc(var(--rl) - 3px);background:transparent;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.04em;cursor:pointer;transition:background var(--t-base) var(--e-out),color var(--t-base) var(--e-out)}
+.rb-at-tab svg{opacity:.75;transition:opacity var(--t-base) var(--e-out)}
+.rb-at-tab:hover{color:var(--off);background:rgba(255,255,255,.04)}
+.rb-at-tab.rb-at-tab-active{color:#fff;background:color-mix(in srgb, var(--grp-accent,var(--accent)) 28%, transparent)}
+.rb-at-tab.rb-at-tab-active svg{opacity:1}
+#rb-at-tab-input.rb-at-tab-active{--grp-accent:#5b9bd5}
+#rb-at-tab-pitch.rb-at-tab-active{--grp-accent:#b47ee8}
+#rb-at-tab-reverb.rb-at-tab-active{--grp-accent:#4fc3a1}
+.rb-at-icon-badge{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;flex-shrink:0;background:color-mix(in srgb, var(--grp-accent,var(--muted)) 16%, transparent);color:var(--grp-accent,var(--muted));box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--grp-accent,var(--muted)) 30%, transparent)}
+.rb-at-icon-badge svg{opacity:1}
+.rb-at-group-input{--grp-accent:#5b9bd5}
+.rb-at-group-pitch{--grp-accent:#b47ee8}
+.rb-at-group-reverb{--grp-accent:#4fc3a1}
+.rb-at-group .rb-at-toggle{padding:2px 0}
+.rb-at-group .rb-meter-row{padding:2px 0}
+.rb-at-group .rb-at-hint{margin:0 0 2px}
+
+/* ── Input level meter ─────────────────────────────────────────────── */
+.rb-meter-row{display:flex;align-items:center;gap:10px;padding:8px 0 2px}
+.rb-meter-lbl{font-size:12.5px;color:var(--muted);flex-shrink:0;width:78px}
+.rb-meter-track{flex:1;height:9px;border-radius:5px;background:var(--bg);border:1px solid var(--border);box-shadow:inset 0 1px 3px rgba(0,0,0,.5);overflow:hidden;position:relative}
+.rb-meter-fill{height:100%;width:0%;border-radius:4px;background:linear-gradient(90deg,#3ecf6a 0%,#3ecf6a 60%,#e8c547 82%,#e0503a 100%);box-shadow:0 0 6px rgba(62,207,106,.35);transition:width 60ms linear}
+.rb-meter-fill.clip{background:#e0503a;box-shadow:0 0 8px rgba(224,80,58,.8)}
+.rb-meter-db{font-size:11px;color:var(--hint);font-variant-numeric:tabular-nums;width:44px;text-align:right;flex-shrink:0}
+.rb-meter-track-mini{width:70px;height:6px;flex-shrink:0}
+.rb-meter-db-mini{width:auto}
+
+/* ── Activity log: a small always-available "what is this plugin
+   actually doing" readout - console-style, recessed into the panel,
+   color-coded by severity. Exists because mic/monitor failures used to
+   be invisible unless you had devtools open. */
+
+/* ── Review / micro-DAW ────────────────────────────────────────────── */
+.rb-review-panel{width:100%;margin-top:16px;padding:18px 20px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg3);display:flex;flex-direction:column;gap:12px}
+.rb-review-head{display:flex;flex-direction:column;gap:3px}
+.rb-review-head #rb-review-title{font-size:13px;font-weight:700;color:var(--off)}
+.rb-review-hint{font-size:11.5px;color:var(--hint)}
+/* Stems row: previously two plain buttons indistinguishable from
+   Discard/Save, stuck at the very bottom of the panel behind the zoom
+   row, waveform, transport, and both gain faders - user feedback called
+   this out specifically as "look, placement, accessibility" being bad.
+   Now it's a distinctly-tinted card right under the header (before the
+   waveform even loads), so it reads as its own feature instead of
+   hiding among the destructive/save actions. */
+.rb-review-stems{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px;border:1px solid color-mix(in srgb, var(--green) 35%, var(--border2));border-radius:var(--r);background:color-mix(in srgb, var(--green) 10%, transparent)}
+.rb-review-stems-lbl{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-right:2px}
+.rb-stem-btn{display:inline-flex;align-items:center;gap:7px;height:34px;padding:0 14px;border:1px solid color-mix(in srgb, var(--green) 45%, var(--border2));border-radius:var(--r);background:color-mix(in srgb, var(--green) 16%, transparent);color:var(--off);font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;font-size:12.5px;font-weight:600;cursor:pointer;transition:background var(--t-base) var(--e-out),border-color var(--t-base) var(--e-out)}
+.rb-stem-btn:hover{background:color-mix(in srgb, var(--green) 28%, transparent);border-color:var(--green)}
+/* Round 43: DAW-style section grouping - a colored left rail (same
+   language as the Recording panel's group accents) plus a small
+   icon+label header identifies each block (Vocal Track / Mixer) at a
+   glance instead of the page reading as one undifferentiated stack. */
+.rb-review-track-section{padding:12px 14px 14px;border:1px solid var(--border);border-left:3px solid #5b9bd5;border-radius:var(--rl);background:linear-gradient(165deg,rgba(255,255,255,.025) 0%,rgba(255,255,255,.006) 100%);display:flex;flex-direction:column;gap:8px}
+.rb-review-mixer{padding:12px 14px 14px;border:1px solid var(--border);border-left:3px solid var(--green);border-radius:var(--rl);background:linear-gradient(165deg,rgba(255,255,255,.025) 0%,rgba(255,255,255,.006) 100%);display:flex;flex-direction:column;gap:10px}
+.rb-review-section-lbl{display:flex;align-items:center;gap:7px;font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.rb-review-icon-badge{display:inline-flex;align-items:center;justify-content:center;width:19px;height:19px;border-radius:50%;flex-shrink:0;background:rgba(255,255,255,.08);color:var(--off)}
+.rb-review-canvas{width:100%;height:110px;border-radius:10px;background:var(--bg);border:1px solid var(--border);cursor:pointer;touch-action:none}
+/* Transport styled as its own bordered strip, like a DAW's playback bar,
+   instead of a bare row of controls floating between the waveform and
+   the faders. */
+.rb-review-transport{display:flex;align-items:center;gap:12px;padding:8px 12px;border:1px solid var(--border);border-radius:var(--rl);background:rgba(0,0,0,.15)}
+.rb-review-play-btn{width:38px;height:38px;border-radius:50%;background:var(--white);border:none;color:#080808;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;transition:transform 100ms var(--e-out)}
+.rb-review-play-btn:hover{transform:scale(1.06)}
+.rb-review-time{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.rb-review-status{font-size:12px;color:var(--hint);margin-left:auto}
+.rb-review-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;border-top:1px solid var(--border);padding-top:14px}
+.rb-review-zoom-row{display:flex;align-items:center;gap:8px}
+.rb-zoom-btn{width:26px;height:26px;border-radius:6px;border:1px solid var(--border2);background:transparent;color:var(--off);font-size:15px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.rb-zoom-btn:hover:not(:disabled){background:var(--bg);border-color:var(--accent-dim)}
+.rb-zoom-btn:disabled{opacity:.35;cursor:default}
+.rb-zoom-lvl{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:26px;text-align:center}
+.rb-zoom-fit{height:26px;padding:0 10px;border-radius:6px;border:1px solid var(--border2);background:transparent;color:var(--hint);font-size:11.5px;cursor:pointer;margin-left:auto}
+.rb-zoom-fit:hover{background:var(--bg);color:var(--off)}
+.rb-graph-toggle{display:flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:6px;border:1px solid var(--border2);background:transparent;color:var(--hint);font-size:11.5px;cursor:pointer}
+.rb-graph-toggle:hover{background:var(--bg);color:var(--off)}
+.rb-graph-toggle.active{background:var(--accent-dim);border-color:var(--accent);color:var(--white)}
+.rb-graph-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:-2px}
+.rb-graph-hint{font-size:11.5px;color:var(--hint)}
+.rb-graph-actions{display:flex;gap:8px;flex-shrink:0}
+.rb-graph-btn{height:28px;padding:0 12px;border-radius:6px;border:1px solid var(--border2);background:transparent;color:var(--off);font-size:12px;cursor:pointer}
+.rb-graph-btn:hover{background:var(--bg);border-color:var(--accent-dim)}
+.rb-graph-apply{background:var(--accent);border-color:var(--accent);color:var(--white)}
+.rb-graph-apply:hover{opacity:.9;background:var(--accent)}
+.rb-review-pan-row{margin:6px 0 2px}
+.rb-review-pan-row input[type=range]{width:100%}
+.rb-fader-row{display:flex;align-items:center;gap:10px}
+.rb-fader-lbl{font-size:12px;color:var(--muted);width:42px;flex-shrink:0}
+.rb-fader-val{font-size:11px;color:var(--hint);font-variant-numeric:tabular-nums;width:38px;text-align:right;flex-shrink:0}
+/* Faders used to be bare browser-default range inputs (no track/thumb
+   styling at all) sitting right below custom-styled plugin sliders
+   everywhere else on this page - the single biggest "doesn't look like
+   the rest of the app" gap. Same --fill-driven gradient-track pattern
+   as .rb-at-slider-row, color-coded per channel (Beat = blue, matching
+   the Input group elsewhere; Vocal = green, matching the stems card)
+   so the mixer reads at a glance instead of two identical grey bars. */
+.rb-fader-row input[type=range]{-webkit-appearance:none;appearance:none;flex:1;height:16px;background:transparent;cursor:pointer;margin:0}
+.rb-fader-beat input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:4px;background:linear-gradient(to right,#5b9bd5 0%,#5b9bd5 var(--fill,66%),var(--bg) var(--fill,66%),var(--bg) 100%);border:1px solid var(--border2);box-shadow:inset 0 1px 2px rgba(0,0,0,.4)}
+.rb-fader-vocal input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:4px;background:linear-gradient(to right,var(--green) 0%,var(--green) var(--fill,66%),var(--bg) var(--fill,66%),var(--bg) 100%);border:1px solid var(--border2);box-shadow:inset 0 1px 2px rgba(0,0,0,.4)}
+.rb-fader-row input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:16px;height:16px;margin-top:-6px;border-radius:50%;background:linear-gradient(180deg,#fdfdfd,#c9c9c9);border:1px solid rgba(0,0,0,.3);box-shadow:0 2px 5px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.05);transition:transform var(--t-fast) var(--e-out)}
+.rb-fader-row input[type=range]:hover::-webkit-slider-thumb{transform:scale(1.12)}
+.rb-fader-row input[type=range]:active::-webkit-slider-thumb{transform:scale(1.2)}
+.rb-fader-beat input[type=range]:focus-visible::-webkit-slider-thumb{outline:2px solid #5b9bd5;outline-offset:2px}
+.rb-fader-vocal input[type=range]:focus-visible::-webkit-slider-thumb{outline:2px solid var(--green);outline-offset:2px}
+#rb-monitor-btn.active{background:var(--off);border-color:var(--off);color:#080808}
+#rb-monitor-btn.active:hover{background:var(--off)}
 </style>
 </head>
 <script>
@@ -3350,6 +3760,10 @@ button:focus:not(:focus-visible){outline:none}
     <button class="nav-btn" data-tab="slowverb" onclick="showTab(this)">
       <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h3l3-7 4 14 3-9 2 2h3"/></svg>
       Slow + Reverb
+    </button>
+    <button class="nav-btn" id="nav-topliner" data-tab="random" onclick="showTab(this)">
+      <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="8" cy="8.3" r="1" fill="currentColor" stroke="none"/><circle cx="16" cy="8.3" r="1" fill="currentColor" stroke="none"/><circle cx="8" cy="15.7" r="1" fill="currentColor" stroke="none"/><circle cx="16" cy="15.7" r="1" fill="currentColor" stroke="none"/></svg>
+      Topliner
     </button>
     <div class="nav-sec" style="margin-top:4px">Artist Tools</div>
     <button class="nav-btn" data-tab="tools" onclick="showTab(this)">
@@ -3559,6 +3973,7 @@ button:focus:not(:focus-visible){outline:none}
         <div class="ag">
           <div class="ag-card"><div class="ag-title">Chord Progressions</div><div class="chord-list" id="chord-list"><div style="font-size:14px;color:var(--hint)">Analyze a track first</div></div></div>
           <div class="ag-card"><div class="ag-title">Compatible Keys — Camelot</div><div class="cam-grid" id="cam-grid"><div style="font-size:14px;color:var(--hint)">—</div></div></div>
+          <div class="ag-card"><div class="ag-title">Closest Scale Match</div><div class="scale-family-list" id="scale-family-list"><div style="font-size:14px;color:var(--hint)">Analyze a track first</div></div></div>
           <div class="ag-card">
             <div class="ag-title">Pitch Preview</div>
             <div class="pitch-row"><span class="pitch-val" id="pitch-lbl">0</span><input type="range" id="pitch-sl" min="-6" max="6" value="0" step="1" oninput="setPitch(this.value)"/><span style="font-size:13px;color:var(--hint)">±6st</span></div>
@@ -3885,7 +4300,7 @@ button:focus:not(:focus-visible){outline:none}
         <input type="file" id="file-trans" accept="audio/*" style="display:none" onchange="startTranscribe(event)">
         <div class="row mt" style="gap:10px">
           <select id="wmodel" style="flex:1;height:42px;font-size:13px;padding:0 12px"><option value="tiny">Tiny — fastest</option><option value="base" selected>Base — recommended</option><option value="small">Small</option><option value="medium">Medium — best</option></select>
-          <select id="wlang" style="flex:1;height:42px;font-size:13px;padding:0 12px"><option value="auto">Auto-detect</option><option value="bi">Bilingual (FR + EN)</option><option value="en">English</option><option value="fr">French</option><option value="es">Spanish</option><option value="pt">Portuguese</option></select>
+          <select id="wlang" style="flex:1;height:42px;font-size:13px;padding:0 12px"><option value="auto">Auto-detect</option><option value="bi">Bilingual (FR + EN)</option><option value="patois">Jamaican Patois (+ EN)</option><option value="ig">Igbo (+ EN)</option><option value="en">English</option><option value="fr">French</option><option value="es">Spanish</option><option value="es-en">Spanish (+ EN)</option><option value="pt">Portuguese</option><option value="pt-en">Portuguese (+ EN)</option><option value="yo">Yoruba</option><option value="yo-en">Yoruba (+ EN)</option><option value="sw">Swahili</option><option value="sw-en">Swahili (+ EN)</option><option value="ha">Hausa</option><option value="ha-en">Hausa (+ EN)</option></select>
         </div>
         <button class="btn pri mt" id="btn-trans-start" onclick="clickTranscribeStart()" disabled style="width:100%;height:44px" data-i18n="transStartBtn">Start transcription</button>
       </div>
@@ -3981,6 +4396,359 @@ button:focus:not(:focus-visible){outline:none}
             </button>
           </div>
           <div class="sv-export-status" id="sv-export-status"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-pane" id="tab-random">
+      <div class="ph"><div class="ph-title" id="rb-ph-title">Topliner</div><div class="ph-sub" id="rb-ph-sub">Shuffle through everything you have downloaded and dive straight into it</div></div>
+
+      <div class="rb-hero" id="rb-hero">
+        <div class="rb-empty" id="rb-empty">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg>
+          <div class="rb-empty-title" id="rb-empty-title">Nothing downloaded yet</div>
+          <div class="rb-empty-sub" id="rb-empty-sub">Download a beat first, then come back here to shuffle through your library.</div>
+        </div>
+
+        <div class="rb-card hidden" id="rb-card">
+          <div class="rb-art-wrap">
+            <div class="rb-art-glow" id="rb-art-glow"></div>
+            <div class="rb-art" id="rb-art">
+              <svg class="rb-art-fallback" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+            </div>
+          </div>
+
+          <div class="rb-meta">
+            <div class="rb-tag" id="rb-tag">Random pick</div>
+            <div class="rb-title" id="rb-title">—</div>
+            <div class="rb-sub" id="rb-sub"></div>
+            <div class="rb-badges" id="rb-badges"></div>
+          </div>
+
+          <div id="rb-normal-transport">
+          <div class="rb-transport">
+            <button class="rb-shuffle-btn" id="rb-shuffle-btn" onclick="rbNext()" title="Next random beat">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+              <span id="rb-shuffle-lbl">Next random beat</span>
+            </button>
+            <button class="rb-shuffle-btn" id="rb-picker-toggle-btn" onclick="rbTogglePicker()" title="Pick a specific beat" aria-expanded="false">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <span id="rb-picker-toggle-lbl">Pick a beat</span>
+            </button>
+            <button class="rb-play-btn" id="rb-play-btn" onclick="rbTogglePlay()" aria-label="Play or pause">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" id="rb-play-svg"><polygon points="7,5 7,19 19,12"/></svg>
+            </button>
+            <div class="rb-vol-wrap">
+              <button class="rb-vol-btn" id="rb-vol-btn" onclick="folderViewToggleMute()" title="Mute / Unmute" aria-label="Mute / Unmute">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" id="rb-vol-icon"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+              </button>
+              <div class="rb-vol" id="rb-vol" onclick="rbVolumeClick(event)">
+                <div class="rb-vol-track"><div class="rb-vol-fill" id="rb-vol-fill"></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="rb-seek-row">
+            <span class="rb-time" id="rb-time-cur">0:00</span>
+            <div class="rb-seek" id="rb-seek" onclick="rbSeekClick(event)">
+              <div class="rb-seek-track">
+                <div class="rb-seek-fill" id="rb-seek-fill"></div>
+                <div class="rb-seek-thumb" id="rb-seek-thumb"></div>
+              </div>
+            </div>
+            <span class="rb-time" id="rb-time-dur">0:00</span>
+          </div>
+
+          <div class="rb-picker-panel hidden" id="rb-picker-panel">
+            <div class="rb-picker-search-wrap">
+              <svg class="ic rb-picker-search-ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input type="search" id="rb-picker-search" placeholder="Search your beats…" oninput="rbPickerFilter()" aria-label="Search your beats"/>
+              <span class="rb-picker-count" id="rb-picker-count"></span>
+              <button type="button" class="rb-picker-close" onclick="rbTogglePicker()" aria-label="Close">&times;</button>
+            </div>
+            <div class="rb-picker-list" id="rb-picker-list"></div>
+          </div>
+          </div>
+
+          <div class="rb-actions" id="rb-actions-row">
+            <button class="rb-act-btn" onclick="rbOpenAnalyze()">
+              <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+              <span id="rb-act-analyze-lbl">Analyze</span>
+            </button>
+            <button class="rb-act-btn" onclick="rbOpenSeparator()">
+              <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="5" y1="4" x2="5" y2="20"/><line x1="10" y1="4" x2="10" y2="20"/><line x1="15" y1="4" x2="15" y2="20"/><line x1="20" y1="4" x2="20" y2="20"/></svg>
+              <span id="rb-act-sep-lbl">Separator</span>
+            </button>
+            <button class="rb-act-btn" onclick="toggleMiniNotepad()">
+              <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+              <span id="rb-act-notes-lbl">Notes</span>
+            </button>
+            <button class="rb-act-btn" id="rb-monitor-btn" onclick="rbToggleMonitor()" aria-pressed="false">
+              <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
+              <span id="rb-monitor-lbl">Monitor</span>
+            </button>
+            <button class="rb-act-btn rb-act-record" id="rb-record-btn" onclick="rbToggleRecording()">
+              <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" id="rb-record-ic"><circle cx="12" cy="12" r="7"/></svg>
+              <span id="rb-record-lbl">Record topline</span>
+            </button>
+            <button class="rb-autotune-gear" id="rb-autotune-gear" onclick="rbToggleAutotunePanel()" title="Autotune settings" aria-label="Autotune settings">
+              <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            </button>
+          </div>
+
+          <div class="rb-autotune-panel hidden" id="rb-autotune-panel">
+            <div class="rb-at-head">
+              <span id="rb-at-title">Recording</span>
+              <button class="rb-at-close" onclick="rbToggleAutotunePanel()" aria-label="Close">&times;</button>
+            </div>
+
+            <!-- Tab strip replaces the old stacked-card layout (Input card,
+                 then Pitch Correction card, then Reverb card, one under the
+                 other with its own header each - the "long, gotta scroll"
+                 complaint). Only one group is visible at a time now; icon
+                 badges + labels moved up into the tab buttons themselves,
+                 reusing the exact same i18n span IDs (rb-at-group-input-lbl
+                 etc.) so app.js's existing t()-driven label updates keep
+                 working with zero changes there. -->
+            <div class="rb-at-tabs" id="rb-at-tabs" role="tablist">
+              <button type="button" class="rb-at-tab rb-at-tab-active" id="rb-at-tab-input" data-at-tab="input" onclick="rbAtSwitchTab('input')" role="tab" aria-selected="true">
+                <svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4"/></svg>
+                <span id="rb-at-group-input-lbl">Input</span>
+              </button>
+              <button type="button" class="rb-at-tab" id="rb-at-tab-pitch" data-at-tab="pitch" onclick="rbAtSwitchTab('pitch')" role="tab" aria-selected="false">
+                <svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                <span id="rb-at-group-pitch-lbl">Pitch Correction</span>
+              </button>
+              <button type="button" class="rb-at-tab" id="rb-at-tab-reverb" data-at-tab="reverb" onclick="rbAtSwitchTab('reverb')" role="tab" aria-selected="false">
+                <svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9M3 12a9 9 0 0 0 9 9M3 12h18M12 3a9 9 0 0 1 0 18"/></svg>
+                <span id="rb-at-group-reverb-lbl">Reverb</span>
+              </button>
+            </div>
+
+            <div class="rb-at-group rb-at-group-input rb-at-tab-active" data-at-tab="input">
+              <div class="rb-at-row rb-at-mic-row">
+                <label id="rb-at-mic-lbl">Microphone</label>
+                <select id="rb-at-mic" onchange="rbMicDeviceChanged()"></select>
+              </div>
+              <div class="rb-meter-row">
+                <span class="rb-meter-lbl" id="rb-at-level-lbl">Input Level</span>
+                <div class="rb-meter-track"><div class="rb-meter-fill"></div></div>
+                <span class="rb-meter-db">—</span>
+              </div>
+              <div class="rb-at-gain-grid">
+                <div class="rb-at-slider-row">
+                  <div class="rb-at-slider-head"><span id="rb-at-ingain-lbl">Input Gain</span><span class="rb-at-val" id="rb-at-ingain-val">0 dB</span></div>
+                  <input type="range" id="rb-at-ingain" min="-24" max="24" value="0" step="1" oninput="rbAutotuneParamsChanged()" aria-label="Input gain"/>
+                </div>
+                <div class="rb-at-slider-row">
+                  <!-- Output Gain lives here now, next to Input Gain, instead of
+                       its own separate group card below Reverb - the two dB
+                       sliders read as a natural pair (gain staging in/out) and
+                       merging them saves a whole group card's header+padding
+                       overhead. rb-at-group-output-lbl (i18n label target) no
+                       longer has a home in the DOM - app.js guards every
+                       getElementById lookup with `if (el)`, so that's a
+                       harmless no-op now, not a broken reference. -->
+                  <div class="rb-at-slider-head"><span id="rb-at-outgain-lbl">Output Gain</span><span class="rb-at-val" id="rb-at-outgain-val">0 dB</span></div>
+                  <input type="range" id="rb-at-outgain" min="-24" max="24" value="0" step="1" oninput="rbAutotuneParamsChanged()" aria-label="Output gain"/>
+                </div>
+              </div>
+            </div>
+
+            <div class="rb-at-group rb-at-group-pitch" data-at-tab="pitch">
+              <label class="rb-at-toggle"><input type="checkbox" id="rb-at-monitor" onchange="rbAutotuneToggleChanged()"/><span class="rb-switch" aria-hidden="true"></span><span id="rb-at-monitor-lbl">Monitor with Autotune</span></label>
+              <label class="rb-at-toggle"><input type="checkbox" id="rb-at-bake" onchange="rbAutotuneToggleChanged()"/><span class="rb-switch" aria-hidden="true"></span><span id="rb-at-bake-lbl">Autotune on Recording</span></label>
+              <div class="rb-at-hint warn hidden" id="rb-at-bake-reminder">Monitor only makes it audible live - check this too if you want it in the saved take</div>
+              <div class="rb-at-hint" id="rb-at-hint">Use headphones while monitoring, to keep the beat out of the mic</div>
+              <div class="rb-at-params hidden" id="rb-at-params">
+                <label class="rb-at-toggle rb-at-span2"><input type="checkbox" id="rb-at-key-auto" checked onchange="rbKeyAutoToggleChanged()"/><span class="rb-switch" aria-hidden="true"></span><span id="rb-at-key-auto-lbl">Match beat automatically</span></label>
+                <div class="rb-at-hint rb-at-span2" id="rb-at-key-auto-hint">Detecting key…</div>
+                <div class="rb-at-row">
+                  <label id="rb-at-key-lbl">Key</label>
+                  <select id="rb-at-key" onchange="rbRenderAutotunePiano();rbAutotuneParamsChanged()"></select>
+                </div>
+                <div class="rb-at-row">
+                  <label id="rb-at-scale-lbl">Scale</label>
+                  <select id="rb-at-scale" onchange="rbRenderAutotunePiano();rbAutotuneParamsChanged()"></select>
+                </div>
+                <div class="rb-at-piano-wrap rb-at-span2">
+                  <div class="rb-at-piano-head">
+                    <span class="rb-at-piano-title" id="rb-at-piano-title">Notes</span>
+                    <span class="rb-at-piano-hint" id="rb-at-piano-hint">Click a note to remove it from correction</span>
+                  </div>
+                  <div class="rb-at-readout" id="rb-at-readout" aria-live="polite">
+                    <span class="rb-at-readout-note" id="rb-at-readout-note">&ndash;</span>
+                    <div class="rb-at-readout-meter" id="rb-at-readout-meter">
+                      <div class="rb-at-readout-meter-tick"></div>
+                      <div class="rb-at-readout-meter-fill" id="rb-at-readout-meter-fill"></div>
+                      <div class="rb-at-readout-meter-dot" id="rb-at-readout-meter-dot"></div>
+                    </div>
+                    <span class="rb-at-readout-cents" id="rb-at-readout-cents"></span>
+                  </div>
+                  <div class="rb-at-piano" id="rb-at-piano" role="group" aria-label="Scale notes - click to include or exclude a note from pitch correction"></div>
+                </div>
+                <div class="rb-at-slider-row">
+                  <div class="rb-at-slider-head"><span id="rb-at-retune-lbl">Retune Speed</span><span class="rb-at-val" id="rb-at-retune-val">5 ms</span></div>
+                  <input type="range" id="rb-at-retune" min="0" max="400" value="5" step="5" oninput="rbAutotuneParamsChanged()"/>
+                  <div class="rb-at-hint-sm" id="rb-at-retune-hint">Lower = faster, more obvious snap to the note (the classic hard-tune sound). Higher = a smoother, more natural glide.</div>
+                </div>
+                <div class="rb-at-slider-row">
+                  <div class="rb-at-slider-head"><span id="rb-at-tracking-lbl">Tracking Speed</span><span class="rb-at-val" id="rb-at-tracking-val">120 ms</span></div>
+                  <input type="range" id="rb-at-tracking" min="30" max="250" value="120" step="5" oninput="rbAutotuneParamsChanged()"/>
+                  <div class="rb-at-hint-sm" id="rb-at-tracking-hint">How quickly the engine decides which note you're singing. Lower = catches fast note changes sooner. Higher = steadier lock, less sensitive to jitter.</div>
+                </div>
+                <div class="rb-at-slider-row">
+                  <div class="rb-at-slider-head"><span id="rb-at-humanize-lbl">Humanize</span><span class="rb-at-val" id="rb-at-humanize-val">0%</span></div>
+                  <input type="range" id="rb-at-humanize" min="0" max="100" value="0" step="1" oninput="rbAutotuneParamsChanged()"/>
+                  <div class="rb-at-hint-sm" id="rb-at-humanize-hint">Eases sustained notes in more gently the longer they're held, instead of snapping instantly every time.</div>
+                </div>
+                <div class="rb-at-slider-row">
+                  <div class="rb-at-slider-head"><span id="rb-at-vibrato-lbl">Natural Vibrato</span><span class="rb-at-val" id="rb-at-vibrato-val">0%</span></div>
+                  <input type="range" id="rb-at-vibrato" min="0" max="100" value="0" step="1" oninput="rbAutotuneParamsChanged()"/>
+                  <div class="rb-at-hint-sm" id="rb-at-vibrato-hint">Lets some of your own pitch wobble through instead of flattening it completely - 0 corrects vibrato too.</div>
+                </div>
+                <div class="rb-at-slider-row">
+                  <div class="rb-at-slider-head"><span id="rb-at-flextune-lbl">Flex-Tune</span><span class="rb-at-val" id="rb-at-flextune-val">0%</span></div>
+                  <input type="range" id="rb-at-flextune" min="0" max="100" value="0" step="1" oninput="rbAutotuneParamsChanged()"/>
+                  <div class="rb-at-hint-sm" id="rb-at-flextune-hint">Leaves small pitch deviations near the target uncorrected - 0 corrects everything, higher forgives more.</div>
+                </div>
+                <label class="rb-at-toggle rb-at-span2"><input type="checkbox" id="rb-at-formant" onchange="rbAutotuneParamsChanged()"/><span class="rb-switch" aria-hidden="true"></span><span id="rb-at-formant-lbl">Formant Correction</span></label>
+                <div class="rb-at-hint-sm rb-at-span2" id="rb-at-formant-hint">Keeps your voice's natural tone when pitch-shifting a lot. Not free: measured against a clean reference it costs about 3 dB of presence and 3 dB of sibilance and adds around 3 dB in the low-mids while it is engaged, which reads as boxy or "in a bottle". Worth it for big shifts, not for small everyday corrections - leave it off unless you can hear it helping.</div>
+              </div>
+            </div>
+
+            <div class="rb-at-group rb-at-group-reverb" data-at-tab="reverb">
+              <label class="rb-at-toggle"><input type="checkbox" id="rb-rv-monitor" onchange="rbAutotuneToggleChanged()"/><span class="rb-switch" aria-hidden="true"></span><span id="rb-rv-monitor-lbl">Monitor with Reverb</span></label>
+              <label class="rb-at-toggle"><input type="checkbox" id="rb-rv-bake" onchange="rbAutotuneToggleChanged()"/><span class="rb-switch" aria-hidden="true"></span><span id="rb-rv-bake-lbl">Reverb on Recording</span></label>
+              <div class="rb-rv-params hidden" id="rb-rv-params">
+                <div class="rb-at-slider-row">
+                  <div class="rb-at-slider-head"><span id="rb-rv-mix-lbl">Mix</span><span class="rb-at-val" id="rb-rv-mix-val">35%</span></div>
+                  <input type="range" id="rb-rv-mix" min="0" max="100" value="35" step="1" oninput="rbAutotuneParamsChanged()" aria-label="Reverb mix"/>
+                </div>
+                <div class="rb-at-slider-row">
+                  <div class="rb-at-slider-head"><span id="rb-rv-decay-lbl">Decay</span><span class="rb-at-val" id="rb-rv-decay-val">50%</span></div>
+                  <input type="range" id="rb-rv-decay" min="0" max="100" value="50" step="1" oninput="rbAutotuneParamsChanged()" aria-label="Reverb decay"/>
+                </div>
+                <div class="rb-at-slider-row">
+                  <div class="rb-at-slider-head"><span id="rb-rv-damping-lbl">Damping</span><span class="rb-at-val" id="rb-rv-damping-val">50%</span></div>
+                  <input type="range" id="rb-rv-damping" min="0" max="100" value="50" step="1" oninput="rbAutotuneParamsChanged()" aria-label="Reverb damping"/>
+                </div>
+                <div class="rb-at-slider-row">
+                  <div class="rb-at-slider-head"><span id="rb-rv-predelay-lbl">Pre-delay</span><span class="rb-at-val" id="rb-rv-predelay-val">20 ms</span></div>
+                  <input type="range" id="rb-rv-predelay" min="0" max="120" value="20" step="1" oninput="rbAutotuneParamsChanged()" aria-label="Reverb pre-delay"/>
+                </div>
+              </div>
+            </div>
+
+            <div class="rb-at-buildid" id="rb-at-buildid"></div>
+
+          </div>
+
+          <div class="rb-record-status hidden" id="rb-record-status">
+            <span class="rb-rec-dot"></span>
+            <span id="rb-record-time">0:00</span>
+            <span id="rb-record-hint">Recording over the beat — hit stop when you're done</span>
+            <div class="rb-meter-track rb-meter-track-mini"><div class="rb-meter-fill"></div></div>
+            <span class="rb-meter-db rb-meter-db-mini">—</span>
+          </div>
+          <div class="rb-mix-status" id="rb-mix-status"></div>
+
+          <div class="rb-review-panel hidden" id="rb-review-panel">
+            <div class="rb-review-head">
+              <span id="rb-review-title">Review your take</span>
+              <span class="rb-review-hint" id="rb-review-hint">Drag your vocal to line it up, then press play to listen through</span>
+            </div>
+
+            <!-- Stems moved up here, right under the header, and given their
+                 own distinct card - direct user feedback was that these were
+                 buried at the very bottom of the panel (past the zoom row,
+                 waveform, transport, and both gain faders) with no visual
+                 weight to set them apart from Discard/Re-record/Save, so
+                 most people never noticed they existed. Now they're the
+                 first thing visible when review opens, in their own tinted
+                 row instead of looking like just two more plain buttons. -->
+            <div class="rb-review-stems" id="rb-review-stems">
+              <span class="rb-review-stems-lbl" id="rb-review-stems-lbl">Grab a stem</span>
+              <button class="rb-stem-btn" id="rb-review-vocal-stem" onclick="rbDownloadVocalStem()">
+                <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
+                <span id="rb-review-vocal-stem-lbl">Vocal Stem</span>
+              </button>
+              <button class="rb-stem-btn" id="rb-review-beat-stem" onclick="rbRevealBeatStem()">
+                <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                <span id="rb-review-beat-stem-lbl">Beat Stem</span>
+              </button>
+            </div>
+            <!-- Round 43: "still ugly, give it a real DAW feel" - the
+                 waveform, transport, and faders used to just be three
+                 plain stacked rows with no visual grouping at all. Now
+                 each reads as its own labeled section (Track / Transport
+                 / Mixer), matching how an actual DAW timeline separates
+                 those concerns - same icon-badge + label pattern already
+                 established in the Recording panel's tabs, reused here
+                 for visual consistency across the whole page rather than
+                 inventing a fourth look. -->
+            <div class="rb-review-track-section">
+              <div class="rb-review-section-lbl"><span class="rb-review-icon-badge" aria-hidden="true"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></span>Vocal Track</div>
+              <div class="rb-review-zoom-row">
+                <button class="rb-zoom-btn" id="rb-review-zoom-out" onclick="rbReviewZoomOut()" aria-label="Zoom out">&minus;</button>
+                <span class="rb-zoom-lvl" id="rb-review-zoom-lvl">1x</span>
+                <button class="rb-zoom-btn" id="rb-review-zoom-in" onclick="rbReviewZoomIn()" aria-label="Zoom in">+</button>
+                <button class="rb-zoom-fit" onclick="rbReviewZoomFit()" id="rb-review-zoom-fit-lbl">Fit</button>
+                <button class="rb-graph-toggle" id="rb-graph-toggle" onclick="rbToggleGraphMode()" aria-pressed="false">
+                  <svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-6 4 4 5-8 4 5"/></svg>
+                  <span id="rb-graph-toggle-lbl">Graph Mode</span>
+                </button>
+              </div>
+              <canvas class="rb-review-canvas" id="rb-review-canvas" onclick="void 0"></canvas>
+              <div class="rb-review-pan-row hidden" id="rb-review-pan-row">
+                <input type="range" id="rb-review-pan" min="0" max="0" value="0" step="1"
+                       oninput="rbReviewPanInput(this.value)" aria-label="Scroll timeline"/>
+              </div>
+              <div class="rb-graph-row hidden" id="rb-graph-row">
+                <span class="rb-graph-hint" id="rb-graph-hint">Drag the pitch curve to redraw it</span>
+                <div class="rb-graph-actions">
+                  <button class="rb-graph-btn" id="rb-graph-reset" onclick="rbGraphReset()"><span id="rb-graph-reset-lbl">Reset</span></button>
+                  <button class="rb-graph-btn rb-graph-apply" id="rb-graph-apply" onclick="rbGraphApplyEdits()"><span id="rb-graph-apply-lbl">Apply Pitch Edits</span></button>
+                </div>
+              </div>
+            </div>
+            <div class="rb-review-transport" role="group" aria-label="Playback transport">
+              <button class="rb-review-play-btn" id="rb-review-play-btn" onclick="rbReviewTogglePlay()" aria-label="Play or pause">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" id="rb-review-play-svg"><polygon points="7,5 7,19 19,12"/></svg>
+              </button>
+              <span class="rb-review-time" id="rb-review-time">0:00 / 0:00</span>
+              <span class="rb-review-status" id="rb-review-status" role="status" aria-live="polite"></span>
+            </div>
+            <div class="rb-review-mixer">
+              <div class="rb-review-section-lbl"><span class="rb-review-icon-badge" aria-hidden="true"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg></span>Mixer</div>
+              <div class="rb-fader-row rb-fader-beat">
+                <span class="rb-fader-lbl" id="rb-review-beat-gain-lbl">Beat</span>
+                <input type="range" id="rb-review-beat-gain" min="0" max="150" value="100" step="1"
+                       oninput="rbReviewSetBeatGain(this.value/100)" aria-label="Beat volume"/>
+                <span class="rb-fader-val" id="rb-review-beat-gain-val">100%</span>
+              </div>
+              <div class="rb-fader-row rb-fader-vocal">
+                <span class="rb-fader-lbl" id="rb-review-vocal-gain-lbl">Vocal</span>
+                <input type="range" id="rb-review-vocal-gain" min="0" max="150" value="100" step="1"
+                       oninput="rbReviewSetVocalGain(this.value/100)" aria-label="Vocal volume"/>
+                <span class="rb-fader-val" id="rb-review-vocal-gain-val">100%</span>
+              </div>
+            </div>
+            <div class="rb-review-actions">
+              <button class="rb-act-btn" id="rb-review-discard" onclick="rbReviewDiscard()">
+                <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+                <span id="rb-review-discard-lbl">Discard</span>
+              </button>
+              <button class="rb-act-btn" id="rb-review-rerecord" onclick="rbReviewRerecord()">
+                <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                <span id="rb-review-rerecord-lbl">Re-record</span>
+              </button>
+              <button class="rb-act-btn rb-act-record" id="rb-review-save" onclick="rbReviewSave()">
+                <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                <span id="rb-review-save-lbl">Save</span>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

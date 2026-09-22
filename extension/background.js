@@ -1,15 +1,89 @@
-chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(()=>{});
+// ── Side panel, with a fallback for browsers that don't have one ──────
+//
+// v4.5.0: this file used to open with a bare
+//     chrome.sidePanel.setPanelBehavior(...)
+// on line 1. chrome.sidePanel is a Chrome API (114+). Chrome, Edge and
+// Brave have it; OPERA DOES NOT - it ships its own sidebar and has never
+// implemented Chrome's. So on Opera that first line threw a TypeError at
+// the top of the service worker, before any listener below was ever
+// registered. The result was not "the sidebar doesn't open" - it was the
+// entire extension being dead on arrival: no open-panel handling, no tab
+// sync, no update check. Reported by a user on Opera whose button did
+// nothing at all.
+//
+// Everything now goes through openPanel(), which uses the real side panel
+// where it exists and falls back to a popup window everywhere else. The
+// fallback is a normal extension page, so panel.html/panel.js run exactly
+// as they do in the side panel - no second implementation to maintain.
+const HAS_SIDE_PANEL = !!(chrome.sidePanel && chrome.sidePanel.open);
+
+if (HAS_SIDE_PANEL) {
+  // Lets a click on the toolbar icon open the panel natively.
+  try {
+    chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(()=>{});
+  } catch (e) { /* present but unhappy - the fallback below still works */ }
+}
+
+// Track the fallback window so repeated clicks focus the existing one
+// instead of littering the desktop with copies.
+let fallbackWindowId = null;
+
+chrome.windows.onRemoved.addListener((id) => {
+  if (id === fallbackWindowId) fallbackWindowId = null;
+});
+
+async function openPanelFallback() {
+  if (fallbackWindowId != null) {
+    try {
+      await chrome.windows.get(fallbackWindowId);
+      await chrome.windows.update(fallbackWindowId, { focused: true });
+      return;
+    } catch (e) {
+      fallbackWindowId = null;   // it was closed since we last looked
+    }
+  }
+  const w = await chrome.windows.create({
+    url: chrome.runtime.getURL('panel.html'),
+    type: 'popup',
+    width: 420,
+    height: 760,
+  });
+  fallbackWindowId = w && w.id != null ? w.id : null;
+}
+
+// Opens the panel by whatever means this browser actually supports, and
+// resolves once it is open so the caller can push video info into it.
+async function openPanel(tabId) {
+  if (HAS_SIDE_PANEL && tabId != null) {
+    try {
+      await chrome.sidePanel.open({ tabId });
+      return;
+    } catch (e) {
+      // Present but refused (some Chromium forks expose a stub). Fall through.
+    }
+  }
+  await openPanelFallback();
+}
+
+// Without sidePanel there is no native open-on-click, so wire the toolbar
+// button up manually. There is no default_popup in the manifest, so
+// action.onClicked does fire.
+if (!HAS_SIDE_PANEL) {
+  chrome.action.onClicked.addListener(() => {
+    openPanelFallback().catch(()=>{});
+  });
+}
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'open-panel') {
     const tabId = sender.tab?.id;
-    if (tabId) {
-      chrome.sidePanel.open({ tabId }).then(() => {
-        setTimeout(() => {
-          chrome.runtime.sendMessage({ type: 'video-info', data: msg.data }).catch(()=>{});
-        }, 600);
-      }).catch(()=>{});
-    }
+    // The fallback path does not need a tabId - only the side panel does -
+    // so this no longer bails out when tabId is missing.
+    openPanel(tabId).then(() => {
+      setTimeout(() => {
+        chrome.runtime.sendMessage({ type: 'video-info', data: msg.data }).catch(()=>{});
+      }, 600);
+    }).catch(()=>{});
   }
 
   // Auto-update: content.js sends new video info when user navigates

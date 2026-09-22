@@ -90,6 +90,63 @@ function verifyEngines() {
   });
 }
 
+// ─── BEGIN TIER GUARD ───
+// Round 77: is a given engine tier installed but BROKEN?
+//
+// enginesReady() only proves setup once completed - it checks for a marker
+// file and that the recorded interpreter still exists on disk. It does not
+// prove the packages still import. An antivirus quarantining torch, an
+// install that finished only partly, or a version skew against a pickled
+// model all leave that marker sitting there while the tier is dead. Every
+// Python-backed endpoint therefore said "ready", launched Python, and handed
+// the user whatever raw traceback came back.
+//
+// That is the shape behind "every new user gets an issue": one reported a
+// "callback error" on a freshly downloaded track, and another's logs were
+// "full of py errors". Nothing in this codebase emits the string "callback
+// error" - which is the tell that unfiltered Python was reaching the UI.
+//
+// verifyEngines() already does real per-tier import checks and caches its
+// verdict, so this just consults it and turns a broken tier into an
+// actionable 503 instead of a traceback.
+//
+// Two deliberate limits:
+//  - Only the REQUESTED tier blocks. A broken whisper install has no bearing
+//    on separating audio; blocking on it would be a worse bug than this fixes.
+//  - If the check itself cannot run, this returns null and the caller
+//    proceeds exactly as before. The guard exists to make a confusing failure
+//    legible, not to invent a new way to refuse work.
+const TIER_LABELS = {
+  core:    'audio analysis engine (BPM/key)',
+  stems:   'stem-separation engine',
+  whisper: 'transcription engine',
+};
+
+async function tierBroken(tier, logLabel) {
+  try {
+    const fresh = _lastVerifyResult && (Date.now() - (_lastVerifyResult.checked_at || 0) < 600000);
+    const verdict = fresh ? _lastVerifyResult : await verifyEngines();
+    const t = verdict && verdict.tiers && verdict.tiers[tier];
+    if (!t || t.ok !== false) return null;
+    const broken = Object.entries(t.modules || {})
+      .filter(([, m]) => !m.ok)
+      .map(([name, m]) => name + ' (' + String(m.error || 'failed to import').slice(0, 120) + ')');
+    slog((logLabel || tier) + ' request rejected: ' + tier +
+         ' tier is installed but broken — ' + broken.join('; '));
+    return {
+      error: 'The ' + (TIER_LABELS[tier] || tier + ' engine') + ' is installed but not working',
+      hint: 'Open Settings → AI Engines and click Repair. This usually means an antivirus '
+          + 'removed part of the install, or it finished only partly. Details: ' + broken.join('; '),
+      needs_repair: true,
+      broken_packages: verdict.broken_packages || [],
+    };
+  } catch (e) {
+    slog((logLabel || tier) + ': tier verification could not run (' + e.message + ') - continuing anyway');
+    return null;
+  }
+}
+// ─── END TIER GUARD ───
+
 // Headless targeted repair. Reuses setup-engines.ps1 (-Repair mode) so
 // every hardening lesson in that script - cache-poisoning retry, log
 // tail on failure, atomic marker - applies to repairs for free.
@@ -138,8 +195,41 @@ function attemptEngineRepair(brokenPackages, origin) {
           return resolve({ ok: true });
         }
         broadcastEvent('engines-repair', { state: 'failed', error: 'still broken after repair' });
+        // Round 74: a repair that exits 0 and still fails verification is the
+        // single least actionable state this app can reach - PowerShell said
+        // it worked, Python says it didn't. Write the per-module import errors
+        // to the log (they are already computed, they were just being dropped)
+        // so the cause is readable instead of guessable. The usual culprits
+        // are an antivirus removing the package straight back out, pip
+        // installing into a different interpreter than the one verified, a
+        // missing native runtime, or a package/pickled-model version skew.
+        slog('self-heal: repair exited clean but verification still fails.');
+        try { slog('  python ' + v.python + ' at ' + v.executable); } catch (e) {}
+        try {
+          for (const [tier, res] of Object.entries(v.tiers || {})) {
+            if (res.ok) continue;
+            for (const [mod, m] of Object.entries(res.modules || {})) {
+              if (!m.ok) slog('  ' + tier + '/' + mod + ' FAILED: ' + (m.error || '(no error text)'));
+            }
+          }
+        } catch (e) {}
         report('selfheal.repair-ineffective', new Error('repair ran but verification still fails'), {
-          packages: brokenPackages, verify: JSON.stringify(v.broken_packages || []).slice(0, 400), origin,
+          packages: brokenPackages,
+          verify: JSON.stringify(v.broken_packages || []).slice(0, 400),
+          // The error strings are what actually identify the cause - send them
+          // with the report too, not just the package names.
+          errors: (() => {
+            try {
+              const out = [];
+              for (const res of Object.values(v.tiers || {})) {
+                for (const [mod, m] of Object.entries(res.modules || {})) {
+                  if (!m.ok) out.push(mod + ': ' + m.error);
+                }
+              }
+              return out.join(' | ').slice(0, 600);
+            } catch (e) { return '(unavailable)'; }
+          })(),
+          origin,
         });
         return resolve({ ok: false, reason: 'still-broken' });
       }
@@ -165,6 +255,25 @@ setTimeout(async () => {
     const v = await verifyEngines();
     if (v.ok) { slog('startup verify: engines healthy'); return; }
     slog('startup verify: broken — ' + JSON.stringify(v.broken_packages || v.reason));
+    // Round 74: log WHY, not just which. verify_engines.py already records the
+    // exact import error for every module it checks, and this used to discard
+    // all of it - which is what made "repair ran but verification still fails"
+    // impossible to act on from a user's machine. A repair that exits 0 and
+    // leaves verification failing is almost always one of: an antivirus
+    // quarantining the package straight back out, a pip install landing in a
+    // different interpreter than the one being verified, a native-DLL failure
+    // (torch without the VC++ redist), or a version skew between an installed
+    // package and a pickled model. Every one of those is obvious from the
+    // error string and invisible from the package name alone.
+    try { slog('startup verify: python ' + v.python + ' at ' + v.executable); } catch (e) {}
+    try {
+      for (const [tier, res] of Object.entries(v.tiers || {})) {
+        if (res.ok) continue;
+        for (const [mod, m] of Object.entries(res.modules || {})) {
+          if (!m.ok) slog('  ' + tier + '/' + mod + ' FAILED: ' + (m.error || '(no error text)'));
+        }
+      }
+    } catch (e) {}
     if (v.broken_packages && v.broken_packages.length) {
       attemptEngineRepair(v.broken_packages, 'startup-verify');
     }
@@ -175,9 +284,46 @@ setTimeout(async () => {
 // destination. See the duplicate guard in /download.
 const _activeDownloads = new Map();
 const _recentDownloads = new Map();
+
+// Round 60: how long a just-finished video+format stays "recent" for
+// the duplicate guard. Was 30s - real evidence (a track downloading 7
+// times over about 2 minutes, surviving a full app restart) showed that
+// window is too short for whatever is re-triggering requests to fall
+// outside it. Widened with real headroom; the persistent history check
+// right below still catches anything beyond even this.
+const RECENT_DOWNLOAD_COOLDOWN_MS = 120000;
+
+// ─── BEGIN YTDLP VIDEO ID EXTRACT ───
+// Same video-id extraction used by the in-memory guard below, pulled out
+// so the persistent (history-backed) duplicate check can normalize an
+// old, differently-formatted stored URL the same way as a fresh request
+// URL and compare IDs rather than raw strings.
+//
+// Round 60: added /shorts/, /embed/, /live/, /v/ - previously only
+// ?v= and youtu.be/ were recognized, so ANY other URL shape (a Shorts
+// link, an embed link, a live-stream link) fell through to the `|| url`
+// fallback and compared the ENTIRE raw URL string instead of the video
+// ID. Two links to the exact same Shorts video that differ by so much
+// as a trailing tracking parameter (?feature=share, a share-sheet
+// suffix, etc.) would silently be treated as two DIFFERENT videos by
+// every duplicate guard in this file - a real, closable gap, found
+// while investigating a "same track downloads over and over" report.
+function extractVideoId(url) {
+  const s = String(url || '');
+  return (
+    s.match(/[?&]v=([\w-]{6,})/) ||
+    s.match(/youtu\.be\/([\w-]{6,})/) ||
+    s.match(/\/shorts\/([\w-]{6,})/) ||
+    s.match(/\/embed\/([\w-]{6,})/) ||
+    s.match(/\/live\/([\w-]{6,})/) ||
+    s.match(/\/v\/([\w-]{6,})/) ||
+    []
+  )[1] || s;
+}
+// ─── END YTDLP VIDEO ID EXTRACT ───
 setInterval(() => {
   const now = Date.now();
-  for (const [k, t] of _recentDownloads) if (now - t > 120000) _recentDownloads.delete(k);
+  for (const [k, t] of _recentDownloads) if (now - t > RECENT_DOWNLOAD_COOLDOWN_MS) _recentDownloads.delete(k);
   for (const [k, t] of _activeDownloads) if (now - t > 3600000) _activeDownloads.delete(k);
 }, 60000).unref?.();
 
@@ -445,6 +591,28 @@ async function initDB() {
       db.run(`ALTER TABLE history ADD COLUMN stockpile_committed INTEGER DEFAULT 0`);
       slog('DB migration: added history.stockpile_committed');
     } catch (e) { /* column exists */ }
+    // Files the watch-folder daemon adopts (see adoptWatchedFile below)
+    // were never downloaded through the app - they're whatever the user
+    // already had sitting in their stockpile folder tree before Watch
+    // Folder was ever turned on, or drops in later by hand. Importing
+    // them was always necessary for matching/fingerprinting/storage-
+    // breakdown accounting (the orphan-prevention this feature exists
+    // for), but silently surfacing every one of them in the main
+    // History list too meant a user's History filled up with tracks
+    // they never actually downloaded or asked the app to remember -
+    // confirmed directly against a real user's History tab, full of
+    // plain sample/vocal files from an old drive folder. This column
+    // marks a row as adopted-but-not-yet-user-facing; the /history list
+    // endpoint excludes it, while every other route (fingerprinting,
+    // matching, storage breakdown, direct by-id lookups) still sees the
+    // row exactly as before - only the visible list changes. Running
+    // Analyze on the file (see /analyze below) is treated as the user
+    // deliberately choosing to bring it into their library, and clears
+    // the flag.
+    try {
+      db.run(`ALTER TABLE history ADD COLUMN discovered_unlisted INTEGER DEFAULT 0`);
+      slog('DB migration: added history.discovered_unlisted');
+    } catch (e) { /* column exists */ }
     try {
       db.run(`ALTER TABLE stockpile_folders ADD COLUMN smart_rules TEXT`);
     } catch (e) { /* column exists */ }
@@ -493,6 +661,44 @@ async function initDB() {
       db.run(`ALTER TABLE history ADD COLUMN audio_hash TEXT`);
       slog('DB migration: added history.audio_hash');
     } catch (e) { /* already exists */ }
+    // ─── BEGIN DB INDEXES ───
+    // Round 70 (reported: "app feels slow and sluggy"): this schema had
+    // NO indexes at all - every lookup was a full table scan. Harmless
+    // at a few dozen rows, but a real library is thousands (the report
+    // came from one showing 1849 tracks) and the scans are on the hot
+    // paths, not rare ones: the watch-folder known-path check runs a
+    // file_path lookup per filesystem event, the download duplicate
+    // guard runs a youtube_url lookup per request, and stockpile_tags
+    // is queried by history_id from nine separate call sites including
+    // the per-track tag strip.
+    //
+    // Columns chosen by counting actual WHERE/ORDER BY usage in this
+    // file rather than by guessing: file_path (8 queries), created_at
+    // (9 ORDER BY), youtube_url (dedup guard), audio_hash (duplicate
+    // grouping), stockpile_tags.history_id (9), .folder_id (2). `id` is
+    // already the PRIMARY KEY, so SQLite indexes it automatically - it
+    // is deliberately not listed here.
+    //
+    // IF NOT EXISTS makes this a no-op on every launch after the first,
+    // and each one is independently wrapped so a single failure can't
+    // gate the rest (same pattern as the ALTER TABLE migrations above).
+    const _INDEXES = [
+      ['idx_history_file_path',      'history(file_path)'],
+      ['idx_history_created_at',     'history(created_at)'],
+      ['idx_history_youtube_url',    'history(youtube_url)'],
+      ['idx_history_audio_hash',     'history(audio_hash)'],
+      ['idx_sp_tags_history_id',     'stockpile_tags(history_id)'],
+      ['idx_sp_tags_folder_id',      'stockpile_tags(folder_id)'],
+    ];
+    let _idxAdded = 0;
+    for (const [name, target] of _INDEXES) {
+      try {
+        db.run('CREATE INDEX IF NOT EXISTS ' + name + ' ON ' + target);
+        _idxAdded++;
+      } catch (e) { slog('index ' + name + ' skipped: ' + e.message); }
+    }
+    slog('DB indexes ready (' + _idxAdded + '/' + _INDEXES.length + ')');
+    // ─── END DB INDEXES ───
     saveDB();
     slog('DB ready');
   } catch (e) {
@@ -543,6 +749,29 @@ function dbRun(sql, params = []) {
   try { db.run(sql, params); const r = dbAll('SELECT last_insert_rowid() as id'); saveDB(); return r[0]?.id || null; }
   catch (e) { slog('dbRun error: ' + e.message); return null; }
 }
+
+// ── Shared spawn-failure detector ───────────────────────────────────────────
+// Round 66: every "friendly spawn-failure message" translation in this file
+// (yt-dlp, ffmpeg x4, Python) used an inline /spawn (UNKNOWN|ENOENT|EPERM|
+// EACCES)/ regex that assumed Node formats a failed spawn's error message as
+// "spawn ENOENT" - true only when spawn() is given a bare command name. Every
+// call site here calls bin('ffmpeg')/bin('yt-dlp'), which always resolves to
+// a full absolute path, so Node's real message is "spawn <full path> ENOENT"
+// - the code is never adjacent to the literal word "spawn", so that regex
+// never matched, in any of these 5 places, ever. Confirmed directly: spawning
+// the real (missing) resolved ffmpeg.exe path reproduces the exact message
+// reported by a user ("Cannot start ffmpeg.exe: spawn C:\Users\...\
+// ffmpeg.exe ENOENT"), and the old regex returns false against it. Every one
+// of these translations - which exist specifically to turn a cryptic
+// "spawn ... ENOENT" into actionable guidance (antivirus quarantine, Temp
+// wiped on a portable build, etc.) - was dead code; users only ever saw the
+// raw, unhelpful message. Fixed with a single shared, correctly-permissive
+// pattern: requires "spawn" to appear before one of the four Node spawn
+// error codes as its own word, with anything (including a full path) in
+// between.
+// ─── BEGIN SPAWN ENOENT REGEX ───
+const SPAWN_ENOENT_RE = /\bspawn\b[\s\S]*\b(?:ENOENT|EPERM|EACCES|UNKNOWN)\b/;
+// ─── END SPAWN ENOENT REGEX ───
 
 // ── Binary resolution ─────────────────────────────────────────────────────────
 function bin(name) {
@@ -1195,16 +1424,51 @@ function enginesReady() {
 
 
 
-function run(cmd, args) {
+// Round 67: optional timeoutMs, off by default (every existing caller keeps
+// its current no-timeout behavior unchanged). Added after finding that
+// analyzeOneInBackground()'s ffmpeg decode step - unlike the Python analysis
+// step right after it, which already force-kills after a 240s guard - had
+// NO timeout at all. Because the background analysis worker loop does
+// `await analyzeOneInBackground(row)` inside a plain serial while(true), a
+// single hung ffmpeg process there (antivirus real-time scan holding the
+// file, a corrupt/exotic input ffmpeg spins on, etc.) wedges the ENTIRE
+// queue forever: no error, no log line, no crash - analyzeWorker.running
+// just never goes false again, so the last progress broadcast (whichever
+// track was mid-decode) is the last thing the UI ever hears about, which
+// matches a real report of the "Analyzing N... (track)" pill getting stuck
+// indefinitely with nothing else in the logs to explain it. Root cause
+// could not be pinned down with certainty from static analysis alone (the
+// exact hang trigger needs a live repro this environment can't force), but
+// this closes the concrete structural gap regardless - the same standard
+// this codebase already applies elsewhere (see Round 60's PATCHNOTES entry)
+// when a mechanism is a real, closable gap even without a confirmed trigger.
+// ─── BEGIN RUN WITH TIMEOUT ───
+function run(cmd, args, timeoutMs) {
   return new Promise((resolve, reject) => {
     const proc = spawn(cmd, args, { windowsHide: true });
-    let out = '', err = '';
+    let out = '', err = '', timedOut = false, guard = null;
+    if (timeoutMs) {
+      guard = setTimeout(() => {
+        timedOut = true;
+        try { proc.kill('SIGKILL'); } catch (e) {}
+      }, timeoutMs);
+    }
     proc.stdout.on('data', d => { out += d; });
     proc.stderr.on('data', d => { err += d; });
-    proc.on('close', code => code === 0 ? resolve(out) : reject(new Error(err.trim() || 'Exit ' + code)));
-    proc.on('error', e => reject(new Error('Cannot start ' + path.basename(cmd) + ': ' + e.message)));
+    proc.on('close', code => {
+      if (guard) clearTimeout(guard);
+      if (timedOut) {
+        return reject(new Error('Timed out after ' + timeoutMs + 'ms and was killed: ' + path.basename(cmd)));
+      }
+      code === 0 ? resolve(out) : reject(new Error(err.trim() || 'Exit ' + code));
+    });
+    proc.on('error', e => {
+      if (guard) clearTimeout(guard);
+      reject(new Error('Cannot start ' + path.basename(cmd) + ': ' + e.message));
+    });
   });
 }
+// ─── END RUN WITH TIMEOUT ───
 
 // ── ASCII-safe path workaround for Windows + ffmpeg ────────────────────
 // On Windows, Node's spawn() passes argv through the ANSI code page
@@ -1470,6 +1734,69 @@ app.get('/diag-bin', (_, res) => {
   res.json(result);
 });
 
+// ─── BEGIN YTDLP ERROR CLASSIFY ───
+// Turns raw yt-dlp stderr into a user-actionable {msg, hint} pair, plus
+// three booleans the download retry logic needs (is403/isSigBroken/
+// isFatal). Originally lived inline in the /download close handler only
+// - /info's catch block had no translation at all and just echoed raw
+// stderr straight to the UI ("ERROR: [youtube] xxxxx: Private video.
+// Sign in if you've been granted access... Use --cookies-from-browser
+// or --cookies for the authentication. See https://github.com/..." -
+// technically accurate, useless to someone who just pasted a URL and
+// can't run yt-dlp flags themselves). Extracted so both call sites stay
+// in sync instead of drifting into two different error vocabularies.
+function classifyYtdlpError(stderr, code) {
+  const s = stderr || '';
+  const errLower = s.toLowerCase();
+  const is403 = /http error 403|forbidden/i.test(s);
+  const isSigBroken = /signature extraction|player.*returned|nsig extraction|requested format/i.test(errLower);
+  const isFatal = /video unavailable|private video|members[- ]only|removed by|copyright|geo[- ]restrict|age[- ]restrict/i.test(errLower);
+
+  let msg, hint;
+  if (is403) {
+    msg = 'YouTube is blocking this download (HTTP 403). yt-dlp may be out of date.';
+    hint = 'Go to Settings > Updates and click "Check now" next to yt-dlp. YouTube frequently changes their internal API and yt-dlp needs regular updates to keep up.';
+  } else if (isSigBroken) {
+    msg = 'YouTube changed their player and yt-dlp can\'t extract this video yet.';
+    hint = 'Go to Settings > Updates and click "Check now" next to yt-dlp. This usually fixes within hours of a YouTube change.';
+  } else if (/private video/i.test(errLower)) {
+    // Split out from "unavailable/removed" (Round 56) - yt-dlp's own
+    // message ("Sign in if you've been granted access") means this
+    // video specifically still exists and belongs to someone, unlike a
+    // deleted/removed one, so the old blanket "no longer available"
+    // wording was misleading here even though it was technically true
+    // that this app can't fetch it either way.
+    //
+    // Round 57 briefly added a --cookies-from-browser option so an
+    // account that genuinely has access could actually download it -
+    // reverted in Round 58 at direct request ("remove the sign in
+    // thing if u cant make it without it"): private-video access is
+    // enforced server-side by YouTube and there is no way to fetch one
+    // without authenticating as an authorized account, so the feature
+    // was removed rather than kept as a half-measure the user didn't
+    // want.
+    msg = 'This video is private.';
+    hint = 'Freq.Phull can\'t download private videos - that needs to be signed in as an account the uploader granted access to, which isn\'t supported.';
+  } else if (/video unavailable|removed by/i.test(errLower)) {
+    msg = 'This video is no longer available (deleted or removed).';
+    hint = 'Try a different source or check if the video was re-uploaded elsewhere.';
+  } else if (/members[- ]only/i.test(errLower)) {
+    msg = 'This video is members-only and requires a paid YouTube subscription.';
+    hint = 'Freq.Phull cannot download members-only content without authenticated cookies.';
+  } else if (/geo[- ]restrict/i.test(errLower)) {
+    msg = 'This video is geo-restricted in your region.';
+    hint = 'You\'d need a VPN to access this video.';
+  } else if (/age[- ]restrict/i.test(errLower)) {
+    msg = 'This video is age-restricted.';
+    hint = 'Sign-in cookies would be needed to bypass — Freq.Phull doesn\'t support that yet.';
+  } else {
+    msg = s.trim() || ('yt-dlp failed' + (code !== undefined && code !== null ? ' with code ' + code : ''));
+    hint = null;
+  }
+  return { is403, isSigBroken, isFatal, msg, hint };
+}
+// ─── END YTDLP ERROR CLASSIFY ───
+
 app.get('/info', async (req, res) => {
   const url = (req.query.url || '').trim();
   slog('Fetching info for: ' + url);
@@ -1484,6 +1811,47 @@ app.get('/info', async (req, res) => {
     if (/[?&]list=/.test(url) && !/[?&]v=/.test(url) && !/youtu\.be\//.test(url)) {
       const rawPl = await run(ytdlp, ['--flat-playlist', '--dump-single-json', '--no-warnings', url]);
       const pl = JSON.parse(rawPl);
+      // Round 76: flag the tracks already in History so the client can skip
+      // them instead of queueing them.
+      //
+      // The duplicate guard in /download already refused these - but it
+      // refused them as ERRORS, one SSE stream and one red failed row per
+      // track. Queue a 60-track playlist you mostly own and you got 50-odd
+      // failures to scroll past, which reads like the grab broke rather than
+      // like it did the right thing. Deciding it up here means they never
+      // enter the queue at all.
+      //
+      // Matched the same way /download's persistent guard matches: by VIDEO
+      // ID rather than raw URL string (share/shortened/tracking-suffixed
+      // links for one video all differ as text), per format, and only when
+      // the earlier file is still on disk - a track the user moved or
+      // deleted is not a duplicate, it is the only copy, and silently
+      // skipping it would leave them unable to get it back.
+      //
+      // Format matters: the same video already held as mp3 is NOT a
+      // duplicate of a wav request. The client passes the format it is about
+      // to queue with; absent that we fall back to the saved preference so
+      // an older client still gets sensible behaviour.
+      const plFmt = String(req.query.format || getPref('format') || 'mp3').toLowerCase();
+      const ownedIds = new Set();
+      try {
+        const rows = dbAll(
+          'SELECT youtube_url, file_path FROM history WHERE format = ?', [plFmt]
+        );
+        for (const r of rows) {
+          if (!r.youtube_url || !r.file_path) continue;
+          const vid = extractVideoId(r.youtube_url);
+          if (!vid) continue;
+          // fs.existsSync per row, but only over rows of ONE format that
+          // carry both a URL and a path - and this runs once per playlist
+          // paste, not per track.
+          if (fs.existsSync(r.file_path)) ownedIds.add(vid);
+        }
+      } catch (e) {
+        // Non-fatal: worst case nothing is flagged and /download's own
+        // guard catches them exactly as it did before.
+        slog('playlist: owned-track lookup failed (non-fatal): ' + e.message);
+      }
       const entries = (pl.entries || [])
         .filter(e => e && e.id)
         .slice(0, 500)
@@ -1492,11 +1860,17 @@ app.get('/info', async (req, res) => {
           title: e.title || '(untitled)',
           url: 'https://www.youtube.com/watch?v=' + e.id,
           duration: e.duration || null,
+          alreadyHave: ownedIds.has(e.id),
         }));
+      const alreadyHaveCount = entries.filter(e => e.alreadyHave).length;
+      slog('playlist: ' + entries.length + ' tracks, ' + alreadyHaveCount +
+           ' already in history as ' + plFmt + ' (will be skipped)');
       return res.json({
         playlist: true,
         title: pl.title || 'Playlist',
         count: entries.length,
+        alreadyHaveCount,
+        format: plFmt,
         entries,
       });
     }
@@ -1511,13 +1885,24 @@ app.get('/info', async (req, res) => {
     // explicitly instead of letting them stare at "Cannot start yt-dlp.exe:
     // spawn ... ENOENT" which they can't act on.
     let userMsg = e.message || 'yt-dlp failed';
-    if (/spawn (UNKNOWN|ENOENT|EPERM|EACCES)/.test(userMsg)) {
+    let userHint = null;
+    if (SPAWN_ENOENT_RE.test(userMsg)) {
       userMsg = 'yt-dlp.exe is missing or blocked. ' +
                 'This is usually caused by Windows Defender / antivirus quarantining the bundled binary on first run. ' +
                 'Add the Freq.Phull install folder to your antivirus exclusions and restart the app, ' +
                 'or install yt-dlp system-wide.';
+    } else {
+      // Not a spawn/launch failure - it's yt-dlp itself reporting a real
+      // problem with this URL (private/unavailable/geo-blocked/age-
+      // restricted/blocked/etc). Same translation /download already
+      // applies to its own failures, so pasting a bad URL and clicking
+      // Fetch doesn't show raw "ERROR: [youtube] xxxxx: ..." yt-dlp
+      // internals with flags the user has no way to act on.
+      const classified = classifyYtdlpError(userMsg);
+      userMsg = classified.msg;
+      userHint = classified.hint;
     }
-    res.status(400).json({ error: userMsg });
+    res.status(400).json({ error: userMsg, hint: userHint });
   }
 });
 
@@ -1583,19 +1968,64 @@ app.get('/download', async (req, res) => {
   // Rather than chase every possible trigger, the same track cannot be
   // downloaded twice into the same folder at once, or immediately after
   // it just finished.
-  const _vid = (url.match(/[?&]v=([\w-]{6,})/) || url.match(/youtu\.be\/([\w-]{6,})/) || [])[1] || url;
-  const dlKey = _vid + '|' + fmt + '|' + String(outDir).toLowerCase();
+  const _vid = extractVideoId(url);
+  // Round 60: dropped outDir from this key. It used to be
+  // `_vid + '|' + fmt + '|' + outDir` - which meant the SAME video, in
+  // the SAME format, requested from two different sources that happen
+  // to land on two different-LOOKING (even if logically equivalent)
+  // destination folder strings, was NOT recognized as a duplicate by
+  // either guard below. Concretely: the Chrome extension's /download
+  // calls never send outDir at all (server computes the default fresh
+  // every time from current prefs), while the desktop app sometimes
+  // does - any timing window where prefs change between two requests,
+  // or any two callers landing on a differently-CASED/differently-
+  // SLASHED but equivalent path, silently defeated this guard. Video +
+  // format is what actually defines "the same download" from the
+  // user's perspective; which folder it's headed to doesn't change
+  // that. (The persistent, history-backed check further down already
+  // ignores outDir entirely and was unaffected by this.)
+  const dlKey = _vid + '|' + fmt;
   if (_activeDownloads.has(dlKey)) {
-    slog('download: refusing duplicate, already in flight: ' + _vid);
+    slog('download: refusing duplicate, already in flight (in-flight guard): ' + _vid + ' fmt=' + fmt);
     sse('error', { message: 'This track is already downloading.', code: 'duplicate' });
     return res.end();
   }
   const finishedAt = _recentDownloads.get(dlKey);
-  if (finishedAt && Date.now() - finishedAt < 30000) {
-    slog('download: refusing repeat within 30s: ' + _vid);
+  if (finishedAt && Date.now() - finishedAt < RECENT_DOWNLOAD_COOLDOWN_MS) {
+    slog('download: refusing repeat within cooldown (recent guard, ' + Math.round((Date.now()-finishedAt)/1000) + 's ago): ' + _vid + ' fmt=' + fmt);
     sse('error', { message: 'That track just finished downloading.', code: 'duplicate' });
     return res.end();
   }
+  // Persistent check: the guards above only catch re-requests within the
+  // same process's uptime (in-memory Maps, ~2min retention). A user
+  // re-pasting a link days later, or after restarting the app, sailed
+  // straight through both and re-downloaded the same track from
+  // scratch. History already has every past download's source URL and
+  // saved path, so look there too - matched by video id (not raw URL
+  // string, since yt-dlp/share links for the same video vary in format)
+  // and format, and only counted as a duplicate if the earlier file is
+  // still on disk. If the user moved or deleted it, this is not a
+  // duplicate anymore - it is the only copy, and blocking it would trap
+  // them with no way to get the track back.
+  try {
+    const priorRows = dbAll(
+      "SELECT id, youtube_url, file_path, created_at FROM history WHERE format = ? ORDER BY created_at DESC",
+      [fmt]
+    );
+    const prior = priorRows.find(r => extractVideoId(r.youtube_url) === _vid && r.file_path && fs.existsSync(r.file_path));
+    if (prior) {
+      slog('download: refusing, already in history since ' + prior.created_at + ' (persistent guard): ' + _vid + ' fmt=' + fmt + ' at=' + prior.file_path);
+      const when = String(prior.created_at || '').split(' ')[0] || 'earlier';
+      sse('error', {
+        message: 'Already downloaded on ' + when + ' — ' + prior.file_path,
+        code: 'duplicate_history',
+        existingPath: prior.file_path,
+        downloadedAt: prior.created_at,
+      });
+      return res.end();
+    }
+  } catch (e) { slog('download: history duplicate check failed (non-fatal): ' + e.message); }
+  slog('download: proceeding (passed all duplicate guards): ' + _vid + ' fmt=' + fmt);
   _activeDownloads.set(dlKey, Date.now());
   let _dlChild = null, _dlReleased = false;
   const releaseDownload = (completed) => {
@@ -1739,11 +2169,11 @@ app.get('/download', async (req, res) => {
   p.on('close', async code => {
     slog('yt-dlp exit code: ' + code);
     if (code !== 0) {
-      // classify the failure and decide whether to retry.
-      const errLower = (stderr || '').toLowerCase();
-      const is403 = /http error 403|forbidden/i.test(stderr);
-      const isSigBroken = /signature extraction|player.*returned|nsig extraction|requested format/i.test(errLower);
-      const isFatal = /video unavailable|private video|members[- ]only|removed by|copyright|geo[- ]restrict|age[- ]restrict/i.test(errLower);
+      // classify the failure and decide whether to retry (Round 56:
+      // shares classifyYtdlpError() with /info instead of keeping a
+      // second, driftable copy of the same regex set here).
+      const classified = classifyYtdlpError(stderr, code);
+      const { is403, isSigBroken, isFatal } = classified;
 
       // Retry once with Android client for 403 / sig errors, but not for
       // genuinely unrecoverable failures (deleted videos, geo-blocks).
@@ -1762,31 +2192,8 @@ app.get('/download', async (req, res) => {
         return;  // bail out of THIS close handler; the retry's close handler will fire
       }
 
-      // No retry possible - surface a user-friendly message with concrete
-      // next steps based on the error type.
-      let msg, hint;
-      if (is403) {
-        msg = 'YouTube is blocking this download (HTTP 403). yt-dlp may be out of date.';
-        hint = 'Go to Settings > Updates and click "Check now" next to yt-dlp. YouTube frequently changes their internal API and yt-dlp needs regular updates to keep up.';
-      } else if (isSigBroken) {
-        msg = 'YouTube changed their player and yt-dlp can\'t extract this video yet.';
-        hint = 'Go to Settings > Updates and click "Check now" next to yt-dlp. This usually fixes within hours of a YouTube change.';
-      } else if (/video unavailable|private video|removed by/i.test(errLower)) {
-        msg = 'This video is no longer available (deleted, private, or removed).';
-        hint = 'Try a different source or check if the video was re-uploaded elsewhere.';
-      } else if (/members[- ]only/i.test(errLower)) {
-        msg = 'This video is members-only and requires a paid YouTube subscription.';
-        hint = 'Freq.Phull cannot download members-only content without authenticated cookies.';
-      } else if (/geo[- ]restrict/i.test(errLower)) {
-        msg = 'This video is geo-restricted in your region.';
-        hint = 'You\'d need a VPN to access this video.';
-      } else if (/age[- ]restrict/i.test(errLower)) {
-        msg = 'This video is age-restricted.';
-        hint = 'Sign-in cookies would be needed to bypass — Freq.Phull doesn\'t support that yet.';
-      } else {
-        msg = stderr.trim() || 'yt-dlp failed with code ' + code;
-        hint = null;
-      }
+      // No retry possible - surface the classified user-friendly message.
+      const { msg, hint } = classified;
       cleanupStaging();
       releaseDownload(false);
       sse('error', { message: msg, hint, code: 'download_failed', raw: stderr.trim().slice(-500) });
@@ -1904,7 +2311,7 @@ app.get('/download', async (req, res) => {
   proc.on('error', e => {
     slog('yt-dlp spawn error: ' + e.message);
     let userMsg = 'Cannot start yt-dlp: ' + e.message;
-    if (/spawn (UNKNOWN|ENOENT|EPERM|EACCES)/.test(e.message || '')) {
+    if (SPAWN_ENOENT_RE.test(e.message || '')) {
       // Two common causes: (1) antivirus quarantined yt-dlp.exe, OR
       // (2) the user (or Windows Storage Sense / a cleaner tool) wiped
       // Windows Temp, which is where portable builds unpack their
@@ -2033,16 +2440,32 @@ app.post('/history/:id/user-notes', (req, res) => {
 // thousand tracks sent megabytes to the renderer on every refresh -
 // including during boot, where it competed with first paint. Both are
 // fetched per track, on demand, by the handful of places that need them.
+// Round 70: audio_hash removed from the LIST payload. It is a 512-bit
+// (128-char) hex string per row and the renderer never reads it - zero
+// references to `audio_hash` anywhere in renderer/ or extension/, checked
+// directly. It was pure weight: measured on a realistic 1849-row library
+// it accounted for ~0.25 MB of a ~1.25 MB response, and /history is
+// refetched in full from 30 separate call sites (every download, tag
+// change, favorite toggle, delete...), so the saving repeats on each one.
+// Duplicate detection reads audio_hash straight from the DB server-side
+// (/history/duplicates, the library doctor) and /history/:id/full still
+// returns every column, so nothing loses access to it.
 const HISTORY_LIST_COLUMNS =
   'id, title, channel, youtube_url, file_path, format, duration, ' +
   'bpm, key_note, key_mode, thumbnail, notes, user_notes, created_at, ' +
-  'is_favorite, stockpile_committed, audio_hash';
+  'is_favorite, stockpile_committed';
 
 app.get('/history', (req, res) => {
   const rawLimit = req.query && req.query.limit;
   const limit = rawLimit ? Math.max(1, Math.min(50000, parseInt(rawLimit, 10) || 50000)) : 50000;
+  // Excludes discovered_unlisted rows (watch-folder/adopt-orphans finds
+  // that were never downloaded through the app and haven't been
+  // Analyzed yet - see the migration comment above). COALESCE guards
+  // rows from before this column existed, which read back as NULL, not
+  // 0. Every other route (fingerprinting, matching, storage breakdown,
+  // by-id lookups) is untouched - only this user-facing list is filtered.
   res.json(dbAll('SELECT ' + HISTORY_LIST_COLUMNS +
-    ' FROM history ORDER BY created_at DESC LIMIT ' + limit));
+    ' FROM history WHERE COALESCE(discovered_unlisted,0)=0 ORDER BY created_at DESC LIMIT ' + limit));
 });
 
 // Full row for one track, including the heavy text columns. Used when a
@@ -3512,8 +3935,8 @@ app.delete('/stockpile/tracks/:historyId/tags/:folderId', (req, res) => {
   // the untag if the file needs to move.
   const stockpile_root = req.query.stockpile_root || null;
   try {
-    // Check if the tag we're about to remove was the primary. If yes,
-    // we'll need to promote another tag (or move the file back to root).
+    // Check if the tag being removed was the primary. If so, another tag
+    // needs to be promoted (or the file moved back to root).
     const removed = dbAll(
       'SELECT is_primary FROM stockpile_tags WHERE history_id=? AND folder_id=?',
       [historyId, folderId]
@@ -4075,6 +4498,98 @@ app.post('/slowverb/render', async (req, res) => {
   }
 });
 
+// Random Beats: bounce a recorded topline onto its beat into one new
+// WAV. The client records the mic locally while the beat plays and posts
+// both here rather than mixing in the browser, so the result matches
+// every other export in the app (real ffmpeg encode, saved beside the
+// source, added to History) instead of being a browser-only artifact.
+const _rbMixdownReserved = new Set();
+app.post('/random-beats/mixdown', upload.single('vocal'), async (req, res) => {
+  const cleanupTmp = [];
+  const cleanup = () => { for (const p of cleanupTmp) { try { fs.unlinkSync(p); } catch {} } };
+  if (!req.file) return res.status(400).json({ error: 'No vocal recording uploaded' });
+  cleanupTmp.push(req.file.path);
+
+  const beatPath = String((req.body && req.body.beatPath) || '');
+  const beatId = req.body && req.body.beatId ? parseInt(req.body.beatId, 10) : null;
+  const offsetMs = Math.max(0, parseInt((req.body && req.body.offsetMs) || '0', 10) || 0);
+  // Faders in the review panel - clamped well past "unity" in both
+  // directions so a malformed or hostile value can't be used to blow out
+  // the mix or silently zero it, but wide enough to genuinely boost a
+  // quiet vocal or duck a loud beat.
+  const clampGain = (v) => { const n = parseFloat(v); return isFinite(n) ? Math.max(0, Math.min(3, n)) : 1; };
+  const beatGain = clampGain(req.body && req.body.beatGain);
+  const vocalGain = clampGain(req.body && req.body.vocalGain);
+  if (!beatPath || !fs.existsSync(beatPath)) {
+    cleanup();
+    return res.status(400).json({ error: 'Beat file not found: ' + beatPath });
+  }
+
+  let beatSafe, vocalSafe;
+  try {
+    beatSafe = asciiSafeFfmpegPath(beatPath);
+    if (beatSafe.tempCopy) cleanupTmp.push(beatSafe.tempCopy);
+    vocalSafe = asciiSafeFfmpegPath(req.file.path);
+    if (vocalSafe.tempCopy) cleanupTmp.push(vocalSafe.tempCopy);
+  } catch (e) {
+    cleanup();
+    return res.status(500).json({ error: 'Could not prepare files: ' + e.message });
+  }
+
+  const base = path.basename(beatPath, path.extname(beatPath)).slice(0, 120);
+  const outDir = path.dirname(beatPath);
+  let outPath = path.join(outDir, `${base} (Topline).wav`);
+  let n = 2;
+  // fs.existsSync alone only reflects what's already ON DISK - two
+  // requests for the same beat arriving close together (e.g. recording
+  // twice back to back before the first mixdown has finished writing)
+  // can both see the same name as free and race to overwrite each
+  // other's output. _rbMixdownReserved tracks names claimed by a
+  // request that's still IN FLIGHT, closing that gap; it's released in
+  // both exit paths below.
+  while ((fs.existsSync(outPath) || _rbMixdownReserved.has(outPath)) && n <= 60) {
+    outPath = path.join(outDir, `${base} (Topline ${n}).wav`);
+    n++;
+  }
+  _rbMixdownReserved.add(outPath);
+
+  // -itsoffset delays the vocal input by the measured gap between the
+  // beat starting and the recorder actually starting, so the bounce
+  // lines up with what the user heard while they recorded rather than
+  // both tracks starting at zero regardless of that gap.
+  const offsetSec = (offsetMs / 1000).toFixed(3);
+  const args = [
+    '-y',
+    '-i', beatSafe.ffmpegPath,
+    '-itsoffset', offsetSec, '-i', vocalSafe.ffmpegPath,
+    '-filter_complex',
+    `[0:a]aformat=channel_layouts=stereo,volume=${beatGain.toFixed(3)}[b];` +
+    `[1:a]aformat=channel_layouts=stereo,volume=${vocalGain.toFixed(3)}[v];` +
+    '[b][v]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[out]',
+    '-map', '[out]', '-acodec', 'pcm_s16le', '-ar', '44100', outPath,
+  ];
+
+  try {
+    markIntentionalMove(outPath);
+    await run(bin('ffmpeg'), args);
+    if (!fs.existsSync(outPath) || fs.statSync(outPath).size < 1024) throw new Error('mixdown produced no usable file');
+  } catch (e) {
+    cleanup();
+    _rbMixdownReserved.delete(outPath);
+    report('random-beats.mixdown-failed', e, { beatPath, offsetMs, beatGain, vocalGain, _group: 'mixdown-failed' });
+    return res.status(500).json({ error: 'Mixdown failed: ' + e.message });
+  }
+  cleanup();
+  _rbMixdownReserved.delete(outPath);
+
+  const beatRow = beatId ? dbAll('SELECT title FROM history WHERE id=?', [beatId])[0] : null;
+  const beatTitle = (beatRow && beatRow.title) || base;
+  const title = `${beatTitle} (Topline)`;
+  const historyId = dbRun('INSERT INTO history (title, file_path, format) VALUES (?, ?, ?)', [title, outPath, 'wav']);
+  slog(`random-beats: mixdown saved ${path.basename(outPath)} (offset ${offsetMs}ms)`);
+  res.json({ ok: true, path: outPath, filename: path.basename(outPath), title, historyId });
+});
+
 app.get('/sentry-status', (_, res) => {
   // Re-resolve the DSN at request time so the user sees the same state
   // the sentry-init module sees. Extract host + project ID so the user
@@ -4628,7 +5143,11 @@ app.post('/stockpile/adopt-orphans', (req, res) => {
       if (!includeStems && /—\s*Stems/i.test(f.path)) { skippedStems++; continue; }
       const title = path.basename(f.name, path.extname(f.name));
       const fmt = path.extname(f.name).replace('.', '').toLowerCase();
-      dbRun(`INSERT INTO history (title, file_path, format) VALUES (?, ?, ?)`,
+      // Same reasoning as the watch-folder daemon (see discovered_unlisted
+      // migration comment) - these files weren't downloaded through the
+      // app either, just discovered sitting on disk. Kept out of the
+      // main History list until the user runs Analyze on one.
+      dbRun(`INSERT INTO history (title, file_path, format, discovered_unlisted) VALUES (?, ?, ?, 1)`,
         [title, f.path, fmt]);
       known.add(norm); // guard against duplicate paths within one walk
       adopted.push({ title, file_path: f.path });
@@ -4746,6 +5265,30 @@ function restartStockpileWatcher() {
   }
 }
 
+// ─── BEGIN WATCH-FOLDER KNOWN-PATH CHECK ───
+// Round 64: this used to be inlined in adoptWatchedFile() as a case-fold
+// split between JS and SQL - norm was full.toLowerCase() (proper
+// Unicode-aware folding) but the DB side compared against SQL's
+// LOWER(file_path), and sql.js's LOWER() (bare SQLite, no ICU extension)
+// only folds ASCII. A path containing an uppercase accented letter -
+// e.g. "...Evasif..." with an accented E - never matched its own
+// already-known row: LOWER() left the accented E untouched while
+// full.toLowerCase() correctly lowercased it, so the two strings
+// compared unequal forever. Every fs.watch event on that file (including
+// the one write_tags.py's own in-place rewrite fires right after
+// analysis finishes) looked "unknown" and got re-adopted as a brand-new
+// history row - an unbounded adopt -> analyze -> tag-write -> re-trigger
+// loop, confirmed against a real evidence log (nine distinct history ids
+// for one file in ~3 minutes) and reproduced directly against sql.js's
+// LOWER(). Pulled out to its own function so it's unit-testable without
+// standing up the whole server - see tools/test-watch-folder-dedup.js.
+function isFileKnownToHistory(dbAll, full) {
+  const norm = process.platform === 'win32' ? full.toLowerCase() : full;
+  return dbAll('SELECT file_path FROM history WHERE file_path IS NOT NULL')
+    .some(r => (process.platform === 'win32' ? String(r.file_path).toLowerCase() : r.file_path) === norm);
+}
+// ─── END WATCH-FOLDER KNOWN-PATH CHECK ───
+
 async function adoptWatchedFile(full) {
   // In-progress download? Staging directories live inside the output
   // folder so the finished file can be renamed onto the same volume,
@@ -4768,12 +5311,7 @@ async function adoptWatchedFile(full) {
   }
   // Known to the DB already? Belt-and-suspenders for any path we didn't
   // mark (e.g. very old code paths, manual fs ops).
-  const norm = process.platform === 'win32' ? full.toLowerCase() : full;
-  const known = dbAll('SELECT id FROM history WHERE file_path IS NOT NULL').length
-    ? dbAll('SELECT 1 FROM history WHERE ' +
-        (process.platform === 'win32' ? 'LOWER(file_path)=?' : 'file_path=?'), [norm]).length > 0
-    : false;
-  if (known) return;
+  if (isFileKnownToHistory(dbAll, full)) return;
   // Final safety net: if a row with the same BASENAME exists with
   // stockpile_committed=1 and was created in the last 60s, this is
   // almost certainly the destination of a move we should have caught.
@@ -4804,11 +5342,16 @@ async function adoptWatchedFile(full) {
   }
   const title = path.basename(full, path.extname(full));
   const fmt = path.extname(full).replace('.', '').toLowerCase();
-  dbRun('INSERT INTO history (title, file_path, format) VALUES (?, ?, ?)', [title, full, fmt]);
+  // discovered_unlisted=1 - not downloaded through the app, so it stays
+  // out of the main History list until the user actually does something
+  // with it (Analyze clears the flag - see /analyze below). Matching,
+  // fingerprinting, and storage-breakdown accounting all still work off
+  // this row exactly as before; only the visible list is affected.
+  dbRun('INSERT INTO history (title, file_path, format, discovered_unlisted) VALUES (?, ?, ?, 1)', [title, full, fmt]);
   const idRow = dbAll('SELECT last_insert_rowid() AS id')[0];
   const historyId = idRow ? idRow.id : null;
   saveDB();
-  slog('watch-folder: adopted "' + title + '" (id=' + historyId + ')');
+  slog('watch-folder: adopted "' + title + '" (id=' + historyId + ', unlisted until analyzed)');
   if (historyId) {
     try { computeFingerprint(historyId, full); } catch {}
     // Watch-folder ingest also honors the auto-tag opt-out - bare
@@ -5303,8 +5846,12 @@ function analyzeOneInBackground(row) {
       return resolve(false);
     }
 
-    // 1) Decode to WAV
-    run(ffmpegBin, ['-y', '-i', safe.ffmpegPath, '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2', wavTmp])
+    // 1) Decode to WAV. 120s timeout (Round 67) - the analysis Python
+    // step right after this already force-kills at 240s; this step is
+    // ordinarily a few seconds for any real track, so 120s is generous
+    // headroom while still guaranteeing the serial worker loop can never
+    // hang here forever.
+    run(ffmpegBin, ['-y', '-i', safe.ffmpegPath, '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2', wavTmp], 120000)
       .then(function(){
         if (safe.tempCopy) { try { fs.unlinkSync(safe.tempCopy); } catch (e) {} }
         // 2) Run analyzer
@@ -5559,6 +6106,14 @@ app.get('/analyze', async (req, res) => {
   if (!filePath || !fs.existsSync(filePath)) {
     return res.status(404).json({ error: 'File not found: ' + filePath });
   }
+  // Running Analyze on a file is the user deliberately choosing to bring
+  // it into their library - promote it out of discovered_unlisted (see
+  // migration comment) so it now shows up in the main History list.
+  // Matched by path rather than requiring callers to pass historyId,
+  // since not every /analyze call site has one on hand.
+  try {
+    dbRun('UPDATE history SET discovered_unlisted=0 WHERE file_path=? AND discovered_unlisted=1', [filePath]);
+  } catch {}
 
   // Find analyze.py - packaged in asar.unpacked, copy to temp first
   const scriptSrc = getResourcePath('analyze.py');
@@ -5635,7 +6190,7 @@ app.get('/analyze', async (req, res) => {
     // before the real error, so we never surface e.message raw.
     const errText = e.message || '';
     let userMsg;
-    if (/spawn (UNKNOWN|ENOENT|EPERM|EACCES)/.test(errText)) {
+    if (SPAWN_ENOENT_RE.test(errText)) {
       userMsg = 'ffmpeg.exe is missing or blocked. ' +
                 'This is usually caused by Windows Defender / antivirus quarantining the bundled binary on first run. ' +
                 'Add the Freq.Phull install folder to your antivirus exclusions and restart the app, ' +
@@ -5772,7 +6327,7 @@ app.post('/convert-wav-upload', upload.single('audio'), async (req, res) => {
     cleanup(); try { fs.unlinkSync(outPath); } catch {}
     slog('convert-wav-upload error: ' + e.message);
     let userMsg = e.message;
-    if (/spawn (UNKNOWN|ENOENT|EPERM|EACCES)/.test(e.message || '')) {
+    if (SPAWN_ENOENT_RE.test(e.message || '')) {
       userMsg = 'ffmpeg.exe is missing or blocked. ' +
                 'Antivirus may have quarantined it — add Freq.Phull to exclusions and restart.';
     }
@@ -5832,7 +6387,7 @@ app.get('/convert-wav', async (req, res) => {
     // meaningful lines of stderr (the real error is always at the end).
     const errText = e.message || '';
     let userMsg;
-    if (/spawn (UNKNOWN|ENOENT|EPERM|EACCES)/.test(errText)) {
+    if (SPAWN_ENOENT_RE.test(errText)) {
       userMsg = 'ffmpeg.exe could not be found. Most likely causes:\n' +
                 '• Windows Temp was cleared (CCleaner, Storage Sense, "del Temp"). Portable builds re-extract on launch — close Freq.Phull completely (check Task Manager) and reopen.\n' +
                 '• Windows Defender / antivirus quarantined the bundled binary. Add the install folder to exclusions and restart.\n' +
@@ -6274,6 +6829,42 @@ app.post('/repair-apply', (req, res) => {
   }
 });
 
+// Language modes that have no dedicated Whisper code, or whose lyrics
+// routinely code-switch with English within a single line - for both,
+// forcing --language to one code either fails outright (no such code)
+// or makes Whisper "correct" the English half toward the forced
+// language. Handled uniformly: auto-detect stays on (turbo/medium
+// models track code-switching per-segment natively) and an
+// initial_prompt biases the model's language model toward the right
+// vocabulary/register instead of "correcting" it away. Real artist
+// references in each prompt aren't decoration - Whisper's initial
+// prompt conditions on the exact text given, so naming artists actually
+// known for that specific code-switching register measurably steers
+// the decoder's vocabulary bias, the same way "in the style of X" works
+// in a text LLM prompt.
+const CODE_SWITCH_PROMPTS = {
+  bi: "Bilingual French and English hip-hop lyrics. Verses may switch between languages within a single line.",
+  patois: "Jamaican Patois dancehall lyrics, code-switching with English, in the style of Vybz Kartel, Masicka, and Armanii. " +
+    "Mi, dem, inna, unu, wah gwaan, bare, gyal, a wah, nuh, pon, deh, ting.",
+  // Igbo has no dedicated Whisper language code either (same situation
+  // as Patois) - Nigerian highlife/hip-hop sung substantially in Igbo
+  // routinely mixes in English and Nigerian Pidgin within the same
+  // verse, in the style of artists like Flavour and Phyno.
+  ig: "Bilingual Igbo and English Nigerian highlife and hip-hop lyrics, in the style of Flavour and Phyno, code-switching between languages within a line. " +
+    "Nwa, biko, kedu, chai, ehn, oyibo.",
+  // The rest already have real Whisper language codes (handled in the
+  // plain --language branch below) - these are the +EN code-switching
+  // variants of those same languages, for the common case where an
+  // artist sings mostly in one language but drops in English lines,
+  // hooks, or ad-libs, which forcing --language on the base code alone
+  // would mistranscribe.
+  'es-en': "Bilingual Spanish and English song lyrics, code-switching between languages within a line, common in reggaeton and Latin trap.",
+  'pt-en': "Bilingual Portuguese and English song lyrics, code-switching between languages within a line, common in Brazilian funk and Afrobeats-influenced Lusophone music.",
+  'yo-en': "Bilingual Yoruba and English Afrobeats lyrics, code-switching between languages within a line, in the style of Nigerian artists like Rema and Wizkid.",
+  'sw-en': "Bilingual Swahili and English song lyrics, code-switching between languages within a line, common in East African Bongo Flava and Afrobeats.",
+  'ha-en': "Bilingual Hausa and English song lyrics, code-switching between languages within a line, common in Northern Nigerian Afrobeats and Hausa pop.",
+};
+
 app.post('/transcribe', upload.single('audio'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const inputPath = req.file.path, model = req.body.model || 'base', lang = req.body.language || 'auto';
@@ -6296,26 +6887,31 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
       detail: _enginesBrokenDetail,
     });
   }
+  // Round 77: the breaker above only trips once something has ALREADY failed
+  // at runtime. Check the whisper tier actually imports first, so a broken
+  // install produces an actionable message instead of a raw traceback on the
+  // user's first attempt. See tierBroken().
+  {
+    const broken = await tierBroken('whisper', 'transcribe');
+    if (broken) { cleanup(); return res.status(503).json(broken); }
+  }
   try {
     // language handling - 'auto' lets Whisper detect, but for
-    // code-switching tracks (Quebec hip-hop where one verse is English
-    // and the chorus French is normal) auto-detect on the WHOLE track
-    // commits to one language and mistranscribes the other half. The
-    // 'bi' mode (French + English) is a special case we handle by
-    // letting Whisper auto-detect but providing a heuristic initial
-    // prompt that primes the model for mixed-language slang.
+    // code-switching tracks (a verse in one language, a hook in
+    // another - the normal case, not an edge case, for most of the
+    // world's popular music) auto-detect on the WHOLE track commits to
+    // one language and mistranscribes the other half. Every key in
+    // CODE_SWITCH_PROMPTS (defined above) is exactly this: auto-detect
+    // stays on, and an initial_prompt steers the model's vocabulary
+    // toward the right register instead of "correcting" the minority
+    // language away. Anything else with a real Whisper code goes
+    // straight through --language.
     let langArgs;
     let initialPromptArgs = [];
-    if (lang === 'auto' || lang === 'bi') {
-      // No --language flag = let Whisper detect per-segment. The new
-      // turbo/medium models handle code-switching natively.
+    if (lang === 'auto' || CODE_SWITCH_PROMPTS[lang]) {
       langArgs = [];
-      if (lang === 'bi') {
-        // Initial prompt biases the model toward bilingual French+English
-        // slang/swearing common in QC hip-hop, so the model doesn't
-        // "correct" street language to standard French or English.
-        initialPromptArgs = ['--initial_prompt',
-          "Bilingual French and English hip-hop lyrics. Verses may switch between languages within a single line."];
+      if (CODE_SWITCH_PROMPTS[lang]) {
+        initialPromptArgs = ['--initial_prompt', CODE_SWITCH_PROMPTS[lang]];
       }
     } else {
       langArgs = ['--language', lang];
@@ -6393,7 +6989,8 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
 });
 
 // ── Stem separator ──────────────────────────────────────────────────────────
-app.get('/stems', (req, res) => {
+// Round 77: async so the tier guard below can await verifyEngines().
+app.get('/stems', async (req, res) => {
   const filePath = (req.query.path || '').trim();
   const mode     = (req.query.mode || '4').trim();
   const quality  = (req.query.quality || 'high').trim().toLowerCase();
@@ -6454,6 +7051,13 @@ app.get('/stems', (req, res) => {
       hint: 'Open Settings → AI Engines and run setup, or restart the app.',
       needs_setup: true,
     });
+  }
+
+  // Round 77: see tierBroken() - enginesReady() only proves setup once
+  // completed, not that the packages still import.
+  {
+    const broken = await tierBroken('stems', 'stems');
+    if (broken) return res.status(503).json(broken);
   }
 
   // Find stems.py and its sibling registry module - both need to be in the
@@ -6857,7 +7461,39 @@ app.get('/engines-status', (_, res) => {
   // installed=true means the marker is BOTH present AND valid (full path,
   // python exists). info.python may still be present even when installed=false
   // so we expose it for the Settings UI to explain why it's stale.
-  res.json({ installed, info });
+  //
+  // Round 77: `installed` is a MARKER check - it proves setup once finished,
+  // not that the packages still import. That gap is how a user whose logs
+  // were full of Python errors still saw AI Engines reported as installed
+  // properly in Settings: an antivirus can quarantine torch, or an install
+  // can finish only partly, and this flag stays green throughout. Both the
+  // user and whoever is helping them end up trusting a status that cannot
+  // fail.
+  //
+  // So ship the real verdict alongside it. Cached only - verifyEngines()
+  // spawns Python and can take tens of seconds, and this endpoint is polled;
+  // the boot check at +15s and the daily re-check keep it populated, and the
+  // Verify button in Settings still forces a live run on demand. `verified`
+  // is null when nothing has been checked yet, which the UI must render as
+  // "not checked", NOT as healthy - unknown is not the same as fine, and
+  // treating it as fine is the exact bug being fixed here.
+  const v = _lastVerifyResult;
+  const verified = v ? {
+    ok: !!v.ok,
+    checkedAt: v.checked_at || null,
+    brokenPackages: v.broken_packages || [],
+    // Per-tier so the UI can say WHICH capability is down - a broken whisper
+    // install does not stop stem separation, and saying "engines broken"
+    // when only transcription is affected sends people chasing the wrong
+    // thing.
+    tiers: Object.fromEntries(Object.entries(v.tiers || {}).map(([name, t]) => [name, {
+      ok: !!t.ok,
+      broken: Object.entries(t.modules || {})
+        .filter(([, m]) => !m.ok)
+        .map(([mod, m]) => ({ module: mod, error: String(m.error || '').slice(0, 200) })),
+    }])),
+  } : null;
+  res.json({ installed, info, verified });
 });
 
 // SSE endpoint that runs setup-engines.ps1 and streams its JSON-line output.

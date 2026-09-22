@@ -155,8 +155,8 @@ function init(processKind, release, opts = {}) {
 //
 // Per-category rate limit prevents a single broken machine from
 // hammering the Sentry quota: max 10 events per category per hour,
-// per process. Sentry's own quota guard is the safety net but doesn't
-// let us prioritize categories - this does.
+// per process. Sentry's own quota guard is the safety net but does not
+// prioritize categories - this does.
 
 const RATE_MAX = 10;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
