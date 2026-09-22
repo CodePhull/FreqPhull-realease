@@ -57,3 +57,4 @@ ffprobe.exe
 
 # Sentry — DSN goes in sentry.config.json (gitignored, build only)
 sentry.config.json
+Full-Build-And-Publish.bat
