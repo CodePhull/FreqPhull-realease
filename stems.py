@@ -118,6 +118,15 @@ def select_device(cpu_only=False):
 # this file, models are referred to by codename only.
 #
 # Pipeline: Phull-V2 (vocal isolation) -> Phull-I4 or Phull-I6 (instrumental).
+#
+# Round 81: the embedded runtime the app installs ships a python311._pth,
+# and with a ._pth present Python builds sys.path ONLY from the folders it
+# lists ("." there is Python's own folder) - the script's folder is never
+# added. server.js copies this script and _phull_internal.py side by side
+# into Temp, so the import below failed on every run with
+# "No module named '_phull_internal'". Reproduced with the installed
+# engines\python\python.exe and with `python -I`; this line fixes both.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _phull_internal as _reg
 
 VOCAL_CODENAME = "Phull-V2"

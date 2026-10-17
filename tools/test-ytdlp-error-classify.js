@@ -17,8 +17,8 @@ const core = src.slice(si, ei);
 
 const sandbox = {};
 vm.createContext(sandbox);
-vm.runInContext(core + '\nthis.__exports = { classifyYtdlpError };', sandbox);
-const { classifyYtdlpError } = sandbox.__exports;
+vm.runInContext(core + '\nthis.__exports = { classifyYtdlpError, YTDLP_AUTHWALL_RETRY_ARGS };', sandbox);
+const { classifyYtdlpError, YTDLP_AUTHWALL_RETRY_ARGS } = sandbox.__exports;
 
 let fails = 0;
 function check(name, cond, detail) {
@@ -102,6 +102,54 @@ const PRIVATE_VIDEO_STDERR =
   check('empty stderr does not throw and falls back to a generic exit-code message',
     r.msg === 'yt-dlp failed with code 1', `got "${r.msg}"`);
 }
+
+
+// ── Round 81: generic sign-in / bot check (distinct from private video) ──
+const AUTHWALL_STDERR =
+  "ERROR: [youtube] VHtsNOp4BhI: Please sign in. Use --cookies-from-browser or --cookies for the authentication. See " +
+  "https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp for how to manually pass cookies. " +
+  "Also see https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies for tips on effectively exporting YouTube cookies";
+{
+  const r = classifyYtdlpError(AUTHWALL_STDERR, 1);
+  check('Round 81: "Please sign in" (the exact reported stderr) is classified isAuthWall', r.isAuthWall === true);
+  check('Round 81: auth wall is NOT fatal (a retry with other clients is allowed)', r.isFatal === false);
+  check('Round 81: auth wall is not misread as 403 / signature breakage', r.is403 === false && r.isSigBroken === false);
+  check('Round 81: auth-wall message is plain language with no CLI flags or wiki links',
+    !/--cookies|github\.com|ERROR:/.test(r.msg) && !/--cookies|github\.com/.test(r.hint), `msg="${r.msg}" hint="${r.hint}"`);
+  check('Round 81: auth-wall hint mentions yt-dlp (so the UI offers the update shortcut)', /yt-dlp/i.test(r.hint));
+  check('Round 81: auth-wall message is not the private-video message', r.msg !== 'This video is private.');
+}
+{
+  const r = classifyYtdlpError("ERROR: [youtube] xxxxx: Sign in to confirm you\u2019re not a bot. Use --cookies-from-browser or --cookies for the authentication.", 1);
+  check('Round 81: "Sign in to confirm you\'re not a bot" is classified isAuthWall', r.isAuthWall === true);
+  check('Round 81 merge: bot-check wording is isBotCheck and gets the bot-check message', r.isBotCheck === true && /bot check/i.test(r.msg), `msg="${r.msg}"`);
+}
+{
+  // Checked live: the reported video returns LOGIN_REQUIRED from every
+  // client (including the retry's), so its message must not promise that
+  // updating yt-dlp / dropping a VPN will fix it.
+  const r = classifyYtdlpError(AUTHWALL_STDERR, 1);
+  check('Round 81 merge: bare "Please sign in" is NOT the bot check', r.isBotCheck === false);
+  check('Round 81 merge: "Please sign in" says the video needs a signed-in account', /signed in/i.test(r.msg), `msg="${r.msg}"`);
+  check('Round 81 merge: "Please sign in" hint does not blame a VPN or call it a bot check', !/vpn|bot check/i.test(r.hint), `hint="${r.hint}"`);
+}
+{
+  const r = classifyYtdlpError(PRIVATE_VIDEO_STDERR, 1);
+  check('Round 81: private video (which also says "Sign in") is NOT an auth wall and stays fatal', r.isAuthWall === false && r.isFatal === true);
+}
+{
+  const r = classifyYtdlpError('ERROR: [youtube] xxxxx: Sign in to confirm your age. This video may be inappropriate for some users.', 1);
+  check('Round 81: real "Sign in to confirm your age" wording gets the age-restricted message', r.msg.includes('age-restricted'), `got "${r.msg}"`);
+  check('Round 81: age-gate is fatal and not an auth wall (no pointless retry)', r.isFatal === true && r.isAuthWall === false);
+}
+{
+  const r = classifyYtdlpError('ERROR: unable to download video data: HTTP Error 403: Forbidden', 1);
+  check('Round 81: plain 403 is not an auth wall (keeps its android-client retry)', r.isAuthWall === false);
+}
+check('Round 81: auth-wall retry args select alternate YouTube player clients',
+  Array.isArray(YTDLP_AUTHWALL_RETRY_ARGS) && YTDLP_AUTHWALL_RETRY_ARGS[0] === '--extractor-args' && /^youtube:player_client=/.test(YTDLP_AUTHWALL_RETRY_ARGS[1]));
+check('Round 81: auth-wall retry args do not reintroduce any cookies option (Round 58 removal stands)',
+  !/cookies/i.test(YTDLP_AUTHWALL_RETRY_ARGS.join(' ')));
 
 
 console.log('');

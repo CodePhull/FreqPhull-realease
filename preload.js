@@ -13,6 +13,10 @@ contextBridge.exposeInMainWorld('api', {
   getDownloads:   ()         => ipcRenderer.invoke('get-downloads-path'),
   onBackendReady: (cb)       => ipcRenderer.on('backend-ready', () => cb()),
   onLog:          (cb)       => ipcRenderer.on('log', (_, msg) => cb(msg)),
+  // Confirmation for the Ctrl+Shift+M memory report. Without a visible
+  // acknowledgement a silent clipboard write looks exactly like a shortcut
+  // that was never wired up.
+  onDiagToast:    (cb)       => ipcRenderer.on('diag-toast', (_, msg) => cb(msg)),
   readFile:       (filePath) => ipcRenderer.invoke('read-file', filePath),
   getLogPath:     ()         => ipcRenderer.invoke('get-log-path'),
   log:            (msg)      => ipcRenderer.send('renderer-log', msg),

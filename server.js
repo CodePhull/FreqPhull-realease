@@ -55,6 +55,64 @@ let _lastVerifyResult = null;
 let _repairAttemptedThisSession = false;
 let _repairRunning = false;
 
+// ─── BEGIN REPAIR BACKOFF ───
+// Round 80. "At most once per session" was once per LAUNCH, not once ever.
+// On a machine where repair can never succeed - an antivirus deleting the
+// package straight back out, a missing VC++ runtime, pip landing in the wrong
+// interpreter - every single launch reinstalled the broken packages in the
+// background and sent another "repair ran but verification still fails"
+// report. Nothing new is learned from the second one; the user just pays the
+// download again every time they open the app.
+//
+// So a failed AUTOMATIC repair is now remembered on disk, keyed by what was
+// broken, and not retried automatically until one of these is true:
+//   - the app version changed (a new build may ship the fix)
+//   - a different set of packages is broken (a new problem, worth a try)
+//   - REPAIR_BACKOFF_DAYS have passed (the user may have fixed the cause)
+// The Settings -> Repair button ignores all of this: a human asking is
+// always a reason to try. A successful repair clears the record.
+const REPAIR_BACKOFF_DAYS = 7;
+const REPAIR_STATE_PATH = path.join(os.homedir(), 'AppData', 'Roaming', 'freqphull', 'engines-repair-state.json');
+
+function repairSignature(pkgs) {
+  return (pkgs || []).map(String).sort().join(',');
+}
+function readRepairState() {
+  try { return JSON.parse(fs.readFileSync(REPAIR_STATE_PATH, 'utf8')); } catch (e) { return null; }
+}
+function writeRepairState(pkgs, reason) {
+  try {
+    fs.mkdirSync(path.dirname(REPAIR_STATE_PATH), { recursive: true });
+    const prev = readRepairState();
+    const sig = repairSignature(pkgs);
+    const same = prev && prev.signature === sig && prev.appVersion === _serverVersion;
+    fs.writeFileSync(REPAIR_STATE_PATH, JSON.stringify({
+      appVersion: _serverVersion,
+      signature: sig,
+      reason: String(reason || '').slice(0, 200),
+      failedAt: Date.now(),
+      failures: same ? (prev.failures || 1) + 1 : 1,
+    }));
+  } catch (e) { /* best effort - worst case we fall back to once-per-launch */ }
+}
+function clearRepairState() {
+  try { fs.unlinkSync(REPAIR_STATE_PATH); } catch (e) {}
+}
+// Returns a human-readable reason to skip, or null to go ahead.
+function repairSuppressedReason(pkgs, origin) {
+  if (origin === 'manual') return null;
+  const st = readRepairState();
+  if (!st) return null;
+  if (st.appVersion !== _serverVersion) return null;
+  if (st.signature !== repairSignature(pkgs)) return null;
+  const ageDays = (Date.now() - (st.failedAt || 0)) / 86400000;
+  if (ageDays >= REPAIR_BACKOFF_DAYS) return null;
+  return 'automatic repair of ' + st.signature + ' already failed on ' + _serverVersion +
+         ' (' + ageDays.toFixed(1) + ' days ago: ' + (st.reason || 'unknown') + ') - waiting for an update, ' +
+         'a different failure, or ' + REPAIR_BACKOFF_DAYS + ' days; Settings -> Repair still works';
+}
+// ─── END REPAIR BACKOFF ───
+
 function verifyEngines() {
   return new Promise((resolve) => {
     // discoverPython() returns the command string; its arguments come
@@ -156,6 +214,11 @@ function attemptEngineRepair(brokenPackages, origin) {
     if (_repairAttemptedThisSession) return resolve({ ok: false, reason: 'already-attempted' });
     if (!brokenPackages || !brokenPackages.length) return resolve({ ok: false, reason: 'nothing-to-repair' });
     if (setupRunning) return resolve({ ok: false, reason: 'setup-in-progress' });
+    const suppressed = repairSuppressedReason(brokenPackages, origin);
+    if (suppressed) {
+      slog('self-heal: skipped - ' + suppressed);
+      return resolve({ ok: false, reason: 'suppressed', detail: suppressed });
+    }
     _repairAttemptedThisSession = true;
     _repairRunning = true;
     broadcastEvent('engines-repair', { state: 'start', packages: brokenPackages, origin });
@@ -164,8 +227,25 @@ function attemptEngineRepair(brokenPackages, origin) {
     if (!scriptSrc) { _repairRunning = false; return resolve({ ok: false, reason: 'script-missing' }); }
     const scriptTmp = path.join(os.tmpdir(), 'freqphull_repair.ps1');
     try { fs.copyFileSync(scriptSrc, scriptTmp); } catch (e) { _repairRunning = false; return resolve({ ok: false, reason: 'copy-failed: ' + e.message }); }
-    const p = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptTmp,
-      '-Repair', '-Packages', brokenPackages.join(',')], { windowsHide: true });
+    // Round 80: repair the interpreter verification actually ran under.
+    // setup-engines.ps1 used to pick its own Python by different rules
+    // than discoverPython() here, so on a machine with more than one
+    // Python (or an embedded runtime missing numpy) it reinstalled into one
+    // interpreter while verification checked another - "repair ran but
+    // verification still fails", every launch (Sentry ELECTRON-4:
+    // engine_source system, python_path_tail py). verify_engines.py reports
+    // its own sys.executable, which is unambiguous even when the command
+    // was the `py` launcher.
+    const repairArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptTmp,
+      '-Repair', '-Packages', brokenPackages.join(',')];
+    const verifiedExe = _lastVerifyResult && _lastVerifyResult.executable;
+    if (verifiedExe && path.isAbsolute(String(verifiedExe)) && fs.existsSync(verifiedExe)) {
+      repairArgs.push('-PythonExe', String(verifiedExe));
+      slog('self-heal: repairing into the verified interpreter ' + verifiedExe);
+    } else {
+      slog('self-heal: no verified interpreter path available - repair will discover its own');
+    }
+    const p = spawn('powershell', repairArgs, { windowsHide: true });
     let sawError = null;
     p.stdout.on('data', d => {
       for (const line of String(d).split('\n')) {
@@ -179,6 +259,7 @@ function attemptEngineRepair(brokenPackages, origin) {
     });
     p.on('error', (e) => {
       _repairRunning = false;
+      writeRepairState(brokenPackages, 'could not start repair: ' + e.message);
       broadcastEvent('engines-repair', { state: 'failed', error: e.message });
       resolve({ ok: false, reason: e.message });
     });
@@ -188,6 +269,7 @@ function attemptEngineRepair(brokenPackages, origin) {
         // Re-verify before declaring success.
         const v = await verifyEngines();
         if (v.ok) {
+          clearRepairState();
           resetEnginesBrokenBreaker && resetEnginesBrokenBreaker();
           broadcastEvent('engines-repair', { state: 'done', packages: brokenPackages });
           slog('self-heal: repair verified clean');
@@ -215,6 +297,10 @@ function attemptEngineRepair(brokenPackages, origin) {
         } catch (e) {}
         report('selfheal.repair-ineffective', new Error('repair ran but verification still fails'), {
           packages: brokenPackages,
+          // Round 80: which interpreter was checked vs which was repaired.
+          // If these ever differ, that alone is the diagnosis.
+          verified_with: String(v.executable || '(unknown)'),
+          repaired_into: verifiedExe ? String(verifiedExe) : '(discovered by setup script)',
           verify: JSON.stringify(v.broken_packages || []).slice(0, 400),
           // The error strings are what actually identify the cause - send them
           // with the report too, not just the package names.
@@ -231,8 +317,10 @@ function attemptEngineRepair(brokenPackages, origin) {
           })(),
           origin,
         });
+        writeRepairState(brokenPackages, 'still broken after repair');
         return resolve({ ok: false, reason: 'still-broken' });
       }
+      writeRepairState(brokenPackages, sawError || ('repair exited ' + code));
       broadcastEvent('engines-repair', { state: 'failed', error: sawError || ('exit ' + code) });
       report('selfheal.repair-failed', new Error('repair exit ' + code), {
         packages: brokenPackages, sawError: sawError || '(none)', origin,
@@ -253,7 +341,9 @@ setTimeout(async () => {
     if (!fs.existsSync(markerPath)) return;   // never set up — nothing to heal
     if (setupRunning) return;
     const v = await verifyEngines();
-    if (v.ok) { slog('startup verify: engines healthy'); return; }
+    // Healthy again (user reinstalled, or an update fixed it): forget any
+    // earlier failed repair so a future breakage gets a fresh attempt.
+    if (v.ok) { clearRepairState(); slog('startup verify: engines healthy'); return; }
     slog('startup verify: broken — ' + JSON.stringify(v.broken_packages || v.reason));
     // Round 74: log WHY, not just which. verify_engines.py already records the
     // exact import error for every module it checks, and this used to discard
@@ -784,13 +874,25 @@ function bin(name) {
   // can't run from inside asar (ffmpeg/yt-dlp can't run from asar; we also keep
   // the extraResources copies as the primary source).
   const asarUnpacked = __dirname.replace(/[\\/]app\.asar([\\/]|$)/, (m, tail) => '/app.asar.unpacked' + tail);
+  // ─── BEGIN BIN CANDIDATES ───
+  // Round 81: a path INSIDE app.asar is never a usable binary. Electron's fs
+  // reports it as existing (the archive header lists it), but spawn() hands
+  // the raw path to Windows, which finds no such file. Measured on a real
+  // 0.7.40 portable session: once Temp\<hash>\resources\bin was deleted out
+  // from under the running app, bin() returned app.asar\bin\yt-dlp.exe, every
+  // download failed with a bare "spawn ... ENOENT", the yt-dlp self-update
+  // tried to write yt-dlp.exe.new INTO the archive, and the quarantine HINT
+  // below never printed. In a dev run __dirname is a real folder, so its
+  // bin/ stays a candidate there.
+  const insideAsar = (p) => /[\\/]app\.asar[\\/]/.test(p);
   const candidates = [
     path.join(RES, 'bin', name + exe),
     path.join(RES, 'bin', name),
     path.join(__dirname, 'bin', name + exe),
     path.join(__dirname, 'bin', name),
     path.join(asarUnpacked, 'bin', name + exe),
-  ];
+  ].filter((c) => !insideAsar(c));
+  // ─── END BIN CANDIDATES ───
   // Log every candidate and whether it exists - invaluable when packaged builds misbehave
   const checked = candidates.map(c => `${fs.existsSync(c) ? 'YES' : 'NO '}: ${c}`).join('\n  ');
   for (const c of candidates) {
@@ -1001,6 +1103,15 @@ function writeTagsToFile(historyId, { bpm, key_note, key_mode }) {
 // detected as duplicates, which is fine.
 function computeFingerprint(historyId, filePath) {
   try {
+    // Round 81: prefer the row's CURRENT path. The download route queues
+    // this with setImmediate, and auto-commit moves the file into its
+    // stockpile folder (updating the DB) before it runs - so the path the
+    // caller captured is already stale. Seen as "file missing" on every
+    // auto-filed download in a real 0.7.40 log.
+    try {
+      const row = historyId ? dbAll('SELECT file_path FROM history WHERE id=?', [historyId])[0] : null;
+      if (row && row.file_path && fs.existsSync(row.file_path)) filePath = row.file_path;
+    } catch {}
     if (!filePath || !fs.existsSync(filePath)) {
       slog('computeFingerprint: file missing for id ' + historyId);
       return;
@@ -1745,17 +1856,42 @@ app.get('/diag-bin', (_, res) => {
 // technically accurate, useless to someone who just pasted a URL and
 // can't run yt-dlp flags themselves). Extracted so both call sites stay
 // in sync instead of drifting into two different error vocabularies.
+// Round 81: YouTube's generic sign-in / bot check. yt-dlp words it "Please
+// sign in" or "Sign in to confirm you're not a bot" and appends the same
+// --cookies advice it gives for private videos - but unlike a private,
+// members-only or age-gated video, this one is about the REQUEST (client,
+// network, outdated yt-dlp), not the video, and is often cleared by a
+// different player client. Private/members-only/age-gated wording is
+// excluded below so those keep their own (fatal, no-retry) handling.
+const YTDLP_AUTHWALL_RETRY_ARGS = ['--extractor-args', 'youtube:player_client=tv,android_vr,web_safari'];
 function classifyYtdlpError(stderr, code) {
   const s = stderr || '';
   const errLower = s.toLowerCase();
   const is403 = /http error 403|forbidden/i.test(s);
   const isSigBroken = /signature extraction|player.*returned|nsig extraction|requested format/i.test(errLower);
-  const isFatal = /video unavailable|private video|members[- ]only|removed by|copyright|geo[- ]restrict|age[- ]restrict/i.test(errLower);
+  const isFatal = /video unavailable|private video|members[- ]only|removed by|copyright|geo[- ]restrict|age[- ]restrict|confirm your age/i.test(errLower);
+  const isAuthWall = !isFatal && /please sign in|not a bot|sign in to confirm/i.test(errLower);
+  // Round 81 (merge review): the two wordings are different situations.
+  // "Sign in to confirm you're not a bot" is YouTube's bot check on the
+  // REQUEST. Bare "Please sign in" is the video's own playability status
+  // (LOGIN_REQUIRED): checked live against the reported video with yt-dlp
+  // 2026.08.19 + Deno - every client (visionos, web, and the retry's
+  // tv/android_vr/web_safari) returned LOGIN_REQUIRED and YouTube withheld
+  // even the title, while a public video on the same connection worked.
+  // Updating yt-dlp or dropping a VPN cannot fix that one, so it must not
+  // be told it can. Both still get the one cheap retry.
+  const isBotCheck = isAuthWall && /not a bot/i.test(errLower);
 
   let msg, hint;
   if (is403) {
     msg = 'YouTube is blocking this download (HTTP 403). yt-dlp may be out of date.';
     hint = 'Go to Settings > Updates and click "Check now" next to yt-dlp. YouTube frequently changes their internal API and yt-dlp needs regular updates to keep up.';
+  } else if (isBotCheck) {
+    msg = 'YouTube\'s bot check blocked this download.';
+    hint = 'This is about the request, not the video. Go to Settings > Updates and click "Check now" next to yt-dlp, turn off any VPN, then try again in a few minutes.';
+  } else if (isAuthWall) {
+    msg = 'This video can only be watched while signed in to YouTube.';
+    hint = 'YouTube restricts this video to signed-in accounts (it may be private, unlisted with restrictions, or members-only), and Freq.Phull doesn\'t sign in. Other videos will still work. If you think this is wrong, check yt-dlp is current in Settings > Updates.';
   } else if (isSigBroken) {
     msg = 'YouTube changed their player and yt-dlp can\'t extract this video yet.';
     hint = 'Go to Settings > Updates and click "Check now" next to yt-dlp. This usually fixes within hours of a YouTube change.';
@@ -1786,14 +1922,14 @@ function classifyYtdlpError(stderr, code) {
   } else if (/geo[- ]restrict/i.test(errLower)) {
     msg = 'This video is geo-restricted in your region.';
     hint = 'You\'d need a VPN to access this video.';
-  } else if (/age[- ]restrict/i.test(errLower)) {
+  } else if (/age[- ]restrict|confirm your age/i.test(errLower)) {
     msg = 'This video is age-restricted.';
     hint = 'Sign-in cookies would be needed to bypass — Freq.Phull doesn\'t support that yet.';
   } else {
     msg = s.trim() || ('yt-dlp failed' + (code !== undefined && code !== null ? ' with code ' + code : ''));
     hint = null;
   }
-  return { is403, isSigBroken, isFatal, msg, hint };
+  return { is403, isSigBroken, isFatal, isAuthWall, isBotCheck, msg, hint };
 }
 // ─── END YTDLP ERROR CLASSIFY ───
 
@@ -1874,7 +2010,17 @@ app.get('/info', async (req, res) => {
         entries,
       });
     }
-    const raw = await run(ytdlp, ['--dump-json', '--no-playlist', '--no-warnings', url]);
+    let raw;
+    try {
+      raw = await run(ytdlp, ['--dump-json', '--no-playlist', '--no-warnings', url]);
+    } catch (firstErr) {
+      // Round 81: one retry with alternate player clients, only for the
+      // generic sign-in / bot check (never for private/members-only/age-
+      // gated, which classify as fatal and can't be fixed by a client).
+      if (!classifyYtdlpError(firstErr.message).isAuthWall) throw firstErr;
+      slog('Info: sign-in/bot check - retrying with alternate player clients');
+      raw = await run(ytdlp, ['--dump-json', '--no-playlist', '--no-warnings', ...YTDLP_AUTHWALL_RETRY_ARGS, url]);
+    }
     const info = JSON.parse(raw);
     res.json({ title: info.title, channel: info.channel || info.uploader, duration: info.duration, thumbnail: info.thumbnail });
   } catch (e) {
@@ -2177,14 +2323,16 @@ app.get('/download', async (req, res) => {
 
       // Retry once with Android client for 403 / sig errors, but not for
       // genuinely unrecoverable failures (deleted videos, geo-blocks).
-      if (!retryAttempted && (is403 || isSigBroken) && !isFatal) {
+      if (!retryAttempted && (is403 || isSigBroken || classified.isAuthWall) && !isFatal) {
         retryAttempted = true;
-        slog('yt-dlp: 403/sig error - retrying with player_client=android');
-        sse('status', { message: 'Retrying with mobile client...' });
+        const authWallRetry = classified.isAuthWall && !is403 && !isSigBroken;
+        slog(authWallRetry ? 'yt-dlp: sign-in/bot check - retrying with alternate player clients'
+                           : 'yt-dlp: 403/sig error - retrying with player_client=android');
+        sse('status', { message: authWallRetry ? 'Retrying with a different client...' : 'Retrying with mobile client...' });
         stderr = '';  // clear so retry's stderr doesn't accumulate with first run
         printedPath = null;  // clear paths captured in failed first run
         destPath = null;
-        const retryProc = spawnYtdlp([
+        const retryProc = spawnYtdlp(authWallRetry ? YTDLP_AUTHWALL_RETRY_ARGS : [
           '--extractor-args', 'youtube:player_client=android,web',
         ]);
         attachListeners(retryProc);
@@ -2200,8 +2348,8 @@ app.get('/download', async (req, res) => {
       // Only report categories that suggest action: signature breaks
       // are interesting (means yt-dlp needs an update), 403s after
       // retry are interesting. Geo/age/private aren't actionable.
-      if (is403 || isSigBroken) {
-        report('ytdlp.' + (isSigBroken ? 'signature-broken' : 'forbidden'),
+      if (is403 || isSigBroken || classified.isAuthWall) {
+        report('ytdlp.' + (isSigBroken ? 'signature-broken' : classified.isAuthWall && !is403 ? 'auth-wall' : 'forbidden'),
           new Error(msg), {
             retryAttempted,
             ytdlpVersion: getYtdlpVersion(),
@@ -2396,10 +2544,16 @@ app.post('/history/:id/analysis', (req, res) => {
   // analysis without us being a dependency. Runs AFTER the response so
   // analysis flow isn't blocked on the tag write - tag writing is a
   // nice-to-have, not a hard requirement.
-  if (req.query.notags !== '1' && writeTagsToFileEnabled()) {
-    setImmediate(() => writeTagsToFile(id, { bpm, key_note, key_mode }));
-  }
-  setImmediate(() => maybeAutoRename(id, { bpm, key_note, key_mode }));
+  // Round 81: rename FIRST, then tag. writeTagsToFile() reads file_path from
+  // the DB and hands it to a Python process that opens the file a moment
+  // later; maybeAutoRename() renames synchronously. In the old order the
+  // rename landed in that gap and every tag write failed "file not found"
+  // (seen on every download in a real 0.7.40 log). writeTagsToFile() reads
+  // the path after the rename has updated the DB, so it gets the new name.
+  setImmediate(() => {
+    maybeAutoRename(id, { bpm, key_note, key_mode });
+    if (req.query.notags !== '1' && writeTagsToFileEnabled()) writeTagsToFile(id, { bpm, key_note, key_mode });
+  });
 });
 app.post('/history/:id/notes',    (req, res) => { dbRun('UPDATE history SET notes=? WHERE id=?', [req.body.notes, req.params.id]); res.json({ ok: true }); });
 app.post('/history/:id/transcript',(req, res)=> { dbRun('UPDATE history SET transcript=? WHERE id=?', [req.body.transcript, req.params.id]); res.json({ ok: true }); });
@@ -5956,8 +6110,9 @@ function analyzeOneInBackground(row) {
             // 4) File tags (fire-and-forget - same as /history/:id/analysis)
             if (writeTagsToFileEnabled()) {
               setImmediate(function(){
-                writeTagsToFile(row.id, { bpm: result.bpm, key_note: result.key, key_mode: result.mode });
+                // Rename before tagging - see the Round 81 note on /history/:id/analysis.
                 maybeAutoRename(row.id, { bpm: result.bpm, key_note: result.key, key_mode: result.mode });
+                writeTagsToFile(row.id, { bpm: result.bpm, key_note: result.key, key_mode: result.mode });
               });
             }
             slog('bg-analyze id=' + row.id + ' OK bpm=' + result.bpm + ' key=' + result.key + ' ' + result.mode);
@@ -6234,6 +6389,23 @@ app.get('/analyze', async (req, res) => {
     try { proc.kill(); } catch {}
   }, 180000);
 
+  // Round 81: stop the analysis when nobody is listening any more. The
+  // Analyzer starts one of these per track it opens; clicking through
+  // tracks used to leave every earlier one running to completion. A real
+  // 0.7.38 log shows a new ~12s analyze.py starting every 2-6s while 3-4
+  // earlier ones were still running - all competing for the CPU while the
+  // user is trying to use the app. res 'close' before the response has
+  // finished means the client went away (EventSource closed / window
+  // reloaded); after a normal res.end() writableFinished is true and
+  // nothing is killed. Both cases are exercised by test-analyze-cancel-r81.
+  let _analyzeAbandoned = false, _analyzeProcDone = false;
+  res.on('close', () => {
+    if (_analyzeProcDone || res.writableFinished) return;
+    _analyzeAbandoned = true;
+    slog('analyze: client went away - stopping analyze.py for ' + path.basename(filePath));
+    try { proc.kill(); } catch {}
+  });
+
   let stdout = '', stderr = '';
   proc.stdout.on('data', d => { stdout += d.toString(); });
   proc.stderr.on('data', d => {
@@ -6242,7 +6414,12 @@ app.get('/analyze', async (req, res) => {
   });
 
   proc.on('close', code => {
+    _analyzeProcDone = true;
     clearTimeout(_analyzeKiller);
+    if (_analyzeAbandoned) {
+      try { fs.unlinkSync(wavTmp); } catch {}
+      return;
+    }
     if (_analyzeTimedOut) {
       report('analyze.timeout', new Error('analyze.py exceeded 180s'), {
         stderrTail: (stderr || '').slice(-600) || '(empty)',
@@ -6333,6 +6510,211 @@ app.post('/convert-wav-upload', upload.single('audio'), async (req, res) => {
     }
     res.status(500).json({ error: userMsg });
   }
+});
+
+// ── Converter tab (Round 81) ─────────────────────────────────────────────
+// Batch audio format conversion through the bundled ffmpeg. The pure part
+// (which ffmpeg arguments, which output name) lives between the markers so
+// tools/test-converter-r81.js can check it headless; the route below only
+// runs ffmpeg and streams progress.
+// ─── BEGIN CONVERTER CORE ───
+const CONVERT_FORMATS = {
+  mp3:  { ext: '.mp3',  label: 'MP3',          lossy: true,  bitrates: ['320', '256', '192', '128'] },
+  wav:  { ext: '.wav',  label: 'WAV',          lossy: false, bitDepths: ['16', '24', '32f'] },
+  flac: { ext: '.flac', label: 'FLAC',         lossy: false, bitDepths: ['16', '24'] },
+  aiff: { ext: '.aiff', label: 'AIFF',         lossy: false, bitDepths: ['16', '24'] },
+  alac: { ext: '.m4a',  label: 'ALAC (Apple Lossless)', lossy: false, bitDepths: ['16', '24'] },
+  m4a:  { ext: '.m4a',  label: 'M4A (AAC)',    lossy: true,  bitrates: ['320', '256', '192', '128'] },
+  mp4:  { ext: '.mp4',  label: 'MP4 (AAC audio)', lossy: true, bitrates: ['320', '256', '192', '128'] },
+  ogg:  { ext: '.ogg',  label: 'OGG (Vorbis)', lossy: true,  bitrates: ['320', '256', '192', '128'] },
+  opus: { ext: '.opus', label: 'Opus',         lossy: true,  bitrates: ['256', '192', '128', '96'] },
+};
+const CONVERT_SAMPLE_RATES = ['keep', '44100', '48000', '88200', '96000'];
+const CONVERT_CHANNELS = ['keep', '1', '2'];
+
+// Validates and fills defaults. Throws with a user-facing message.
+function normalizeConvertOptions(o) {
+  o = o || {};
+  const format = String(o.format || '').toLowerCase();
+  const f = CONVERT_FORMATS[format];
+  if (!f) throw new Error('Unknown format: ' + o.format);
+  const out = { format };
+  if (f.lossy) {
+    out.bitrate = f.bitrates.includes(String(o.bitrate)) ? String(o.bitrate) : f.bitrates[0];
+  } else {
+    out.bitDepth = f.bitDepths.includes(String(o.bitDepth)) ? String(o.bitDepth) : '16';
+  }
+  out.sampleRate = CONVERT_SAMPLE_RATES.includes(String(o.sampleRate)) ? String(o.sampleRate) : 'keep';
+  // Opus only encodes at 48k (and lower telephone rates); anything else is
+  // forced to 48000 rather than failing mid-batch.
+  if (format === 'opus') out.sampleRate = '48000';
+  out.channels = CONVERT_CHANNELS.includes(String(o.channels)) ? String(o.channels) : 'keep';
+  return out;
+}
+
+// ffmpeg arguments between "-i <input>" and "<output>".
+function buildConvertArgs(opts) {
+  const o = normalizeConvertOptions(opts);
+  // First audio stream only. Measured with the bundled ffmpeg on an MP3
+  // carrying cover art: without this, M4A fails outright ("codec not
+  // currently supported in container") and OGG/FLAC come out with the cover
+  // re-encoded as a video stream; WAV/AIFF happen to be fine. Trade-off:
+  // embedded cover art is not carried over.
+  const a = ['-map', '0:a:0', '-vn'];
+  switch (o.format) {
+    case 'mp3':  a.push('-c:a', 'libmp3lame', '-b:a', o.bitrate + 'k', '-id3v2_version', '3'); break;
+    case 'm4a':
+    case 'mp4':  a.push('-c:a', 'aac', '-b:a', o.bitrate + 'k', '-movflags', '+faststart'); break;
+    case 'opus': a.push('-c:a', 'libopus', '-b:a', o.bitrate + 'k'); break;
+    case 'ogg': {
+      // Vorbis is quality-based; map the bitrate menu onto -q:a.
+      const q = { '320': '9', '256': '8', '192': '6', '128': '4' }[o.bitrate];
+      a.push('-c:a', 'libvorbis', '-q:a', q);
+      break;
+    }
+    case 'wav':
+      a.push('-c:a', { '16': 'pcm_s16le', '24': 'pcm_s24le', '32f': 'pcm_f32le' }[o.bitDepth]);
+      break;
+    case 'aiff':
+      a.push('-c:a', o.bitDepth === '24' ? 'pcm_s24be' : 'pcm_s16be');
+      break;
+    case 'flac':
+      a.push('-c:a', 'flac', '-compression_level', '8');
+      if (o.bitDepth === '24') a.push('-sample_fmt', 's32', '-bits_per_raw_sample', '24');
+      else a.push('-sample_fmt', 's16');
+      break;
+    case 'alac':
+      a.push('-c:a', 'alac', '-sample_fmt', o.bitDepth === '24' ? 's32p' : 's16p');
+      break;
+  }
+  if (o.sampleRate !== 'keep') a.push('-ar', o.sampleRate);
+  if (o.channels !== 'keep') a.push('-ac', o.channels);
+  a.push('-map_metadata', '0');
+  return a;
+}
+
+// Where a converted file goes: outDir if given, otherwise a "Converted"
+// folder next to the original. Name = original stem + the new extension.
+// Collision-safety (never overwrite) is applied by the caller on disk.
+function convertOutputDir(inputPath, outDir, pathMod) {
+  const p = pathMod || path;
+  return outDir ? outDir : p.join(p.dirname(inputPath), 'Converted');
+}
+function convertOutputName(inputPath, format, pathMod) {
+  const p = pathMod || path;
+  const f = CONVERT_FORMATS[format];
+  return p.basename(inputPath, p.extname(inputPath)) + f.ext;
+}
+
+// ffmpeg prints "Duration: 00:03:05.26" once and "time=00:01:02.50" as it
+// goes. Returns seconds or null.
+function parseFfmpegClock(s) {
+  const m = /(\d+):(\d{2}):(\d{2}(?:\.\d+)?)/.exec(s || '');
+  return m ? (+m[1]) * 3600 + (+m[2]) * 60 + parseFloat(m[3]) : null;
+}
+// ─── END CONVERTER CORE ───
+
+app.get('/convert/formats', (req, res) => {
+  res.json({ formats: CONVERT_FORMATS, sampleRates: CONVERT_SAMPLE_RATES, channels: CONVERT_CHANNELS });
+});
+
+// Body: { files: [absolute paths], format, bitrate|bitDepth, sampleRate,
+// channels, outDir|null }. Streams newline-delimited JSON:
+//   {type:'start', i, file} {type:'progress', i, pct}
+//   {type:'done', i, output} {type:'error', i, message} {type:'end', ok, failed}
+// Files run one at a time (ffmpeg already uses several cores). Closing the
+// request stops the current ffmpeg and the rest of the batch.
+app.post('/convert', async (req, res) => {
+  const body = req.body || {};
+  const files = Array.isArray(body.files) ? body.files.filter(f => typeof f === 'string' && f.trim()) : [];
+  let opts, ffArgs;
+  try {
+    opts = normalizeConvertOptions(body);
+    ffArgs = buildConvertArgs(opts);
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+  if (!files.length) return res.status(400).json({ error: 'No files to convert' });
+  const outDir = (typeof body.outDir === 'string' && body.outDir.trim()) ? body.outDir.trim() : null;
+  slog('convert: ' + files.length + ' file(s) -> ' + JSON.stringify(opts) + (outDir ? ' into ' + outDir : ' into Converted/ next to each'));
+
+  res.setHeader('Content-Type', 'application/x-ndjson');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.flushHeaders();
+  const send = (o) => { try { res.write(JSON.stringify(o) + '\n'); } catch {} };
+
+  let cancelled = false, current = null;
+  res.on('close', () => {
+    if (res.writableFinished) return;
+    cancelled = true;
+    if (current) { try { current.kill(); } catch {} }
+    slog('convert: cancelled by client');
+  });
+
+  const ffmpeg = bin('ffmpeg');
+  let ok = 0, failed = 0;
+  for (let i = 0; i < files.length && !cancelled; i++) {
+    const input = files[i];
+    send({ type: 'start', i, file: input });
+    let safe = null, tmpOut = null;
+    try {
+      if (!fs.existsSync(input)) throw new Error('File not found');
+      const destDir = convertOutputDir(input, outDir);
+      fs.mkdirSync(destDir, { recursive: true });
+      const dest = uniqueDestPath(destDir, convertOutputName(input, opts.format));
+      if (!dest) throw new Error('Could not find a free file name in ' + destDir);
+      if (path.resolve(dest) === path.resolve(input)) throw new Error('Output would overwrite the original');
+      // ffmpeg gets ASCII-only paths (see asciiSafeFfmpegPath); the result
+      // is written to Temp and moved to its real, possibly non-ASCII, name.
+      safe = asciiSafeFfmpegPath(input);
+      tmpOut = path.join(os.tmpdir(), 'freqphull_conv_' + Date.now() + '_' + i + CONVERT_FORMATS[opts.format].ext);
+      await new Promise((resolve, reject) => {
+        const p = spawn(ffmpeg, ['-hide_banner', '-y', '-i', safe.ffmpegPath, ...ffArgs, tmpOut], { windowsHide: true });
+        current = p;
+        let duration = null, errTail = '', lastPct = -1;
+        p.stderr.on('data', d => {
+          const s = d.toString();
+          errTail = (errTail + s).slice(-2000);
+          if (duration == null) {
+            const m = /Duration:\s*([\d:.]+)/.exec(s);
+            if (m) duration = parseFfmpegClock(m[1]);
+          }
+          const t = /time=\s*([\d:.]+)/.exec(s);
+          if (t && duration) {
+            const pct = Math.max(0, Math.min(99, Math.floor(100 * parseFfmpegClock(t[1]) / duration)));
+            if (pct !== lastPct) { lastPct = pct; send({ type: 'progress', i, pct }); }
+          }
+        });
+        p.on('error', reject);
+        p.on('close', code => {
+          current = null;
+          if (cancelled) return reject(new Error('cancelled'));
+          if (code === 0) return resolve();
+          const lines = errTail.split('\n').map(l => l.trim()).filter(Boolean);
+          reject(new Error(lines.slice(-2).join(' · ').slice(0, 240) || ('ffmpeg exited with code ' + code)));
+        });
+      });
+      try { fs.renameSync(tmpOut, dest); }
+      catch { fs.copyFileSync(tmpOut, dest); try { fs.unlinkSync(tmpOut); } catch {} }
+      tmpOut = null;
+      ok++;
+      send({ type: 'done', i, output: dest });
+    } catch (e) {
+      if (cancelled) break;
+      failed++;
+      let msg = e.message || String(e);
+      if (SPAWN_ENOENT_RE.test(msg)) msg = 'ffmpeg.exe is missing or blocked - antivirus may have quarantined it.';
+      else if (/matches no streams/i.test(msg)) msg = 'This file has no audio track.';
+      slog('convert: failed ' + input + ': ' + msg);
+      send({ type: 'error', i, message: msg });
+    } finally {
+      if (safe && safe.tempCopy) { try { fs.unlinkSync(safe.tempCopy); } catch {} }
+      if (tmpOut) { try { fs.unlinkSync(tmpOut); } catch {} }
+    }
+  }
+  slog('convert: finished ok=' + ok + ' failed=' + failed + (cancelled ? ' (cancelled)' : ''));
+  send({ type: 'end', ok, failed, cancelled });
+  res.end();
 });
 
 // Convert any audio file to PCM WAV for reliable browser decoding

@@ -741,6 +741,14 @@ window.addEventListener('DOMContentLoaded', () => {
     onBackendReady();
   });
 
+  // Ctrl+Shift+M writes a per-process memory report to the clipboard from
+  // the main process. Guarded because an older preload will not expose it,
+  // and a missing method here would throw during startup and take the whole
+  // init path down with it.
+  if (typeof api.onDiagToast === 'function') {
+    api.onDiagToast((msg) => { try { showAppNotification(msg, 'ok'); } catch (e) {} });
+  }
+
   diagLog('Starting backend poll...', 'info');
   pollBackend();
 
@@ -2463,7 +2471,10 @@ async function loadAudioBuffer(arrayBuf, name, histId) {
     diagLog('Starting Python analysis engine…', 'info');
     runPythonAnalysis(analysisPath, histId);
   } else {
-    // No file path available - use JS fallback
+    // No file path available - use JS fallback. Stop any previous track's
+    // Python run first, or its late result would overwrite this track's.
+    cancelActiveAnalysis();
+    _analysisGen++;
     diagLog('No path for Python analysis, using JS fallback', 'info');
     const [bpmR, keyR] = await Promise.all([detectBPM(audioBuf), Promise.resolve(detectKey(audioBuf))]);
     applyAnalysisResult({ bpm: Math.round(bpmR.bpm), key: keyR.key, mode: keyR.mode, key_confidence: keyR.confidence, scale_family: keyR.scaleFamily }, histId);
@@ -2630,9 +2641,27 @@ function reanalyzeDeepSections() {
 }
 
 // ── Python analysis engine ────────────────────────────────────────────────────
+// Round 81: one Analyzer analysis at a time. Opening a new track used to
+// leave the previous track's /analyze stream open, so its ~12s Python run
+// finished anyway - a real 0.7.38 log shows 3-4 piling up while the user
+// clicked through tracks. Starting a new one now closes the old stream
+// (the server kills its Python when the stream closes), and a generation
+// counter drops anything an older call was still awaiting, so a late
+// result can never land on the track that's open now.
+let _activeAnalysis = null;
+let _analysisGen = 0;
+function cancelActiveAnalysis() {
+  if (!_activeAnalysis) return;
+  try { _activeAnalysis.es.close(); } catch {}
+  clearTimeout(_activeAnalysis.watchdog);
+  _activeAnalysis = null;
+}
+
 async function runPythonAnalysis(filePath, histId, deep) {
   _lastAnalyzedPath = filePath;      // for the manual re-detect button
   _lastAnalyzedHistId = histId || null;
+  cancelActiveAnalysis();
+  const gen = ++_analysisGen;
 
   // Cache first. A track that was analyzed before (interactively or by
   // the background worker) renders in ~50ms from the DB instead of
@@ -2643,6 +2672,7 @@ async function runPythonAnalysis(filePath, histId, deep) {
     try {
       const r = await fetch(API + '/history/' + histId + '/analysis-cache');
       const j = await r.json();
+      if (gen !== _analysisGen) return;   // another track was opened meanwhile
       if (j.cached && j.result) {
         diagLog('Analysis loaded from cache (instant) — ' + j.result.bpm + ' BPM, ' + j.result.key + ' ' + j.result.mode, 'ok');
         j.result._fromCache = true;   // don't re-store what we just read
@@ -2651,6 +2681,7 @@ async function runPythonAnalysis(filePath, histId, deep) {
       }
       diagLog('No analysis cache (' + (j.reason || '?') + ') — running full analysis', 'info');
     } catch { /* backend hiccup — fall through to full analysis */ }
+    if (gen !== _analysisGen) return;
   }
 
   const params = new URLSearchParams({ path: filePath });
@@ -2672,6 +2703,8 @@ async function runPythonAnalysis(filePath, histId, deep) {
       applyAnalysisResult({ bpm: Math.round(bpmR.bpm), key: keyR.key, mode: keyR.mode, key_confidence: keyR.confidence, scale_family: keyR.scaleFamily }, histId);
     }).catch(() => {});
   }, 200000);
+  _activeAnalysis = { es, watchdog: _analysisWatchdog };
+  const _releaseActive = () => { if (_activeAnalysis && _activeAnalysis.es === es) _activeAnalysis = null; };
 
   es.addEventListener('status', e => {
     const msg = JSON.parse(e.data).message;
@@ -2684,6 +2717,7 @@ async function runPythonAnalysis(filePath, histId, deep) {
     _analysisSettled = true;
     clearTimeout(_analysisWatchdog);
     es.close();
+    _releaseActive();
     const result = JSON.parse(e.data);
     diagLog('Python analysis done: ' + result.bpm + ' BPM, ' + result.key + ' ' + result.mode + ' (engine: ' + result.engine + ')', 'ok');
     applyAnalysisResult(result, histId);
@@ -2693,6 +2727,7 @@ async function runPythonAnalysis(filePath, histId, deep) {
     _analysisSettled = true;
     clearTimeout(_analysisWatchdog);
     es.close();
+    _releaseActive();
     let errMsg = 'Python analysis failed';
     try {
       const err = JSON.parse(e.data);
@@ -2724,6 +2759,7 @@ async function runPythonAnalysis(filePath, histId, deep) {
   es.onerror = () => {
     if (es.readyState === EventSource.CLOSED) return;
     es.close();
+    _releaseActive();
     diagLog('EventSource connection failed — server may be starting up', 'err');
   };
 }
@@ -5006,6 +5042,39 @@ async function loadHistory(){
 //
 // Auto-reconnects: EventSource retries on its own if the connection
 // drops, but we also guard against double-subscription with the flag.
+// ─── BEGIN HISTORY REFRESH COALESCE ───
+// Round 81: every 'history-changed' event used to start its own full
+// /history fetch (2,248 rows, ~1.15 MB) + JSON parse, with nothing merging
+// them. One download alone broadcasts four (download, auto-commit,
+// bg-analyze, rename) within ~15s, and a real 0.7.38 log shows refreshes
+// taking 420-540ms each while analyses ran. Now: events inside a short
+// window collapse into one fetch, and any that arrive while a fetch is in
+// flight cause exactly one more fetch afterwards (so the final state is
+// never stale), never one per event.
+const HISTORY_REFRESH_DEBOUNCE_MS = 200;
+let _histRefreshTimer = null, _histRefreshInFlight = false, _histRefreshAgain = false;
+function requestHistoryRefresh() {
+  if (_histRefreshInFlight) { _histRefreshAgain = true; return; }
+  if (_histRefreshTimer) return;
+  _histRefreshTimer = setTimeout(_runHistoryRefresh, HISTORY_REFRESH_DEBOUNCE_MS);
+}
+async function _runHistoryRefresh() {
+  _histRefreshTimer = null;
+  _histRefreshInFlight = true;
+  try {
+    do {
+      _histRefreshAgain = false;
+      let data;
+      try { data = await (await fetch(API + '/history')).json(); } catch { break; }
+      histData = data;
+      renderHistory();
+    } while (_histRefreshAgain);
+  } finally {
+    _histRefreshInFlight = false;
+  }
+}
+// ─── END HISTORY REFRESH COALESCE ───
+
 let _eventsSubscribed = false;
 function subscribeToServerEvents() {
   if (_eventsSubscribed) return;
@@ -5090,15 +5159,12 @@ function subscribeToServerEvents() {
       refreshEnginesDiagRow();
     });
 
-    es.addEventListener('history-changed', async () => {
+    es.addEventListener('history-changed', () => {
       // Refresh the in-memory history then re-render. We only repaint if
       // the History tab exists in the DOM; renderHistory itself is cheap
       // and the pulse only shows for genuinely new ids, so this is safe
       // to call even when the user is on another tab.
-      try {
-        histData = await (await fetch(API + '/history')).json();
-      } catch { return; }
-      renderHistory();
+      requestHistoryRefresh();
     });
 
     // Background analysis worker (0.2.2) - surface its state in a small
@@ -6715,11 +6781,35 @@ function showHistoryContextMenu(ev, id) {
     { label: t('ctxSendStems')     || 'Send to Stem Separator', act: () => sendHistoryToStems(id) },
     { label: t('ctxSendTranscribe')|| 'Send to Transcribe',  act: () => sendHistoryToTranscribe(id) },
     { sep: true },
+    // Round 80: two items in this menu had never worked.
+    //  - Favorite called a "toggle history favorite" function that does not
+    //    exist (the heart button uses toggleFavorite), so clicking it threw
+    //    a ReferenceError and did nothing.
+    //  - Copy source URL read a "source url" field that exists nowhere: the
+    //    column is youtube_url (see HISTORY_LIST_COLUMNS in server.js).
+    //    Every track therefore reported "No URL stored", including ones
+    //    downloaded from a link seconds earlier.
+    // tools/test-history-ctxmenu-r80.js checks every row field and function
+    // this menu uses against what actually exists.
     { label: row.is_favorite ? (t('ctxUnfavorite') || 'Unfavorite') : (t('ctxFavorite') || 'Favorite'),
-      act: () => toggleHistoryFavorite(id) },
+      act: () => toggleFavorite(id) },
     { label: t('ctxCopyTitle')     || 'Copy title',          act: () => navigator.clipboard.writeText(row.title || '').then(() => showAppNotification(t('copied') || 'Copied', 'ok', null, 1500)) },
-    { label: t('ctxCopyUrl')       || 'Copy source URL',     act: () => row.source_url ? navigator.clipboard.writeText(row.source_url).then(() => showAppNotification(t('copied') || 'Copied', 'ok', null, 1500)) : showAppNotification(t('noSourceUrl') || 'No URL stored for this track', 'info') },
-    { label: t('ctxShowFolder')    || 'Show in folder',      act: () => fetch(API + '/open-folder?path=' + encodeURIComponent((row.file_path || '').replace(/[\\/][^\\/]+$/, ''))) },
+    { label: t('ctxCopyUrl')       || 'Copy source URL',     act: () => {
+        const url = (row.youtube_url || '').trim();
+        // Tracks added from disk (watch folder, drag-in) genuinely have no
+        // link - say so accurately rather than implying something was lost.
+        if (!url) return showAppNotification(t('noSourceUrl') || 'This track was added from a file, so it has no source link', 'info');
+        navigator.clipboard.writeText(url)
+          .then(() => showAppNotification(t('copied') || 'Copied', 'ok', null, 1500))
+          .catch(() => showAppNotification(t('copyFailed') || 'Could not copy to the clipboard', 'err'));
+      } },
+    { label: t('ctxShowFolder')    || 'Show in folder',      act: () => {
+        // Used to fire and forget: a moved or deleted file made the server
+        // 404 and the click appeared to do nothing at all.
+        fetch(API + '/open-folder?path=' + encodeURIComponent((row.file_path || '').replace(/[\\/][^\\/]+$/, '')))
+          .then((r) => { if (!r.ok) showAppNotification(t('folderMissing') || 'That folder no longer exists - the file may have been moved', 'err'); })
+          .catch(() => showAppNotification(t('folderMissing') || 'That folder no longer exists - the file may have been moved', 'err'));
+      } },
     { sep: true },
     { label: t('ctxRemove') || 'Remove from history', danger: true, act: () => deleteHistory(id) },
   ];
@@ -7005,8 +7095,23 @@ function _renderHistoryImpl(){
             // happened to get a full rebuild). Assigning null when the
             // fresh row doesn't have one correctly clears the stale
             // handler rather than leaving it dangling.
-            existingEl.onclick = fresh.onclick;
-            existingEl.ondblclick = fresh.ondblclick;
+            //
+            // Round 80: copy the handler ATTRIBUTE TEXT, never the compiled
+            // function. `fresh.onclick` is an inline handler compiled from
+            // fresh's own attribute, and browsers compile inline handlers with
+            // their source element in scope - so assigning it to the live row
+            // made the live row hold a function that kept the whole throwaway
+            // `fresh` subtree alive (its <img>, both SVG icons, three buttons,
+            // spans). One detached copy per patched row, for as long as the
+            // row lived. A heap snapshot measured exactly that: 2,093 detached
+            // rows, with Detached V8EventHandlerNonNull x2093 alongside them.
+            // Setting the attribute string makes the live row compile its own
+            // handler against itself; the copy is then unreferenced.
+            for (const attr of ['onclick', 'ondblclick']) {
+              const src = fresh.getAttribute(attr);
+              if (src === null) existingEl.removeAttribute(attr);
+              else existingEl.setAttribute(attr, src);
+            }
             // Replace children but preserve thumbs whose src is unchanged
             const oldThumb = existingEl.querySelector('.hist-thumb');
             const newThumb = fresh.querySelector('.hist-thumb');
@@ -11185,7 +11290,9 @@ const T = {
     ctxCopyUrl:'Copy source URL',
     ctxShowFolder:'Show in folder',
     ctxRemove:'Remove from history',
-    noSourceUrl:'No URL stored for this track',
+    noSourceUrl:'This track was added from a file, so it has no source link',
+    copyFailed:'Could not copy to the clipboard',
+    folderMissing:'That folder no longer exists - the file may have been moved',
     transReady:'Ready',
     transStartBtn:'Start transcription',
     transPhaseLoading:'Loading {model} model into memory...',
@@ -11933,7 +12040,9 @@ const T = {
     ctxCopyUrl:'Copier l\'URL source',
     ctxShowFolder:'Ouvrir le dossier',
     ctxRemove:'Retirer de l\'historique',
-    noSourceUrl:'Aucune URL enregistrée pour cette piste',
+    noSourceUrl:'Cette piste a été ajoutée depuis un fichier, elle n\'a pas de lien source',
+    copyFailed:'Impossible de copier dans le presse-papiers',
+    folderMissing:'Ce dossier n\'existe plus - le fichier a peut-être été déplacé',
     transReady:'Prêt',
     transStartBtn:'Demarrer la transcription',
     spTagged:'Etiquete',
@@ -16079,7 +16188,7 @@ const RB_AT_SCALES = ['chromatic', 'major', 'minor', 'harmonicMinor', 'melodicMi
 // report can be matched to the exact build unambiguously, no more
 // "it's from the new build" back-and-forth with no way to verify it.
 // Bump this string every time a build is delivered.
-const RB_BUILD_ID = 'r73';
+const RB_BUILD_ID = 'r81';
 try { rbLog('Topliner build: ' + RB_BUILD_ID); } catch (e) {}
 const NOTE_NAMES_RB = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 // Mirrors SCALE_INTERVALS in renderer/autotune-worklet.js exactly (that
@@ -20891,3 +21000,227 @@ if (typeof window.reportSoftError !== 'function') {
 // (stockpile root + auto-send + watch-folder live in localStorage; the
 // server-side watcher and extension-path auto-send need them mirrored.)
 setTimeout(() => { try { syncPrefsToServer(); } catch {} }, 5000);
+
+
+// ── Convert tab (Round 81) ───────────────────────────────────────────────
+// Batch audio conversion. The server does the work (/convert streams one
+// JSON line per event); this only manages the file list and the options.
+// Settings are remembered per viewer in localStorage; reading/writing it is
+// wrapped because it can throw (private mode / blocked storage).
+let convFiles = [];          // [{ path, name, status:'queued'|'working'|'done'|'error', pct, output, error }]
+let convFormats = null;      // from /convert/formats
+let convOutDir = null;       // null = "Converted" folder next to each original
+let convBusy = false;
+let convAbort = null;
+const CONV_PREFS_KEY = 'fp_convert_prefs';
+
+function convLoadPrefs() {
+  try { return JSON.parse(localStorage.getItem(CONV_PREFS_KEY) || '{}') || {}; } catch { return {}; }
+}
+function convSavePrefs() {
+  try {
+    localStorage.setItem(CONV_PREFS_KEY, JSON.stringify({
+      format: document.getElementById('conv-format').value,
+      quality: document.getElementById('conv-quality').value,
+      rate: document.getElementById('conv-rate').value,
+      ch: document.getElementById('conv-ch').value,
+      outDir: convOutDir,
+    }));
+  } catch {}
+}
+
+async function convInit() {
+  if (convFormats) return;
+  try {
+    const j = await (await fetch(API + '/convert/formats')).json();
+    convFormats = j.formats;
+  } catch { return; }   // backend not up yet - retried on next tab open
+  const prefs = convLoadPrefs();
+  const fmtSel = document.getElementById('conv-format');
+  fmtSel.innerHTML = Object.entries(convFormats).map(([k, f]) =>
+    '<option value="' + k + '">' + escapeHtml(f.label) + '</option>').join('');
+  if (prefs.format && convFormats[prefs.format]) fmtSel.value = prefs.format;
+  convFormatChanged(prefs.quality);
+  if (prefs.rate && fmtSel.value !== 'opus') document.getElementById('conv-rate').value = prefs.rate;
+  if (prefs.ch) document.getElementById('conv-ch').value = prefs.ch;
+  convOutDir = prefs.outDir || null;
+  convRenderDest();
+  ['conv-quality', 'conv-rate', 'conv-ch'].forEach(id =>
+    document.getElementById(id).addEventListener('change', convSavePrefs));
+}
+
+function convFormatChanged(preferredQuality) {
+  if (!convFormats) return;
+  const fmt = document.getElementById('conv-format').value;
+  const f = convFormats[fmt];
+  const q = document.getElementById('conv-quality');
+  const lbl = document.getElementById('conv-quality-lbl');
+  if (f.lossy) {
+    lbl.textContent = 'Bitrate';
+    q.innerHTML = f.bitrates.map(b => '<option value="' + b + '">' + b + ' kbps</option>').join('');
+  } else {
+    lbl.textContent = 'Bit depth';
+    q.innerHTML = f.bitDepths.map(b => '<option value="' + b + '">' + (b === '32f' ? '32-bit float' : b + '-bit') + '</option>').join('');
+  }
+  if (typeof preferredQuality === 'string' && [...q.options].some(o => o.value === preferredQuality)) q.value = preferredQuality;
+  const rate = document.getElementById('conv-rate');
+  rate.disabled = fmt === 'opus';
+  if (fmt === 'opus') rate.value = '48000';
+  const notes = {
+    opus: 'Opus always encodes at 48 kHz.',
+    mp3: 'MP3 is lossy: converting a lossy file to a higher bitrate does not bring back quality.',
+    m4a: 'AAC is lossy: converting a lossy file to a higher bitrate does not bring back quality.',
+    mp4: 'Audio-only MP4 (AAC). AAC is lossy: converting a lossy file to a higher bitrate does not bring back quality.',
+    ogg: 'Vorbis is lossy and quality-based; the bitrate is approximate.',
+  };
+  document.getElementById('conv-note').textContent = notes[fmt] ||
+    (f.lossy ? '' : 'Lossless: converting a lossy file (MP3, AAC…) to this keeps its quality but does not improve it.');
+  convSavePrefs();
+}
+
+function convRenderDest() {
+  document.getElementById('conv-dest').textContent = convOutDir || 'A “Converted” folder next to each original';
+  document.getElementById('conv-dest-reset').style.display = convOutDir ? '' : 'none';
+}
+async function convPickFolder() {
+  try {
+    const p = await window.api.pickFolder();
+    if (p) { convOutDir = p; convRenderDest(); convSavePrefs(); }
+  } catch {}
+}
+function convResetFolder() { convOutDir = null; convRenderDest(); convSavePrefs(); }
+
+function convAddPaths(list) {
+  let added = 0, skipped = 0;
+  for (const { path, name } of list) {
+    if (!path) { skipped++; continue; }
+    if (convFiles.some(f => f.path === path)) continue;
+    convFiles.push({ path, name: name || path.split(/[\\/]/).pop(), status: 'queued', pct: 0 });
+    added++;
+  }
+  if (skipped) showAppNotification('Some files could not be added (no path on disk).', 'err', null, 4000);
+  if (added) convRenderList();
+}
+function convAddFromInput(input) {
+  convAddPaths([...input.files].map(f => ({ path: f.path, name: f.name })));
+  input.value = '';
+}
+function convDragOver(e) { e.preventDefault(); e.currentTarget.style.borderColor = 'var(--accent, #7c5cff)'; }
+function convDragLeave(e) { e.currentTarget.style.borderColor = ''; }
+function convDrop(e) {
+  e.preventDefault();
+  e.currentTarget.style.borderColor = '';
+  convAddPaths([...(e.dataTransfer.files || [])].map(f => ({ path: f.path, name: f.name })));
+}
+function convClear() {
+  if (convBusy) return;
+  convFiles = [];
+  convRenderList();
+}
+function convRemove(i) {
+  if (convBusy) return;
+  convFiles.splice(i, 1);
+  convRenderList();
+}
+
+function convRenderList() {
+  const list = document.getElementById('conv-list');
+  const done = convFiles.filter(f => f.status === 'done').length;
+  document.getElementById('conv-count').textContent = convFiles.length
+    ? '(' + convFiles.length + (done ? ', ' + done + ' done' : '') + ')' : '';
+  const go = document.getElementById('conv-go');
+  go.textContent = convBusy ? 'Cancel' : 'Convert';
+  go.disabled = !convBusy && !convFiles.some(f => f.status !== 'done');
+  document.getElementById('conv-clear').disabled = convBusy;
+  if (!convFiles.length) {
+    list.innerHTML = '<div style="font-size:13px;color:var(--hint)">No files added yet.</div>';
+    return;
+  }
+  list.innerHTML = convFiles.map((f, i) => {
+    let st = '';
+    if (f.status === 'working') st = '<span style="color:var(--muted)">' + (f.pct || 0) + '%</span>';
+    else if (f.status === 'done') st = '<a href="#" onclick="window.api.showInFolder(convFiles[' + i + '].output);return false" style="color:var(--green, #3ecf8e)">Done · show</a>';
+    else if (f.status === 'error') st = '<span style="color:#e84040">Failed</span>';
+    else st = '<span style="color:var(--hint)">Queued</span>';
+    const bar = f.status === 'working'
+      ? '<div style="height:3px;background:var(--border, rgba(255,255,255,.08));border-radius:2px;margin-top:6px"><div style="height:3px;width:' + (f.pct || 0) + '%;background:var(--accent, #7c5cff);border-radius:2px"></div></div>' : '';
+    const err = f.status === 'error' ? '<div style="font-size:12px;color:#e84040;margin-top:4px;word-break:break-all">' + escapeHtml(f.error || '') + '</div>' : '';
+    const rm = convBusy ? '' : '<button class="btn sm" onclick="convRemove(' + i + ')" title="Remove" aria-label="Remove" style="padding:0 10px">×</button>';
+    return '<div style="padding:8px 0;border-top:1px solid var(--border, rgba(255,255,255,.06))">' +
+      '<div class="row" style="gap:10px;align-items:center">' +
+      '<div style="flex:1;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeHtml(f.path) + '">' + escapeHtml(f.name) + '</div>' +
+      '<div style="font-size:12px;white-space:nowrap">' + st + '</div>' + rm + '</div>' + bar + err + '</div>';
+  }).join('');
+}
+
+async function convStart() {
+  if (convBusy) { if (convAbort) convAbort.abort(); return; }
+  const todo = convFiles.map((f, i) => ({ f, i })).filter(x => x.f.status !== 'done');
+  if (!todo.length) return;
+  const fmt = document.getElementById('conv-format').value;
+  const q = document.getElementById('conv-quality').value;
+  const body = {
+    files: todo.map(x => x.f.path),
+    format: fmt,
+    sampleRate: document.getElementById('conv-rate').value,
+    channels: document.getElementById('conv-ch').value,
+    outDir: convOutDir,
+  };
+  if (convFormats[fmt].lossy) body.bitrate = q; else body.bitDepth = q;
+  todo.forEach(x => { x.f.status = 'queued'; x.f.pct = 0; x.f.error = null; });
+  convBusy = true;
+  convAbort = new AbortController();
+  convRenderList();
+  let summary = null;
+  try {
+    const res = await fetch(API + '/convert', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body), signal: convAbort.signal,
+    });
+    if (!res.ok) {
+      let msg = 'Conversion failed';
+      try { msg = (await res.json()).error || msg; } catch {}
+      throw new Error(msg);
+    }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        let ev; try { ev = JSON.parse(line); } catch { continue; }
+        const item = ev.i != null && todo[ev.i] ? todo[ev.i].f : null;
+        if (ev.type === 'start' && item) { item.status = 'working'; item.pct = 0; }
+        else if (ev.type === 'progress' && item) item.pct = ev.pct;
+        else if (ev.type === 'done' && item) { item.status = 'done'; item.output = ev.output; }
+        else if (ev.type === 'error' && item) { item.status = 'error'; item.error = ev.message; }
+        else if (ev.type === 'end') summary = ev;
+        convRenderList();
+      }
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') showAppNotification(e.message || 'Conversion failed', 'err', null, 6000);
+  } finally {
+    todo.forEach(x => { if (x.f.status === 'working') { x.f.status = 'queued'; x.f.pct = 0; } });
+    convBusy = false;
+    convAbort = null;
+    convRenderList();
+  }
+  if (summary) {
+    const msg = summary.ok + ' converted' + (summary.failed ? ', ' + summary.failed + ' failed' : '');
+    showAppNotification(msg, summary.failed ? 'err' : 'ok', null, 4000);
+  }
+}
+
+// Load the format list the first time the tab is opened, and once on boot
+// after the backend is up so the selects are filled before anyone looks.
+document.addEventListener('click', e => {
+  const b = e.target.closest && e.target.closest('#nav-convert');
+  if (b) convInit();
+});
+setTimeout(() => { try { convInit(); } catch {} }, 6000);

@@ -1,6 +1,7 @@
 param(
     [switch] $Repair,          # targeted repair: skip provisioning, reinstall -Packages
-    [string] $Packages = ""    # comma-separated pip package list for -Repair
+    [string] $Packages = "",   # comma-separated pip package list for -Repair
+    [string] $PythonExe = ""   # -Repair only: the EXACT interpreter the app verifies with (Round 80)
 )
 # Freq.Phull engines setup.
 # Installs Python, audio packages, and Whisper/Demucs models.
@@ -310,6 +311,33 @@ $pythonVersionStr = $null
 $incompatibleFound = @()  # list of (cmd, version) pairs we saw but rejected
 
 # ============================================================================
+# Round 80: repair the interpreter the app actually VERIFIES with.
+# ============================================================================
+# This script and server.js used to choose their Python independently, by
+# different rules: the server prefers the embedded runtime only once it holds
+# numpy, then the setup marker, then `py -3`; this script prefers the embedded
+# runtime whenever it is 3.11 with pip, then `python` on PATH, then `py`. On a
+# machine with an embedded runtime missing numpy, or with more than one system
+# Python, the two disagree - the repair reinstalls packages into one
+# interpreter, verification checks another, and "repair ran but verification
+# still fails" follows on every launch. Seen in Sentry ELECTRON-4
+# (engine_source: system, python_path_tail: py, 0.7.37).
+#
+# The server now passes the sys.executable its verification ran under, and
+# -Repair installs into exactly that. Discovery below remains the fallback for
+# a caller that does not pass it.
+if ($Repair -and $PythonExe) {
+    if (Test-Path $PythonExe) {
+        $pythonCmd = $PythonExe
+        $script:pythonExtraArgs = @()
+        $pythonVersionStr = ("$(& $PythonExe --version 2>&1)").Trim()
+        Log "Repair targeting the verified interpreter: $PythonExe ($pythonVersionStr)"
+    } else {
+        Log "Repair was given -PythonExe '$PythonExe' but it does not exist - falling back to discovery"
+    }
+}
+
+# ============================================================================
 # Step 1a: Private embedded Python runtime (the reliable path)
 # ============================================================================
 # Every real-world support case traces back to the machine's own Python:
@@ -333,7 +361,10 @@ function Test-EmbeddedRuntime {
     } catch { return $false }
 }
 
-if (Test-EmbeddedRuntime) {
+if ($pythonCmd) {
+    # Already pinned to the verified interpreter above (Round 80 repair).
+    EmitStatus "python_found" 5 "Repairing the engine runtime in use" $pythonVersionStr
+} elseif (Test-EmbeddedRuntime) {
     $pythonCmd = $embedExe
     $script:pythonExtraArgs = @()
     $pythonVersionStr = ("$(& $embedExe --version 2>&1)").Trim()

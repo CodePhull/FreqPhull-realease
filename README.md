@@ -27,9 +27,24 @@ source tree on this page is only useful if you want to build it yourself.
 | Stockpile | Library tagging into style folders with auto-matching. |
 | History | Searchable, filterable by folder / favorite / untagged. |
 | Transcribe | Local Whisper. Bilingual (FR + EN) for code-switching tracks. |
+| Convert | Batch convert audio or video files to MP3, WAV, FLAC, AIFF, ALAC, M4A, MP4, OGG or Opus. |
 
 A companion Chrome extension downloads and analyzes tracks from
 youtube.com directly, talking to the same local backend.
+
+## What's new in 0.7.41
+
+**New: Convert tab**
+- Convert audio files to MP3, WAV, FLAC, AIFF, ALAC, M4A, MP4, OGG or Opus.
+- Video files work too (MP4, MOV, MKV, WEBM). The audio gets pulled out.
+- Pick the bitrate or bit depth, the sample rate, and stereo or mono.
+- Converted files go in a `Converted` folder next to the original, or in any folder you choose. Nothing gets overwritten.
+- Drop in as many files as you want. You can cancel at any time.
+
+**YouTube download fixes**
+- "Please sign in" errors used to show raw error text. Now the app tells you what happened, and the download retries once by itself.
+- Some videos really do need a signed-in YouTube account, and those still can't be downloaded.
+- Fixed tags not being saved on downloaded files.
 
 ## Installation
 

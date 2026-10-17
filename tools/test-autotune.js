@@ -2356,14 +2356,40 @@ function check(name, cond, detail) {
     if (i % Math.round(sr * 0.15) < 40) s += (rand() * 2 - 1) * 0.35; // broadband consonant-like bursts
     input[i] = s * 0.4;
   }
-  const engine = new AutotuneEngine(sr);
-  engine.setParams({ key: 0, scale: 'major', retuneSpeedMs: 20, formantCorrection: true, humanize: 0, naturalVibrato: 0, flexTune: 0 });
-  const out = new Float32Array(n);
-  for (let i = 0; i < n; i++) out[i] = engine.processSample(input[i]);
-  const centroid = spectralCentroid(out, sr);
-  check("Round 51's further Formant Correction brightness fix (FORMANT_HF_CUTOFF_HZ raised on real-material evidence) measurably recovers centroid on broadband content",
-    centroid > 1600,
-    `centroid=${centroid.toFixed(1)}Hz (want >1600 - measured 1313.8Hz at the old Round 50 cutoff, 1902.8Hz at the new Round 51 cutoff)`);
+  // Round 80: RE-BASELINED AGAINST A CLEAN CONTROL.
+  //
+  // This test used to assert an absolute centroid > 1600Hz, calibrated
+  // against earlier ENGINE OUTPUT ("1313.8Hz at the old cutoff, 1902.8Hz at
+  // the new") - never against the input. The input's own centroid is ~430Hz
+  // (8 harmonics of 233Hz at 1/h amplitude put the tone near 415Hz, and the
+  // noise bursts are ~0.13% of the energy). So the pre-Round-80 1902.8Hz was
+  // the engine making its input ~4.4x BRIGHTER, and ">1600" was guarding
+  // that - the same processed-vs-processed mistake that let the "bottle" and
+  // the "harsh sibilance" survive Rounds 61-65. Mechanism: consonant bursts
+  // are not predicted by the LPC fit, so they pass through whitening at full
+  // level while the tone is whitened down, and the gain correction then
+  // lifts the whole residual - bursts included - back to input level.
+  //
+  // What this test exists to catch is MUFFLING, so that is now what it
+  // checks, against the right reference: formant-ON must not be darker than
+  // formant-OFF (the same shift with no formant processing). A second check
+  // bounds the opposite failure so the fizz cannot quietly return.
+  const params = { key: 0, scale: 'major', retuneSpeedMs: 20, humanize: 0, naturalVibrato: 0, flexTune: 0 };
+  const render = (fc) => {
+    const e = new AutotuneEngine(sr);
+    e.setParams({ ...params, formantCorrection: fc });
+    const o = new Float32Array(n);
+    for (let i = 0; i < n; i++) o[i] = e.processSample(input[i]);
+    return o;
+  };
+  const cIn = spectralCentroid(input, sr);
+  const cOff = spectralCentroid(render(false), sr);
+  const centroid = spectralCentroid(render(true), sr);
+  const detail = `input ${cIn.toFixed(0)}Hz, formant OFF ${cOff.toFixed(0)}Hz, formant ON ${centroid.toFixed(0)}Hz (x${(centroid / cOff).toFixed(2)} of OFF; pre-Round-80 engine measured 1902.8Hz here)`;
+  check("Round 51's further Formant Correction brightness fix: formant ON does not darken broadband content relative to formant OFF (clean-control re-baseline, Round 80)",
+    centroid >= cOff * 0.85, detail);
+  check("Round 80: formant ON does not brighten broadband content far beyond formant OFF (the consonant-amplification fizz behind \"harsh sibilance\")",
+    centroid <= cOff * 2.5, detail);
 }
 
 
@@ -2474,14 +2500,26 @@ function check(name, cond, detail) {
     if (i % Math.round(sr * 0.15) < 40) s += (rand() * 2 - 1) * 0.35;
     input[i] = s * 0.4;
   }
-  const engine = new AutotuneEngine(sr);
-  engine.setParams({ key: 0, scale: 'major', retuneSpeedMs: 20, formantCorrection: true, humanize: 0, naturalVibrato: 0, flexTune: 0 });
-  const out = new Float32Array(n);
-  for (let i = 0; i < n; i++) out[i] = engine.processSample(input[i]);
-  const centroid = spectralCentroid(out, sr);
-  check("Round 53's period-scoped WSOLA search does not regress broadband/consonant-heavy material (test 54's own signal)",
-    centroid > 1600,
-    `centroid=${centroid.toFixed(1)}Hz (want >1600 - an unscoped search version measured 1385.8Hz here, a real regression)`);
+  // Round 80: re-baselined against formant OFF instead of an absolute
+  // centroid - see the Round 51 test above for why the old ">1600Hz" was
+  // guarding a 4.4x over-brightening of a ~430Hz input rather than
+  // protecting against muffling. The regression Round 53 caught (an
+  // unscoped splice search darkening this material) is still exactly what
+  // this catches: a splice search that lands on wrong-phase candidates
+  // smears the result darker than the plain shift, i.e. below formant OFF.
+  const params = { key: 0, scale: 'major', retuneSpeedMs: 20, humanize: 0, naturalVibrato: 0, flexTune: 0 };
+  const render = (fc) => {
+    const e = new AutotuneEngine(sr);
+    e.setParams({ ...params, formantCorrection: fc });
+    const o = new Float32Array(n);
+    for (let i = 0; i < n; i++) o[i] = e.processSample(input[i]);
+    return o;
+  };
+  const cOff = spectralCentroid(render(false), sr);
+  const centroid = spectralCentroid(render(true), sr);
+  check("Round 53's period-scoped WSOLA search does not regress broadband/consonant-heavy material (test 54's own signal, re-baselined against formant OFF in Round 80)",
+    centroid >= cOff * 0.85,
+    `formant OFF ${cOff.toFixed(0)}Hz, formant ON ${centroid.toFixed(0)}Hz (x${(centroid / cOff).toFixed(2)}; an unscoped search measured 1385.8Hz vs 1902.8Hz on the pre-Round-80 engine)`);
 }
 
 

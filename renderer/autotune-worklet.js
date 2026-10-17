@@ -585,6 +585,80 @@ const FORMANT_GAIN_CORR_MAX = 40;
 // stale, already-compiled module from a prior process can never
 // silently keep running after files on disk are updated.
 const FORMANT_HF_CUTOFF_HZ = 20000;
+
+// ─── BEGIN SPLIT-BAND FORMANT OUTPUT (Round 80) ───
+// "In a bottle" / "boxy" / "too much sibilance" - the complaint Rounds
+// 61, 62, 63 and 65 each tried and failed to fix. They failed for one
+// reason: every evidence file was app output, and comparing processed audio
+// to processed audio cannot reveal a coloration that is always there.
+// Against a CLEAN control (tools/diag-splitband.js), full formant correction
+// measured:
+//
+//     boxiness  +3.5 dB    presence (1.5-4kHz) -5.5 dB    4-8kHz +2.7 dB
+//
+// - a scooped presence hole with fizz above it. That is both reported
+// complaints ("bottle" and "harsh") from one mechanism. Formant OFF measures
+// 0.0 on both, which is why "Formant off okokokkk.wav" sounded right.
+//
+// Two changes, both measured on the same harness with a working sanity gate
+// (formant OFF must let formants ride a forced -500c shift - measured 389c -
+// and correction must hold them - measured 56c - or every number is void):
+//
+// 1. SPLICE SEARCH ON THE RAW VOICE. The shifter used to be fed only the
+//    whitened LPC residual, so its WSOLA splice search correlated against a
+//    deliberately flat, impulse-like signal with little periodic structure
+//    to lock to (Round 53 tuned that search on raw tones, not residuals).
+//    PitchShifter now carries both: the raw input on the primary ring, which
+//    the search runs on, and the whitened residual on an aux ring read at
+//    the IDENTICAL positions and crossfade weights. Measured alone, with no
+//    other change: formant drift through a 500c shift 56c -> ~0c (under one
+//    14c measurement bin), coloration unchanged. Shipped formant correction
+//    had been blurring its own result.
+//
+// 2. SPLIT-BAND OUTPUT. Below SPLIT_XOVER_HZ the formant-corrected signal;
+//    above it the RAW shifted voice. Above ~2.5kHz a voice is mostly
+//    sibilance and air, not vowel formants, and it is there that the
+//    whitened-and-recoloured path does the damage.
+//
+// Result against shipped (same harness, clean control, 44.1kHz):
+//
+//                     box    presence   4-8kHz   formant drift
+//     before          3.5     -5.5       +2.7        56c
+//     after           0.1     -2.4       +1.7        42c
+//
+// Better on all four at once - the one result in this investigation that
+// did not trade coloration against preservation.
+//
+// Rejected along the way, each measured:
+//  - Low-passing formantContribution with no raw path: removes the box but
+//    RAISES 4-8kHz to +3.6..3.9 dB, because above the crossover the output
+//    becomes the whitened residual itself - flat excitation, brighter than
+//    any real voice. It never "left sibilance alone"; it replaced it.
+//  - Just turning formant blend down: far worse. Blend 0.9 is already MORE
+//    boxy (4.3) and lets formants drift 264c.
+//  - A second, independent PitchShifter for the raw path: fixes 4-8kHz but
+//    its splices land at different positions from the corrected path's, the
+//    two drift out of phase and partly cancel across the crossover -
+//    measured WORSE than shipped on presence at 3kHz (-6.2 vs -5.5).
+//  - 4-pole crossover: less box (-0.8) but formant drift rises past shipped
+//    (69c). 2-pole is the point that improves every metric.
+//
+// Honest open question: 4-8kHz lands at +1.7, better than shipped's +2.7 but
+// not the ~0 formant OFF reaches. Two explanations were tested and both
+// falsified (splice alignment; crossover leakage - it does not fall with
+// filter order). It is not explained, so it is not claimed to be solved.
+//
+// Complementary by construction: y = LPn(corrected) + raw - LPn(raw). When
+// the two paths carry the same signal the sum is exactly that signal, so the
+// split cannot introduce its own coloration on in-tune, blend-0 audio.
+const SPLIT_XOVER_HZ = 2500;
+const SPLIT_XOVER_ORDER = 2;
+// n cascaded identical poles put the -3dB point at fc*sqrt(2^(1/n)-1)
+// (0.64x for n=2). Scale each stage so the cascade crosses at SPLIT_XOVER_HZ
+// rather than ~1600Hz.
+const SPLIT_XOVER_STAGE_HZ = SPLIT_XOVER_HZ / Math.sqrt(Math.pow(2, 1 / SPLIT_XOVER_ORDER) - 1);
+// ─── END SPLIT-BAND FORMANT OUTPUT ───
+
 function applyBandwidthExpansion(coeffs, order) {
   let g = 1;
   for (let k = 1; k <= order; k++) {
@@ -962,7 +1036,19 @@ class PitchShifter {
     this.bufLen = Math.max(4096, Math.floor(sampleRate * (bufferSeconds || 1.0)));
     this.ring = new Float32Array(this.bufLen);
     this.writeCount = 0;
+    // Round 80: optional second ring, written in lockstep with the primary
+    // and read at the IDENTICAL splice positions and crossfade weights, so
+    // its output is phase-locked to the primary's by construction. Off
+    // unless enableAux() is called - every existing caller passes one
+    // argument to writeSample()/readSample() and gets exactly the old
+    // behaviour. The splice search only ever looks at the primary ring.
+    this.auxRing = null;
+    this.auxOut = 0;
+    this._lw = new Float64Array(6);   // shared Lanczos weights, see _readPair()
     this.setGrainMs(grainMs || 40);
+  }
+  enableAux() {
+    if (!this.auxRing) this.auxRing = new Float32Array(this.bufLen);
   }
   setGrainMs(grainMs) {
     // Idempotent: resetting readPos/fadePos here drops the shifter's
@@ -1007,8 +1093,14 @@ class PitchShifter {
     this.fadePos = null;
     this.fadeT = 0;
   }
-  writeSample(s) {
-    this.ring[this.writeCount % this.bufLen] = s;
+  writeSample(s, aux) {
+    const i = this.writeCount % this.bufLen;
+    this.ring[i] = s;
+    // Written unconditionally once enabled (even when the caller has
+    // nothing new to put there) so the aux ring never holds stale audio
+    // from an earlier moment - toggling Formant Correction on must not
+    // replay seconds-old residual through the shifter.
+    if (this.auxRing) this.auxRing[i] = (aux === undefined ? s : aux);
     this.writeCount++;
   }
   // Cubic (Catmull-Rom) interpolation instead of linear for fractional
@@ -1061,6 +1153,33 @@ class PitchShifter {
       sum += this.ring[idx] * this._lanczosKernel(t - k, a);
     }
     return sum;
+  }
+  // Round 80: read BOTH rings at one position. Returns the primary sample;
+  // the aux sample is left in this._pairAux.
+  //
+  // The six Lanczos weights depend only on the fractional part of pos, and
+  // both rings are read at the same pos, so they are computed once here and
+  // applied to both - 12 Math.sin calls per read instead of 24. That matters:
+  // measured in the diagnostic, reading the aux ring through a second full
+  // _readRing() pushed the engine from 0.21 to 0.29 of real time, and the
+  // splice search (once per grain) was not the cost - the per-sample kernel
+  // evaluation was. Summation order matches _readRing() exactly.
+  _readPair(pos) {
+    const bl = this.bufLen;
+    let p = pos % bl; if (p < 0) p += bl;
+    const i1 = Math.floor(p);
+    const t = p - i1;
+    const w = this._lw;
+    for (let k = -2; k <= 3; k++) w[k + 2] = this._lanczosKernel(t - k, 3);
+    let s = 0, sa = 0;
+    const r = this.ring, ra = this.auxRing;
+    for (let k = -2; k <= 3; k++) {
+      let idx = (i1 + k) % bl; if (idx < 0) idx += bl;
+      s += r[idx] * w[k + 2];
+      sa += ra[idx] * w[k + 2];
+    }
+    this._pairAux = sa;
+    return s;
   }
   // WSOLA-style similarity search (Round 53) - picks WHERE a grain jump
   // lands, not just when one happens. Every prior version of this class
@@ -1151,12 +1270,32 @@ class PitchShifter {
     }
     return target + bestOffset;
   }
-  readSample(ratio) {
+  // wantAux (Round 80): also produce this.auxOut from the aux ring, at the
+  // same positions and weights. Omitted or false -> the exact pre-Round-80
+  // code path below, untouched, so formant-off audio and every existing
+  // test is bit-for-bit what it was.
+  readSample(ratio, wantAux) {
     const idealDelay = this.grainSize;
     if (this.readPos === null) this.readPos = this.writeCount - idealDelay;
 
     let out;
-    if (this.fadePos !== null) {
+    if (wantAux && this.auxRing) {
+      if (this.fadePos !== null) {
+        const t = Math.min(1, this.fadeT);
+        const wOut = Math.cos(t * Math.PI / 2);
+        const wIn = Math.sin(t * Math.PI / 2);
+        const a = this._readPair(this.fadePos), aAux = this._pairAux;
+        const b = this._readPair(this.readPos), bAux = this._pairAux;
+        out = a * wOut + b * wIn;
+        this.auxOut = aAux * wOut + bAux * wIn;
+        this.fadePos += ratio;
+        this.fadeT += 1 / this.fadeLen;
+        if (this.fadeT >= 1) this.fadePos = null;
+      } else {
+        out = this._readPair(this.readPos);
+        this.auxOut = this._pairAux;
+      }
+    } else if (this.fadePos !== null) {
       // Equal-POWER crossfade (sin/cos quarter-wave), not equal-gain.
       // fadePos and readPos are two DIFFERENT positions in the ring
       // buffer - different points in time, possibly different vibrato
@@ -1273,6 +1412,46 @@ const PITCH_GLIDE_CONSIST_LO = 0.88;
 const PITCH_GLIDE_CONSIST_HI = 0.98;
 const SMOOTH_MS_SLOW = 120;
 const SMOOTH_MS_FAST = 25;
+// Round 81: pitch LEAD ("autotune not sticking to the voice"). detectPitch()
+// reads a winLen (46ms) window, so the pitch it reports is the pitch of the
+// window's middle - measured 24ms behind the input at every vibrato rate -
+// and it is refreshed only once per hop (11.6ms). Steady errors are fully
+// corrected (a +40c held note comes out at 0.1c), but anything MOVING gets
+// a correction meant for where the pitch was: measured on a synthetic
+// voice at retune 0, a +-40c vibrato kept 4c sd at 2Hz rising to 11c sd at
+// 8Hz, and the developer's tuned take kept a 4-8Hz wobble of 14c sd (peaks
+// 40-90c) inside notes whose average sat within 2-6c of the target.
+//
+// FIRST HYPOTHESIS, FALSIFIED: "the correction arrives late, so lead it".
+// Extrapolating the reading forward made formant-OFF output worse at every
+// lead tried (5.5Hz: 9.2c sd -> 13.2c at 0ms lead + slope-follow, 25.2c at
+// 16ms, 35.7c at 30ms). What the 24ms figure left out is that the shifter
+// delays the AUDIO too, so the question is which arrives first. Swept
+// directly on the pre-change engine by delaying the correction instead:
+// formant OFF (40ms grain) is minimised at a 10ms DELAY - 5.5Hz 9.2 ->
+// 2.2c, 8Hz 11.4 -> 3.8c - identically at 44.1k, 48k, 88.2k and 96k.
+// Formant ON (25ms grain) gets worse with any delay (8Hz 6.2 -> 11.3c at
+// 6ms) but better with the slope-follow below and no extra lead (5.5Hz
+// 4.9 -> 1.7c, 8Hz 6.2 -> 1.8c; 4ms lead 2.6c, 8ms 5.8c). So the timing
+// error has opposite signs in the two modes, consistent with the shifter's
+// delay scaling with its grain - stated as the likely reason, not proven.
+// Each mode gets the remedy measured for it, keyed off the same flag that
+// sets the grain size (setParams).
+//
+// Formant ON - slope-follow: at each hop the ratio is computed for the
+// reading plus PITCH_LEAD_MS of the pitch's own slope, and between hops it
+// keeps following that slope sample by sample instead of holding a stale
+// value for the whole hop. Guards: only within a held note (same target as
+// the last hop), only when the last two accepted hops each moved no more
+// than PITCH_LEAD_MAX_STEP_CENTS (an 8Hz +-50c vibrato moves ~30c per hop;
+// a note change moves far more), never more than PITCH_LEAD_MAX_CENTS total.
+// Formant OFF - the correction is held back CORRECTION_DELAY_MS on its way
+// to the shifter. This delays only the control signal; what the singer
+// hears is not delayed at all.
+const PITCH_LEAD_MS = 0;
+const PITCH_LEAD_MAX_STEP_CENTS = 40;
+const PITCH_LEAD_MAX_CENTS = 60;
+const CORRECTION_DELAY_MS = 10;
 // Shared smoothstep ramp (3x^2 - 2x^3) between two gate thresholds -
 // used here for the direction-consistency gate; kept as its own small
 // function since "ramp smoothly rather than snap" is the same shape
@@ -1390,6 +1569,19 @@ class AutotuneEngine {
     // comment) - a plain array used as a small ring buffer, oldest
     // pushed out once it exceeds PITCH_VEL_WINDOW_HOPS + 1 entries.
     this.pitchVelHist = [];
+    // Round 81 pitch lead (see PITCH_LEAD_MS): the last two accepted raw
+    // pitches of an unbroken run (null when the run breaks), the per-sample
+    // ratio multiplier that keeps following the slope between hops, and how
+    // many cents of lead are currently applied (for the total cap).
+    this.leadHist = [];
+    this.leadStepFactor = 1;
+    this.leadCentsPerSample = 0;
+    this.leadAccumCents = 0;
+    // Round 81 correction delay line (formant OFF - see CORRECTION_DELAY_MS).
+    // Written every sample in both modes so switching modes never replays a
+    // stale ratio; read only with formant correction off.
+    this.ratioDelay = new Float64Array(Math.max(1, Math.round(CORRECTION_DELAY_MS * sampleRate / 1000))).fill(1);
+    this.ratioDelayIdx = 0;
     // How many consecutive hops the actual correction target has been
     // wildly far (half an octave+) from the raw pitch actually being
     // sung - see the divergence check at the end of _analyze(). A
@@ -1564,6 +1756,13 @@ class AutotuneEngine {
     this.coloredRms2Ema = 0;
     this.inputRms2Ema = 0;
     this.formantHfAlpha = 1 - Math.exp(-2 * Math.PI * FORMANT_HF_CUTOFF_HZ / this.sr);
+    // Round 80 split-band output (see SPLIT_XOVER_HZ). Derived from this.sr,
+    // so the crossover lands at the same frequency at 44.1k, 48k, 96k or
+    // 192k - Round 73 made the context run at the mic's native rate.
+    this.shifter.enableAux();
+    this.xoverAlpha = 1 - Math.exp(-2 * Math.PI * SPLIT_XOVER_STAGE_HZ / this.sr);
+    this.xoverCorr = new Float64Array(SPLIT_XOVER_ORDER);
+    this.xoverRaw = new Float64Array(SPLIT_XOVER_ORDER);
     // Round 42: default Retune Speed tightened from 20ms to 5ms. Direct
     // feedback: correction "doesn't correct enough" - measured directly
     // on a real evidence take (Formant Correction off, so purely this
@@ -1616,6 +1815,16 @@ class AutotuneEngine {
     this.msSinceLastAccepted = 0;
     this.forcedRejectMs = 0;
     this.pitchVelHist.length = 0;
+    this._clearLead();
+    // A resync means the old target was wrong - don't let 10ms of it drain
+    // out of the delay line afterwards.
+    this.ratioDelay.fill(1);
+  }
+  _clearLead() {
+    this.leadHist.length = 0;
+    this.leadStepFactor = 1;
+    this.leadCentsPerSample = 0;
+    this.leadAccumCents = 0;
   }
   _predict(history) {
     let sum = 0;
@@ -1672,8 +1881,21 @@ class AutotuneEngine {
     if (this.params.humanize > 0) {
       speed *= (1 + (this.params.humanize / 100) * Math.min(3, this.heldMs / 300));
     }
+    // Round 81 timing alignment (see PITCH_LEAD_MS / CORRECTION_DELAY_MS).
+    // Formant ON: between hops, keep following the pitch's slope rather
+    // than holding the hop's target flat, up to the cap (_analyze only sets
+    // a slope in that mode). Formant OFF: steer toward the target from
+    // CORRECTION_DELAY_MS ago.
+    if (this.leadCentsPerSample !== 0 && Math.abs(this.leadAccumCents + this.leadCentsPerSample) <= PITCH_LEAD_MAX_CENTS) {
+      this.leadAccumCents += this.leadCentsPerSample;
+      this.targetRatio *= this.leadStepFactor;
+    }
+    const delayedRatio = this.ratioDelay[this.ratioDelayIdx];
+    this.ratioDelay[this.ratioDelayIdx] = this.targetRatio;
+    this.ratioDelayIdx = (this.ratioDelayIdx + 1) % this.ratioDelay.length;
+    const steerRatio = this.params.formantCorrection ? this.targetRatio : delayedRatio;
     const alpha = 1 - Math.exp(-dtMs / speed);
-    this.currentRatio += (this.targetRatio - this.currentRatio) * alpha;
+    this.currentRatio += (steerRatio - this.currentRatio) * alpha;
 
     const useFormant = !!this.params.formantCorrection;
     let writeSignal = x;
@@ -1763,7 +1985,11 @@ class AutotuneEngine {
     // bypass, same as before this existed - keeps the ring buffer warm
     // with real (not stale/silent) audio so un-bypassing doesn't start
     // from an empty buffer.
-    this.shifter.writeSample(writeSignal);
+    // Round 80: primary ring gets the RAW input (the splice search runs on
+    // it), aux ring gets whatever used to go in alone. Formant off:
+    // writeSignal === x, so both rings hold x and the primary ring - the
+    // only one read on that path - holds exactly what it always held.
+    this.shifter.writeSample(x, writeSignal);
 
     if (this.params.bypass) return x;
 
@@ -1775,8 +2001,28 @@ class AutotuneEngine {
     // only needs to be approximately right to keep the search from
     // wandering into an unrelated part of the waveform, not exact.
     this.shifter.periodHint = this.lastAcceptedPitchHz ? (this.sr / this.lastAcceptedPitchHz) : null;
-    const shifted = this.shifter.readSample(this.currentRatio);
-    if (!useFormant) return shifted;
+    // Formant off: the single-ring read, byte-for-byte the old path.
+    // Formant on: rawShifted from the primary ring, shifted (the whitened
+    // excitation the recolour stage below expects) from the aux ring, both
+    // at the same splice positions.
+    const rawShifted = this.shifter.readSample(this.currentRatio, useFormant);
+    if (!useFormant) {
+      // Keep the crossover filters tracking while off. Otherwise switching
+      // Formant Correction on restarts them from whatever they held the last
+      // time it was on - possibly minutes ago - and the first few samples
+      // step from that stale value: a tick right at the toggle. With both
+      // chains following the signal, the first corrected sample (blend
+      // starts at 0, so yCorr ~= rawShifted) finds them already settled.
+      // Output on this path is unaffected - it returns rawShifted as before.
+      let lpR = rawShifted;
+      for (let s = 0; s < SPLIT_XOVER_ORDER; s++) {
+        this.xoverRaw[s] += (lpR - this.xoverRaw[s]) * this.xoverAlpha;
+        lpR = this.xoverRaw[s];
+        this.xoverCorr[s] = this.xoverRaw[s];
+      }
+      return rawShifted;
+    }
+    const shifted = this.shifter.auxOut;
 
     // Round 44: resynthesize through the cepstral-derived, minimum-
     // phase FIR taps instead of a recursive all-pole prediction - this
@@ -1852,7 +2098,16 @@ class AutotuneEngine {
     // exactly that, same as before.
     const TRANSITION_DAMPEN_MS = 40;
     const transitionDampen = this.heldMs < TRANSITION_DAMPEN_MS ? (this.heldMs / TRANSITION_DAMPEN_MS) : 1;
-    let y = shiftedCorrected + formantContribution * this.formantBlend * transitionDampen;
+    const yCorr = shiftedCorrected + formantContribution * this.formantBlend * transitionDampen;
+    // Round 80 split-band output: corrected below SPLIT_XOVER_HZ, raw
+    // shifted voice above. Complementary - y = LPn(yCorr) + raw - LPn(raw) -
+    // so identical inputs sum back to exactly that input.
+    let lpC = yCorr, lpR = rawShifted;
+    for (let s = 0; s < SPLIT_XOVER_ORDER; s++) {
+      this.xoverCorr[s] += (lpC - this.xoverCorr[s]) * this.xoverAlpha; lpC = this.xoverCorr[s];
+      this.xoverRaw[s] += (lpR - this.xoverRaw[s]) * this.xoverAlpha; lpR = this.xoverRaw[s];
+    }
+    let y = lpC + (rawShifted - lpR);
     // Safety net #2 (resynthesis side). Structurally, an FIR filter
     // convolved against bounded history cannot ring or diverge the way
     // the old recursive mechanism could - there is no pole, no feedback
@@ -2113,6 +2368,7 @@ class AutotuneEngine {
       }
     }
     if (!accepted) {
+      this._clearLead();
       this.targetRatio += (1 - this.targetRatio) * 0.05; // no clear/trusted pitch - ease back to unshifted
       this.heldMs = 0;
       // msSinceLastAccepted (distinct from heldMs above, which tracks how
@@ -2230,8 +2486,26 @@ class AutotuneEngine {
     if (Math.abs(centsOff) < flexThreshold) strength = Math.abs(centsOff) / Math.max(1, flexThreshold);
 
     const vibratoLeak = (this.params.naturalVibrato / 100) * 0.6;
-    const correctedHz = pitch.hz * Math.pow(2, (-centsOff / 1200) * strength * (1 - vibratoLeak));
-    const rawRatio = correctedHz / pitch.hz;
+    // Round 81 pitch lead (see PITCH_LEAD_MS). Slope from the last two
+    // accepted hop-to-hop moves of an unbroken run; used only inside a held
+    // note and only when neither move looks like anything but vibrato/drift.
+    this.leadHist.push(pitch.hz);
+    if (this.leadHist.length > 3) this.leadHist.shift();
+    let leadCents = 0, leadPerSample = 0;
+    if (this.params.formantCorrection && targetMidi === this.lastTargetMidi && this.leadHist.length === 3) {
+      const h = this.leadHist;
+      const d1 = 1200 * Math.log2(h[1] / h[0]), d2 = 1200 * Math.log2(h[2] / h[1]);
+      if (Math.abs(d1) <= PITCH_LEAD_MAX_STEP_CENTS && Math.abs(d2) <= PITCH_LEAD_MAX_STEP_CENTS) {
+        leadPerSample = ((d1 + d2) / 2) / this.hopSize;
+        const leadSamples = PITCH_LEAD_MS * this.sr / 1000;
+        leadCents = Math.max(-PITCH_LEAD_MAX_CENTS, Math.min(PITCH_LEAD_MAX_CENTS, leadPerSample * leadSamples));
+      }
+    }
+    const corrScale = strength * (1 - vibratoLeak);
+    this.leadAccumCents = leadCents;
+    this.leadCentsPerSample = leadPerSample;
+    this.leadStepFactor = Math.pow(2, -leadPerSample * corrScale / 1200);
+    const rawRatio = Math.pow(2, (-(centsOff + leadCents) / 1200) * corrScale);
     // Hard ceiling on any single correction: legitimate autotune moves a
     // voice by cents to a few semitones, essentially never by a full
     // octave. The autocorrelation detector above is solid on clean
@@ -2245,6 +2519,18 @@ class AutotuneEngine {
     const RATIO_CLAMP = 2;
     this.targetRatio = Math.max(1 / RATIO_CLAMP, Math.min(RATIO_CLAMP, rawRatio));
 
+    // Round 81: the correction delay (formant OFF) is tuned to line VIBRATO
+    // up with the shifter's audio. Through a note change it only replayed
+    // the old note's correction 10ms late - measured: step p99 45c -> 83c,
+    // max 72c -> 99c. Flushing on the note flip alone recovered p90 but not
+    // p99 (75c): for the ~40ms before the flip, the old engine already pulls
+    // toward the old note while the detector window straddles the jump, and
+    // delaying that pull lands it worse. So any hop that moved further than
+    // vibrato can (PITCH_LEAD_MAX_STEP_CENTS), or that changed the target
+    // note, skips the line entirely.
+    const lh = this.leadHist;
+    const bigMove = lh.length >= 2 && Math.abs(1200 * Math.log2(lh[lh.length - 1] / lh[lh.length - 2])) > PITCH_LEAD_MAX_STEP_CENTS;
+    if (bigMove || targetMidi !== this.lastTargetMidi) this.ratioDelay.fill(this.targetRatio);
     if (targetMidi !== this.lastTargetMidi) this.heldMs = 0;
     else this.heldMs += (this.hopSize / this.sr) * 1000;
     this.lastTargetMidi = targetMidi;

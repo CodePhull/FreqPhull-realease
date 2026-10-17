@@ -1,4 +1,9 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, protocol, net, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, protocol, net, Tray, Menu, nativeImage, clipboard } = require('electron');
+
+// Inspect Element / DevTools are off in installed builds. Running from
+// source (npm start) keeps them; a packaged build can turn them back on for
+// support with FREQPHULL_DEVTOOLS=1 in the environment.
+const DEVTOOLS_ALLOWED = !app.isPackaged || process.env.FREQPHULL_DEVTOOLS === '1';
 const path  = require('path');
 const fs    = require('fs');
 const { fork } = require('child_process');
@@ -88,6 +93,7 @@ function openUpdaterWindow(initialState) {
     webPreferences: {
       preload: require('path').join(__dirname, 'updater-preload.js'),
       contextIsolation: true, nodeIntegration: false, sandbox: false,
+      devTools: DEVTOOLS_ALLOWED,
     },
   });
   updaterWindow.removeMenu();
@@ -238,30 +244,69 @@ const launchMinimized = process.argv.includes('--background') || process.argv.in
 // user restarted into a new build and has earned a note about what
 // changed. Nothing is shown on a first ever install - there is no
 // "what's new" when everything is new.
+//
+// ─── BEGIN WHATS-NEW DECISION ───
+// Round 80: "only on the first launch after an update", properly.
+//
+// This used to show the page whenever the version DIFFERED from the last
+// run, not when it was NEWER. Two builds sharing one data folder - a test
+// build next to the installed one, which is exactly how this app gets
+// developed, or a user rolling back after a bad update - flip the stamp on
+// every launch, so the page opened every single time. Now the stamp keeps
+// the HIGHEST version ever run, and the page appears only when the current
+// version is above it: once per genuine update, never for a downgrade or for
+// alternating between builds.
+function compareVersions(a, b) {
+  const pa = String(a || '0').split(/[.+-]/).map((x) => parseInt(x, 10) || 0);
+  const pb = String(b || '0').split(/[.+-]/).map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d > 0 ? 1 : -1;
+  }
+  return 0;
+}
+// Pure: given what is on disk (or null) and the running version, decide
+// whether to show the page and what to write back.
+function whatsNewDecision(stamp, current) {
+  const lastRun = stamp && stamp.version ? String(stamp.version) : null;
+  // Stamps written before this round have only `version`; that was the
+  // highest they knew about.
+  const highest = stamp && (stamp.highest || stamp.version) ? String(stamp.highest || stamp.version) : null;
+  const newHighest = !highest || compareVersions(current, highest) > 0 ? current : highest;
+  return {
+    // Nothing to announce on a first-ever install - everything is new.
+    show: !!highest && compareVersions(current, highest) > 0,
+    next: { version: current, highest: newHighest, previous: lastRun },
+  };
+}
+// ─── END WHATS-NEW DECISION ───
+
 function consumeUpdateFlag() {
   try {
     const stampPath = path.join(app.getPath('userData'), 'last-version.json');
     const current = app.getVersion();
-    let previous = null;
+    let stamp = null;
     try {
-      if (fs.existsSync(stampPath)) previous = JSON.parse(fs.readFileSync(stampPath, 'utf8')).version;
+      if (fs.existsSync(stampPath)) stamp = JSON.parse(fs.readFileSync(stampPath, 'utf8'));
     } catch {}
-    if (previous === current) return false;
+    const d = whatsNewDecision(stamp, current);
+    if (stamp && stamp.version === d.next.version && (stamp.highest || stamp.version) === d.next.highest) return false;
 
-    // Record the new version before deciding to show anything. If the
-    // write fails - a locked file, a full disk, a folder the user cannot
-    // write to - the version never changes on disk and the page would
-    // greet them on every single launch from then on. Better to skip it
-    // once than to repeat it forever.
+    // Record before deciding to show anything. If the write fails - a
+    // locked file, a full disk, a folder the user cannot write to - the
+    // stamp never changes on disk and the page would greet them on every
+    // single launch from then on. Better to skip it once than to repeat it
+    // forever.
     try {
-      fs.writeFileSync(stampPath, JSON.stringify({ version: current, at: new Date().toISOString() }));
+      fs.writeFileSync(stampPath, JSON.stringify({ ...d.next, at: new Date().toISOString() }));
       const check = JSON.parse(fs.readFileSync(stampPath, 'utf8'));
-      if (check.version !== current) return false;
+      if (check.highest !== d.next.highest) return false;
     } catch (e) {
       log('update stamp could not be written, skipping the what\'s new page: ' + e.message);
       return false;
     }
-    return !!previous;   // nothing to announce on a first install
+    if (d.show) log('first launch of ' + current + ' (previous highest ' + ((stamp && (stamp.highest || stamp.version)) || 'none') + ') - showing what\'s new');
+    return d.show;
   } catch { return false; }
 }
 
@@ -276,6 +321,9 @@ app.whenReady().then(() => {
   }
   setupLog();
   log('App ready (minimized=' + launchMinimized + ')');
+  // Round 80: say so when a build cannot report errors. Without this line
+  // a DSN-less release is indistinguishable from one with no problems.
+  log('crash reporting: ' + (_sentry ? 'ON' : 'OFF - no Sentry DSN in this build'));
 
   try {
     protocol.handle('localfile', (req) => {
@@ -366,6 +414,8 @@ function createTray() {
       enabled: false
     },
     { type: 'separator' },
+    memoryReportMenuItem(),
+    { type: 'separator' },
     {
       label: 'Quit Freq.Phull',
       click: () => {
@@ -401,6 +451,155 @@ function createTray() {
   });
 }
 
+// ─── BEGIN MEMORY REPORT ───
+// Diagnostics without DevTools.
+//
+// A packaged build is an awkward place to answer "where is the memory
+// going": Task Manager shows a total across six Electron processes and
+// says nothing about which one, and asking someone to open DevTools in a
+// frameless window is not a reliable instruction. app.getAppMetrics()
+// already breaks memory down per process from the main process, which is
+// exactly the split Task Manager cannot give, so this puts it one
+// right-click away and on the clipboard ready to paste into a bug report.
+//
+// Deliberately read-only: it measures, it does not free anything. Nothing
+// here runs unless the menu item is clicked, so it costs nothing at idle.
+// What the page itself is holding, read from inside it. A heap snapshot
+// answers this too, but it takes a dozen clicks in DevTools and still does
+// not name the owning variable unless the right row is selected - and most
+// of the renderer's memory (decoded audio, decoded images) is not JS heap at
+// all, so a snapshot cannot see it. Every name below is a top-level binding
+// in app.js (a classic <script>, so reachable by name from the page's main
+// world). Anything missing is reported as absent rather than guessed at.
+const RENDERER_INVENTORY_JS = `(() => {
+  const MB = (b) => b / 1048576;
+  const out = { buffers: [], notes: [] };
+  const buf = (label, get) => {
+    try {
+      const b = get();
+      if (b && typeof b.numberOfChannels === 'number' && typeof b.length === 'number') {
+        out.buffers.push({ label, mb: MB(b.length * b.numberOfChannels * 4), sec: b.duration, sr: b.sampleRate, ch: b.numberOfChannels });
+      }
+    } catch (e) {}
+  };
+  buf('audioBuf (Analyze tab)', () => audioBuf);
+  buf('svState.buffer (Slowverb)', () => svState && svState.buffer);
+  buf('rbReviewBeatBuf (Topliner beat)', () => rbReviewBeatBuf);
+  buf('rbReviewVocalBuf (Topliner take)', () => rbReviewVocalBuf);
+  buf('rbGraphOriginalVocalBuf (Graph Mode original)', () => rbGraphOriginalVocalBuf);
+  try {
+    let n = 0;
+    for (const c of (rbRecChunks || [])) for (const a of (c.channels || [])) n += a ? a.length : 0;
+    if (n) out.buffers.push({ label: 'rbRecChunks (take being recorded)', mb: MB(n * 4), sec: null });
+  } catch (e) {}
+  try { const m = performance.memory; out.jsHeapMb = MB(m.usedJSHeapSize); } catch (e) {}
+  const imgs = Array.from(document.images);
+  let imgPx = 0, imgLoaded = 0;
+  for (const im of imgs) if (im.complete && im.naturalWidth) { imgLoaded++; imgPx += im.naturalWidth * im.naturalHeight; }
+  out.images = { total: imgs.length, loaded: imgLoaded, decodedMbIfAllResident: MB(imgPx * 4) };
+  let cvPx = 0; const cvs = document.querySelectorAll('canvas');
+  for (const c of cvs) cvPx += c.width * c.height;
+  out.canvases = { count: cvs.length, mb: MB(cvPx * 4) };
+  out.historyRows = document.querySelectorAll('.hist-row').length;
+  out.domNodes = document.getElementsByTagName('*').length;
+  out.media = document.querySelectorAll('audio,video').length;
+  return out;
+})()`;
+
+async function rendererInventory() {
+  if (!mainWindow || mainWindow.isDestroyed()) return null;
+  try {
+    return await Promise.race([
+      mainWindow.webContents.executeJavaScript(RENDERER_INVENTORY_JS, true),
+      new Promise((r) => setTimeout(() => r(null), 3000)),   // a hung page must not hang the report
+    ]);
+  } catch (e) { return { error: e && e.message }; }
+}
+
+async function buildMemoryReport() {
+  const MB = (b) => (b / 1048576).toFixed(1).padStart(8) + ' MB';
+  const lines = [];
+  lines.push('Freq.Phull memory report — ' + new Date().toISOString());
+  lines.push('app ' + app.getVersion() + '  electron ' + process.versions.electron + '  ' + process.platform + ' ' + process.arch);
+  lines.push('');
+
+  let metrics = [];
+  try { metrics = app.getAppMetrics() || []; } catch (e) { lines.push('getAppMetrics failed: ' + e.message); }
+
+  let total = 0;
+  lines.push('  pid     type              working set      peak       cpu%');
+  for (const m of metrics) {
+    const ws = (m.memory && m.memory.workingSetSize || 0) * 1024;   // reported in KB
+    const pk = (m.memory && m.memory.peakWorkingSetSize || 0) * 1024;
+    total += ws;
+    lines.push(
+      '  ' + String(m.pid).padEnd(8) +
+      String(m.type + (m.serviceName ? '/' + m.serviceName : '')).padEnd(18) +
+      MB(ws) + '  ' + MB(pk) + '   ' +
+      (m.cpu ? m.cpu.percentCPUUsage.toFixed(1) : '0.0')
+    );
+  }
+  lines.push('  ' + '-'.repeat(60));
+  lines.push('  TOTAL'.padEnd(26) + MB(total));
+  lines.push('');
+
+  // The Python backend is a child process we spawn, so it is not in
+  // getAppMetrics() - note whether it is even alive, since a backend that
+  // has quietly died looks identical to one that is idle from in here.
+  lines.push('backend: ' + (backendProcess && !backendProcess.killed
+    ? 'running pid ' + backendProcess.pid + (backendReady ? ' (ready)' : ' (starting)')
+    : 'not running'));
+  lines.push('windows: ' + BrowserWindow.getAllWindows().length +
+             '  main ' + (mainWindow ? (mainWindow.isVisible() ? 'visible' : 'hidden') : 'none'));
+  // Round 80: Sentry showed ONE reporting user in 90 days. A build whose
+  // sentry.config.json lacks a real DSN reports nothing and says nothing;
+  // this makes that visible on any machine with one keypress.
+  lines.push('crash reporting: ' + (_sentry ? 'ON' :
+    (process.env.FREQPHULL_NO_CRASH_REPORT === '1' ? 'off (FREQPHULL_NO_CRASH_REPORT=1)' : 'OFF - this build has no Sentry DSN')));
+
+  const inv = await rendererInventory();
+  lines.push('');
+  lines.push('INSIDE THE PAGE (Tab process)');
+  if (!inv) {
+    lines.push('  (page did not answer within 3s)');
+  } else if (inv.error) {
+    lines.push('  (inventory failed: ' + inv.error + ')');
+  } else {
+    const f = (v) => v.toFixed(1).padStart(7) + ' MB';
+    if (typeof inv.jsHeapMb === 'number') lines.push('  JS heap              ' + f(inv.jsHeapMb));
+    let audioTotal = 0;
+    for (const b of inv.buffers) audioTotal += b.mb;
+    lines.push('  decoded audio        ' + f(audioTotal) + '  (' + inv.buffers.length + ' buffer' + (inv.buffers.length === 1 ? '' : 's') + ')');
+    for (const b of inv.buffers) {
+      lines.push('    ' + f(b.mb) + '  ' + b.label +
+                 (b.sec ? '  ' + Math.floor(b.sec / 60) + ':' + String(Math.floor(b.sec % 60)).padStart(2, '0') +
+                          ' @' + b.sr + 'Hz ' + b.ch + 'ch' : ''));
+    }
+    lines.push('  images               ' + inv.images.total + ' elements, ' + inv.images.loaded + ' loaded' +
+               ' (up to ' + inv.images.decodedMbIfAllResident.toFixed(1) + ' MB decoded if all resident)');
+    lines.push('  canvases             ' + inv.canvases.count + ', ' + inv.canvases.mb.toFixed(1) + ' MB of pixels');
+    lines.push('  history rows         ' + inv.historyRows);
+    lines.push('  DOM nodes            ' + inv.domNodes + ',  media elements ' + inv.media);
+  }
+  return lines.join('\n');
+}
+
+function memoryReportMenuItem() {
+  return {
+    label: 'Copy memory report',
+    click: async () => {
+      try {
+        const report = await buildMemoryReport();
+        clipboard.writeText(report);
+        log('memory report copied to clipboard\n' + report);
+      } catch (e) {
+        log('memory report failed: ' + (e && e.message));
+      }
+    }
+  };
+}
+// ─── END MEMORY REPORT ───
+
 function updateTrayMenu() {
   if (!tray) return;
   // Rebuild and store only - do NOT call tray.setContextMenu() here
@@ -419,6 +618,8 @@ function updateTrayMenu() {
       label: 'Backend: ' + (backendReady ? '● Online' : '○ Starting…'),
       enabled: false
     },
+    { type: 'separator' },
+    memoryReportMenuItem(),
     { type: 'separator' },
     {
       label: 'Quit Freq.Phull',
@@ -454,6 +655,7 @@ function createWindow() {
       nodeIntegration: false,
       webSecurity: false,
       backgroundThrottling: false,
+      devTools: DEVTOOLS_ALLOWED,
     },
     show: false,
     backgroundColor: '#0b0b0b',   // matches the boot splash — no white flash
@@ -481,6 +683,39 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   }
   loadMainWindow();
+
+  // ─── BEGIN DIAGNOSTIC KEYS ───
+  // Window-scoped, not globalShortcut. A global shortcut is registered with
+  // the OS and swallows that combination in EVERY application for as long as
+  // Freq.Phull is running, including while it sits minimised in the tray -
+  // far too rude for a diagnostic. before-input-event only sees keys that
+  // were already going to this window.
+  //
+  //   Ctrl+Shift+M  copy the memory report (same as the tray item)
+  //   Ctrl+Shift+I  DevTools, only where DEVTOOLS_ALLOWED (from source, or
+  //                 FREQPHULL_DEVTOOLS=1); in an installed build the key
+  //                 does nothing.
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || !input.control || !input.shift) return;
+    const k = (input.key || '').toLowerCase();
+    if (k === 'm') {
+      event.preventDefault();
+      buildMemoryReport().then((report) => {
+        clipboard.writeText(report);
+        log('memory report copied to clipboard (Ctrl+Shift+M)\n' + report);
+        // Confirm in the UI - a silent clipboard write is indistinguishable
+        // from the shortcut not being wired at all.
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('diag-toast', 'Memory report copied to clipboard');
+      }).catch((e) => {
+        log('memory report failed: ' + (e && e.message));
+      });
+    } else if (k === 'i') {
+      event.preventDefault();
+      if (!DEVTOOLS_ALLOWED) return;
+      try { mainWindow.webContents.toggleDevTools(); } catch (e) {}
+    }
+  });
+  // ─── END DIAGNOSTIC KEYS ───
 
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
     // -3 is ERR_ABORTED, which fires on totally normal things (e.g. a

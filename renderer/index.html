@@ -420,12 +420,23 @@ input[type=range]{flex:1;accent-color:var(--white)}
 .hist-thumb{width:68px;height:44px;border-radius:4px;object-fit:cover;background:var(--bg4);flex-shrink:0}
 
 /* Batch action bar */
-.hist-batch{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;margin-bottom:8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r)}
-.hb-left{display:flex;align-items:center;gap:12px}
+/* Round 79: this bar overflowed its container and pushed the whole history
+   area sideways - text on the left edge ended up cut mid-word.
+   .hb-right carries EIGHT buttons (Tag, Favorite, Unfavorite, Re-analyze,
+   Separate, To Stockpile, Move to, Delete), which needs roughly 800px before
+   .hb-left's "Select All" and counter are even considered. Flex items do not
+   shrink below their content width without min-width:0, and with no
+   flex-wrap there was nowhere for them to go, so the row simply grew past
+   the panel. wrap lets them fall to a second line on a narrow window; the
+   row gap keeps those lines apart. */
+.hist-batch{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:8px 14px;margin-bottom:8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);min-width:0}
+.hb-left{display:flex;align-items:center;gap:12px;flex-shrink:0}
 .hb-check{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);cursor:pointer}
 .hb-check input{accent-color:var(--green)}
 .hb-count{font-size:11px;color:var(--hint);font-weight:500}
-.hb-right{display:flex;gap:6px}
+/* Round 79: same reason as .hist-batch above - eight buttons in one
+   unwrappable row was the thing actually overflowing. */
+.hb-right{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;min-width:0}
 
 /* Move progress bar */
 .move-progress{padding:10px 14px;margin-bottom:8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r)}
@@ -3326,20 +3337,10 @@ button:focus:not(:focus-visible){outline:none}
 .rb-seek-row{display:flex;align-items:center;gap:10px;width:100%;margin-bottom:26px}
 .rb-time{font-size:11px;color:var(--hint);font-variant-numeric:tabular-nums;width:34px;flex-shrink:0}
 .rb-time:last-child{text-align:right}
-/* ══════════════════════════════════════════════════════════════════
-   TOPLINER HIDDEN FOR THE PUBLIC 0.7.38 BUILD
-   ──────────────────────────────────────────────────────────────────
-   The recording/autotune feature is not ready to ship: formant
-   correction still colours the signal (~3dB of presence and sibilance
-   lost while engaged - see PATCHNOTES 0.9.10), and the native capture
-   path and low-latency monitor path are both still unbuilt.
-
-   Hidden rather than removed. Nothing about the feature is deleted,
-   disabled or stubbed - the tab and its pane are simply not shown, so
-   development continues against exactly the same code.
-
-   TO BRING IT BACK: delete this one rule. That is the whole revert.
-   ══════════════════════════════════════════════════════════════════ */
+/* Topliner is hidden for the 0.7.41 release while its autotune/recording
+   work is unfinished (it was hidden the same way for 0.7.38). This one rule
+   is the whole hide - no code is deleted, disabled or stubbed, and nothing
+   else opens the tab - so bringing it back is deleting this rule. */
 #nav-topliner, #tab-random { display: none !important; }
 
 /* Round 75 ("that pick a beat thing is ugly asf and overshoots"):
@@ -3760,6 +3761,10 @@ button:focus:not(:focus-visible){outline:none}
     <button class="nav-btn" data-tab="slowverb" onclick="showTab(this)">
       <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h3l3-7 4 14 3-9 2 2h3"/></svg>
       Slow + Reverb
+    </button>
+    <button class="nav-btn" id="nav-convert" data-tab="convert" onclick="showTab(this)">
+      <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+      Convert
     </button>
     <button class="nav-btn" id="nav-topliner" data-tab="random" onclick="showTab(this)">
       <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="8" cy="8.3" r="1" fill="currentColor" stroke="none"/><circle cx="16" cy="8.3" r="1" fill="currentColor" stroke="none"/><circle cx="8" cy="15.7" r="1" fill="currentColor" stroke="none"/><circle cx="16" cy="15.7" r="1" fill="currentColor" stroke="none"/></svg>
@@ -4781,6 +4786,57 @@ button:focus:not(:focus-visible){outline:none}
           </div>
           <div id="ref-out"></div>
         </div>
+      </div>
+    </div>
+
+    <!-- CONVERT (Round 81) -->
+    <div class="tab-pane" id="tab-convert">
+      <div class="ph"><div class="ph-title">Convert</div><div class="ph-sub">Convert audio files to MP3, WAV, FLAC, AIFF, M4A, OGG and more — in batches</div></div>
+      <div class="card" id="conv-drop" ondragover="convDragOver(event)" ondragleave="convDragLeave(event)" ondrop="convDrop(event)"
+           style="border:1.5px dashed var(--border2, rgba(255,255,255,.18));text-align:center;padding:26px 16px;cursor:pointer" onclick="document.getElementById('conv-input').click()">
+        <div style="font-size:15px;font-weight:600">Drop audio or video files here</div>
+        <div style="font-size:13px;color:var(--hint);margin-top:6px">or click to choose files · MP3, WAV, FLAC, M4A, AAC, OGG, OPUS, AIFF, WMA · MP4, MOV, MKV, WEBM (the audio is extracted)</div>
+        <input type="file" id="conv-input" multiple accept="audio/*,video/*,.flac,.opus,.ogg,.aiff,.aif,.wma,.m4a,.mp4,.mov,.mkv,.webm,.avi" style="display:none" onchange="convAddFromInput(this)"/>
+      </div>
+
+      <div class="card mt2">
+        <div class="card-lbl">Output</div>
+        <div class="row" style="gap:10px;flex-wrap:wrap;align-items:flex-end">
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">Format
+            <select id="conv-format" onchange="convFormatChanged()" style="height:42px;font-size:14px;padding:0 12px;min-width:170px"></select>
+          </label>
+          <label id="conv-quality-wrap" style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)"><span id="conv-quality-lbl">Bitrate</span>
+            <select id="conv-quality" style="height:42px;font-size:14px;padding:0 12px;min-width:120px"></select>
+          </label>
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">Sample rate
+            <select id="conv-rate" style="height:42px;font-size:14px;padding:0 12px">
+              <option value="keep">Keep original</option><option value="44100">44.1 kHz</option><option value="48000">48 kHz</option><option value="88200">88.2 kHz</option><option value="96000">96 kHz</option>
+            </select>
+          </label>
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">Channels
+            <select id="conv-ch" style="height:42px;font-size:14px;padding:0 12px">
+              <option value="keep">Keep original</option><option value="2">Stereo</option><option value="1">Mono</option>
+            </select>
+          </label>
+        </div>
+        <div class="row mt" style="gap:10px;align-items:center;flex-wrap:wrap">
+          <span style="font-size:13px;color:var(--muted)">Save to:</span>
+          <span id="conv-dest" style="font-size:13px;flex:1;min-width:200px;word-break:break-all">A “Converted” folder next to each original</span>
+          <button class="btn sm" onclick="convPickFolder()">Choose folder…</button>
+          <button class="btn sm" id="conv-dest-reset" onclick="convResetFolder()" style="display:none">Use “Converted” folders</button>
+        </div>
+        <div id="conv-note" style="font-size:12px;color:var(--hint);margin-top:8px"></div>
+      </div>
+
+      <div class="card mt2">
+        <div class="row" style="justify-content:space-between;align-items:center;gap:10px">
+          <div class="card-lbl" style="margin:0">Files <span id="conv-count" style="color:var(--hint)"></span></div>
+          <div class="row" style="gap:8px">
+            <button class="btn sm" id="conv-clear" onclick="convClear()">Clear list</button>
+            <button class="btn pri" id="conv-go" onclick="convStart()" disabled>Convert</button>
+          </div>
+        </div>
+        <div id="conv-list" style="margin-top:10px"><div style="font-size:13px;color:var(--hint)">No files added yet.</div></div>
       </div>
     </div>
 

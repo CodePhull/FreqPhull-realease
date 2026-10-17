@@ -1,6 +1,6 @@
 {
   "name": "freqphull",
-  "version": "0.7.38",
+  "version": "0.7.41",
   "description": "Freq.Phull",
   "main": "main.js",
   "scripts": {
@@ -73,11 +73,16 @@
       "!dist/**",
       "!extension/**",
       "!tools/**",
+      "!bin/**",
+      "!gauntlet.sh",
+      "!*.bat",
+      "!release.yml.PROPOSED",
+      "!**/__pycache__/**",
+      "!**/*.orig",
       "sentry.config.json"
     ],
     "asar": true,
     "asarUnpack": [
-      "bin/**",
       "stems.py",
       "analyze.py",
       "write_tags.py",
