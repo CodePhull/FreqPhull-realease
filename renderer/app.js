@@ -100,7 +100,7 @@ function _reportUiError(kind, message, extra) {
   if (_uiErrorsSent >= 5) return;
   _uiErrorsSent++;
   try {
-    const activeTab = document.querySelector('.tabbtn.on');
+    const activeTab = document.querySelector('.nav-btn.on');
     fetch(API + '/client-error', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -110,6 +110,26 @@ function _reportUiError(kind, message, extra) {
         ua: navigator.userAgent,
         trail: _uiTrail.slice(),
       }, extra || {})),
+    }).catch(() => {});
+  } catch {}
+}
+
+// Every red error toast is reported too (Round 81): those are the failures
+// people actually see, including ones that never reach the backend (a file
+// that won't decode, a missing permission). Each distinct message once per
+// session, at most 20, so a toast that repeats can't flood the quota.
+const _uiNoticesSent = new Set();
+function _reportUiNotice(message) {
+  try {
+    const msg = String(message || '').slice(0, 300);
+    if (!msg || _uiNoticesSent.has(msg) || _uiNoticesSent.size >= 20) return;
+    _uiNoticesSent.add(msg);
+    const activeTab = document.querySelector('.nav-btn.on');
+    fetch(API + '/client-error', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'notice', message: msg,
+        tab: activeTab ? (activeTab.dataset.tab || '') : '', trail: _uiTrail.slice(-20) }),
     }).catch(() => {});
   } catch {}
 }
@@ -274,7 +294,7 @@ function svRefreshLabels() {
   const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
   set('sv-speed-val', st.speed + '%');
   set('sv-reverb-val', st.reverb + '%');
-  set('sv-room-val', SV_ROOMS[Math.max(0, Math.min(4, st.room - 1))].label);
+  set('sv-room-val', t('svRoom_' + SV_ROOMS[Math.max(0, Math.min(4, st.room - 1))].label));
   set('sv-bass-val', (st.bass > 0 ? '+' : '') + st.bass + ' dB');
   set('sv-volume-val', Math.round(st.volume) + '%');
   const hint = document.getElementById('sv-speed-hint');
@@ -423,7 +443,7 @@ async function svPickFromHistory() {
     list.innerHTML = shown.slice(0, 120).map(r => `
       <button class="sv-pick-row" onclick="svLoadFromHistory(${r.id})">
         <span class="sv-pick-title">${escapeHtml(r.title || '(untitled)')}</span>
-        <span class="sv-pick-meta">${r.bpm ? Math.round(r.bpm) + ' BPM' : ''}${r.key_note ? ' · ' + escapeHtml(r.key_note) + ' ' + escapeHtml(r.key_mode || '') : ''}</span>
+        <span class="sv-pick-meta">${r.bpm ? Math.round(r.bpm) + ' BPM' : ''}${r.key_note ? ' · ' + escapeHtml(r.key_note) + ' ' + escapeHtml(modeLabel(r.key_mode)) : ''}</span>
       </button>`).join('') || `<div style="padding:18px;text-align:center;color:var(--hint)">${t('settingsNoMatch')}</div>`;
   };
   draw('');
@@ -824,14 +844,14 @@ function onBackendReady() {
   if (backendOnline) return;
   backendOnline = true;
   diagLog('Backend is ready! Hiding loading screen.', 'ok');
-  setStatus('Ready — loading app…');
+  setStatus(t('uiReadyLoading'));
   setTimeout(() => {
     const loading = document.getElementById('loading');
     if (loading) { loading.style.opacity = '0'; setTimeout(() => { loading.style.display = 'none'; }, 400); }
     const dot = document.getElementById('tb-dot');
     const txt = document.getElementById('tb-txt');
     if (dot) dot.className = 'tb-dot ready';
-    if (txt) txt.textContent = 'Ready';
+    if (txt) txt.textContent = t('transReady');
   }, 300);
   // Critical-path: load history immediately so the History tab is populated
   // when the user might switch to it. Other init runs deferred so the first
@@ -966,6 +986,17 @@ function tabHistoryForward() {
     tabHistorySuppress = false;
   }
   updateTabHistoryButtons();
+}
+
+// Round 82: open a tab by name. Several features called switchTab() behind
+// a `typeof switchTab === 'function'` guard, but it was never defined, so
+// they silently did nothing ("click to set up the engines", "repair failed -
+// open Settings", and more). A hidden tab (e.g. Topliner) is never opened.
+function switchTab(name) {
+  const btn = document.querySelector('.nav-btn[data-tab="' + name + '"]');
+  if (!btn || btn.offsetParent === null) return false;
+  showTab(btn);
+  return true;
 }
 
 function showTab(btn) {
@@ -1259,7 +1290,7 @@ async function startDownload() {
       });
       if (!ok) {
         // User cancelled - focus the existing row so they can find the file
-        showAppNotification('Already downloaded — see queue list', 'info');
+        showAppNotification(t('tAlreadyDlQueue'), 'info');
         return;
       }
       // Fall through to re-download as a new item
@@ -1369,7 +1400,7 @@ function updateDlQueueUI() {
           showTab(document.querySelector('[data-tab="analyze"]'));
           await loadAudioBuffer(result.data, q.filename, q.historyId);
         } catch (e) {
-          showAppNotification('Could not load: ' + e.message, 'err');
+          showAppNotification(t('tCouldNotLoad') + ': ' + e.message, 'err');
         }
       };
     }
@@ -1436,7 +1467,7 @@ function removeDlItem(id) {
   const idx = dlQueue.findIndex(q => q.id === id);
   if (idx < 0) return;
   if (dlQueue[idx].status === 'downloading') {
-    showAppNotification('Cannot remove an item that\'s currently downloading', 'info');
+    showAppNotification(t('tCantRemoveDl'), 'info');
     return;
   }
   dlQueue.splice(idx, 1);
@@ -1690,9 +1721,11 @@ async function processDlQueue() {
         });
       } catch {}
     }
-    if (isYtdlpRelated && typeof switchTab === 'function') {
+    // (Was guarded by `typeof switchTab`, a function that doesn't exist, so
+    // this click-to-update toast never appeared.)
+    if (isYtdlpRelated) {
       showAppNotification(toastMsg + ' (click to update yt-dlp)', 'err', () => {
-        switchTab('settings');
+        showTab(document.querySelector('[data-tab="settings"]'));
         setTimeout(() => {
           const wrap = document.querySelector('.settings-section[data-section="updates"]');
           if (wrap && wrap.classList.contains('collapsed')) toggleSettingsSection('updates');
@@ -1902,6 +1935,7 @@ function showAppNotification(msg, type, onClick, durationMs) {
   const t = _NOTIF_TYPE_MAP[type] || 'info';
   const duration = (typeof durationMs === 'number') ? durationMs : 5500;
   const msgStr = String(msg == null ? '' : msg);
+  if (t === 'err') _reportUiNotice(msgStr);
 
   // Dedupe: if an identical toast is already showing, bump its counter
   // and reset its timer instead of stacking another one.
@@ -2372,7 +2406,13 @@ async function loadAudioBuffer(arrayBuf, name, histId) {
 
   // Draw waveform + player immediately
   drawWaveform(audioBuf);
-  prepareDragWav(); // Pre-encode WAV for drag-out export
+  // Pre-encode the drag-out WAV only when the Analyzer is on screen: playing
+  // from History / the mini player used to write a full WAV copy to temp on
+  // every track change (666 files, 19.7 GB found on the dev machine) and
+  // churn ~95 MB of memory per track. A drag encodes on demand anyway.
+  const _ww = document.getElementById('wave-wrap');
+  if (_ww && _ww.offsetWidth) prepareDragWav();
+  else { dragReady = false; dragTempPath = null; }
   // If the mini player was playing this same track, seek the analyzer to
   // where the mini player was - continuity instead of jumping back to 0.
   // The handoff field is set in the entry of this function (above) when
@@ -2435,10 +2475,10 @@ async function loadAudioBuffer(arrayBuf, name, histId) {
     if (bpmEl) { bpmEl.textContent = Math.round(knownRow.bpm); bpmEl.className = 'm-val'; }
     if (keyEl && knownRow.key_note) { keyEl.textContent = knownRow.key_note; keyEl.className = 'm-val'; }
     const km = document.getElementById('key-mode');
-    if (km) km.textContent = (knownRow.key_mode || '') + ' · ' + (t('refreshingWord') || 'refreshing…');
+    if (km) km.textContent = modeLabel(knownRow.key_mode) + ' · ' + (t('refreshingWord') || 'refreshing…');
   } else {
     ['bpm','key'].forEach(id => { const el = document.getElementById(id); el.textContent = '…'; el.className = 'm-val dim'; });
-    document.getElementById('key-mode').textContent = 'analyzing…';
+    document.getElementById('key-mode').textContent = t('uiAnalyzingWord');
   }
   document.getElementById('chord-list').innerHTML = '<div style="font-size:13px;color:var(--hint)">Analyzing…</div>';
   document.getElementById('cam-grid').innerHTML = '<div style="font-size:13px;color:var(--hint)">…</div>';
@@ -2485,7 +2525,9 @@ let _lastAnalyzedPath = null;
 let _lastAnalyzedHistId = null;
 
 function setM(id, val, conf) { const el = document.getElementById(id); el.textContent = val; el.className = 'm-val'; document.getElementById(id+'-conf').style.width = conf||'80%'; }
-function setKeyM(note, mode, conf) { document.getElementById('key').textContent = note; document.getElementById('key').className = 'm-val'; document.getElementById('key-mode').textContent = mode; document.getElementById('key-conf').style.width = conf||'80%'; }
+// "minor" / "major" as stored by the analysis, in the user's language.
+function modeLabel(m) { return m === 'minor' ? t('uiModeMinor') : m === 'major' ? t('uiModeMajor') : (m || ''); }
+function setKeyM(note, mode, conf) { document.getElementById('key').textContent = note; document.getElementById('key').className = 'm-val'; document.getElementById('key-mode').textContent = modeLabel(mode); document.getElementById('key-conf').style.width = conf||'80%'; }
 
 // Seek the Analyzer playback to a section start. Two transports exist:
 // the Analyzer's own loaded element(s) and the mirroring global player -
@@ -2697,7 +2739,9 @@ async function runPythonAnalysis(filePath, histId, deep) {
     try { es.close(); } catch {}
     diagLog('Analysis did not respond within 200s - falling back to JS estimate. Run Settings > Verify engines.', 'err');
     showAppNotification(t('analysisStuck') || 'Analysis is not responding - check Settings > Verify engines', 'err', () => {
-      if (typeof switchTab === 'function') switchTab('settings');
+      // (Was switchTab('settings') behind a typeof guard - it doesn't exist,
+      // so clicking this did nothing.)
+      showTab(document.querySelector('[data-tab="settings"]'));
     }, 9000);
     Promise.all([detectBPM(audioBuf), Promise.resolve(detectKey(audioBuf))]).then(([bpmR, keyR]) => {
       applyAnalysisResult({ bpm: Math.round(bpmR.bpm), key: keyR.key, mode: keyR.mode, key_confidence: keyR.confidence, scale_family: keyR.scaleFamily }, histId);
@@ -3662,10 +3706,29 @@ function _freqToNoteName(freq) {
   return name + octave + centsStr;
 }
 
+// Round 82 ("when on for too long like overnight memory usage goes up too
+// high ... sometimes 2k+ MB"): while the Analyzer tab was hidden (playing
+// from History / the mini player), this used to retry on every animation
+// frame, forever, one retry loop per track change - and each pending
+// callback held that track's decoded audio (63 MB for 3 min). Measured:
+// renderer 105 -> 725 MB after 10 track changes, heap snapshot showed 11
+// AudioBuffers held by frame callbacks. Now it waits for the panel to get a
+// size (ResizeObserver), once, and then draws the CURRENT track only.
+let _waveDrawWait = null;
 function drawWaveform(buf) {
   const canvas = document.getElementById('waveform'), wrap = document.getElementById('wave-wrap');
-  // If wrap has no size yet (tab hidden), defer one frame until layout is complete
-  if (!wrap.offsetWidth) { requestAnimationFrame(() => drawWaveform(buf)); return; }
+  if (!wrap.offsetWidth) {
+    if (!_waveDrawWait) {
+      _waveDrawWait = new ResizeObserver(() => {
+        if (!wrap.offsetWidth) return;
+        _waveDrawWait.disconnect();
+        _waveDrawWait = null;
+        if (audioBuf) drawWaveform(audioBuf);
+      });
+      _waveDrawWait.observe(wrap);
+    }
+    return;
+  }
   const dpr = window.devicePixelRatio || 1;
   canvas.width = wrap.offsetWidth * dpr; canvas.height = wrap.offsetHeight * dpr;
   const ctx = canvas.getContext('2d'); ctx.scale(dpr, dpr);
@@ -4874,11 +4937,17 @@ function scheduleNoteSave() {
 // Stage the file rather than auto-starting. Gives the user a chance to
 // pick the right model + language before kicking off a long process.
 let _pendingTranscribeFile = null;
+// Round 82: which library track the staged file is (null for a file picked
+// by hand). The transcript is saved onto THAT track. It used to be saved
+// onto whatever track happened to be open in the Analyzer, so transcribing
+// an unrelated file overwrote that track's transcript.
+let _pendingTranscribeHistId = null;
 function startTranscribe(e) {
-  if (e.target.files[0]) stageTranscribeFile(e.target.files[0]);
+  if (e.target.files[0]) stageTranscribeFile(e.target.files[0], null);
 }
-function stageTranscribeFile(file) {
+function stageTranscribeFile(file, histId) {
   _pendingTranscribeFile = file;
+  _pendingTranscribeHistId = histId || null;
   const btn = document.getElementById('btn-trans-start');
   if (btn) btn.disabled = false;
   const txt = document.getElementById('trans-txt');
@@ -4889,10 +4958,12 @@ function stageTranscribeFile(file) {
 function clickTranscribeStart() {
   if (!_pendingTranscribeFile) return;
   const file = _pendingTranscribeFile;
+  const histId = _pendingTranscribeHistId;
   _pendingTranscribeFile = null;
+  _pendingTranscribeHistId = null;
   const btn = document.getElementById('btn-trans-start');
   if (btn) btn.disabled = true;
-  startTranscribeFile(file);
+  startTranscribeFile(file, histId);
 }
 // Transcribe progress: MM:SS elapsed + rotating phase hint.
 let _transcribeTimerHandle = null;
@@ -4920,7 +4991,7 @@ function _stopTranscribeTimer() {
   if (el) el.style.display = 'none';
 }
 
-async function startTranscribeFile(file) {
+async function startTranscribeFile(file, histId) {
   const model = document.getElementById('wmodel').value;
   // Rough ETA from Whisper's CPU real-time-factor + file size.
   const mbToMin = (file.type && file.type.indexOf('wav') !== -1) ? 0.1 : 1.0;
@@ -4961,8 +5032,8 @@ async function startTranscribeFile(file) {
     document.getElementById('transcript-out').value = d.transcript;
     const totalSec = Math.round((Date.now() - _transcribeStartedAt) / 1000);
     trSt((t('transComplete') || 'Transcription complete in {time}').replace('{time}', _formatTranscribeElapsed(totalSec * 1000)), 'ok');
-    if (currentHistId) {
-      fetch(API + '/history/' + currentHistId + '/transcript', {
+    if (histId) {
+      fetch(API + '/history/' + histId + '/transcript', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ transcript: d.transcript }),
@@ -5252,7 +5323,7 @@ function toggleRowSelect(id, e) {
 
 function updateSelCount() {
   const el = document.getElementById('hist-sel-count');
-  if (el) el.textContent = selectedIds.size + ' selected';
+  if (el) el.textContent = selectedIds.size + ' ' + t('selected');
 }
 
 function updateBatchActions() {
@@ -5271,6 +5342,7 @@ async function pickStockpileFolder() {
     const el = document.getElementById('stockpile-path');
     if (el) el.textContent = folder;
     syncPrefsToServer();
+    libCheckPickedFolder(folder);
   }
 }
 
@@ -5310,6 +5382,11 @@ async function refreshYtdlpStatus() {
     if (latest && inst !== latest) el.textContent = 'v' + inst + ' → v' + latest + ' ' + t('ytdlpAvail');
     else if (latest) el.textContent = 'v' + inst + ' — ' + t('ytdlpUpToDate');
     else el.textContent = 'v' + inst;
+    // Round 82: the JS runtime yt-dlp needs for YouTube.
+    const js = j.jsRuntime || {};
+    if (js.status === 'ok') el.textContent += ' · ' + t('ytdlpJsOk').replace('{v}', js.version || '?');
+    else if (js.status === 'downloading') el.textContent += ' · ' + t('ytdlpJsDownloading');
+    else if (js.status === 'missing') el.textContent += ' · ' + t('ytdlpJsMissing');
   } catch { el.textContent = t('backendOffline'); }
 }
 
@@ -5480,7 +5557,7 @@ async function bulkMoveSelected(mode) {
     showAppNotification('' + moved + ' moved to ' + folderName + skipNote, 'ok');
   } else if (totalSkipped > 0) {
     // Nothing moved because everything was already at destination
-    showAppNotification('All selected tracks were already in ' + folderName, 'info');
+    showAppNotification(t('tAllAlreadyIn') + ' ' + folderName, 'info');
   }
 
   // Re-enable buttons, clear selection, refresh
@@ -5534,11 +5611,11 @@ async function bulkTagSelected() {
     const j = await r.json();
     folders = j.folders || [];
   } catch (e) {
-    showAppNotification('Failed to load folders: ' + e.message, 'err');
+    showAppNotification(t('tLoadFoldersFailed') + ': ' + e.message, 'err');
     return;
   }
   if (!folders.length) {
-    showAppNotification('Create a Stockpile folder first', 'warn');
+    showAppNotification(t('tCreateFolderFirst'), 'warn');
     return;
   }
   // Modal to pick a folder. Built ad-hoc since this is a rare path.
@@ -5753,7 +5830,7 @@ async function bulkReanalyzeSelected() {
 // click and reject the bad ones.
 async function openAutoOrganize() {
   if (!backendOnline) {
-    showAppNotification('Backend offline', 'err');
+    showAppNotification(t('backendOffline'), 'err');
     return;
   }
   // Show loading modal
@@ -5819,7 +5896,7 @@ function renderAutoOrganize(data) {
     const confColor = confPct >= 70 ? '#e8e8e8' : (confPct >= 50 ? '#f59e0b' : '#999');
     const meta = [
       s.bpm ? `${Math.round(s.bpm)} BPM` : '',
-      s.key_note ? `${s.key_note} ${s.key_mode || ''}` : '',
+      s.key_note ? escapeHtml(`${s.key_note} ${modeLabel(s.key_mode)}`) : '',
     ].filter(Boolean).join(' · ');
     return `
       <div class="auto-org-row" data-i="${i}" style="display:grid;grid-template-columns:1fr auto auto;gap:10px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-bottom:6px;align-items:center">
@@ -5909,7 +5986,8 @@ async function applyAutoOrganize() {
   showAppNotification(`${t('aoTaggedOk')} ${ok}${fail ? ' · ' + fail + ' ' + t('failedWord') : ''}`, fail ? 'warn' : 'done');
   closeAutoOrganize();
   // Refresh stockpile + history views
-  if (typeof loadFolders === 'function') await loadFolders();
+  // (Was `loadFolders()`, which doesn't exist - folder cards never refreshed.)
+  await loadStockpile();
   if (typeof loadHistory === 'function') await loadHistory();
   if (typeof renderStockpileUntagged === 'function') renderStockpileUntagged();
 }
@@ -5923,7 +6001,7 @@ async function applyAutoOrganize() {
 // feature), shows a "Backfill" button that kicks off background hashing.
 async function openDuplicateFinder() {
   if (!backendOnline) {
-    showAppNotification('Backend offline', 'err');
+    showAppNotification(t('backendOffline'), 'err');
     return;
   }
   let modal = document.getElementById('duplicate-finder-modal');
@@ -6269,7 +6347,7 @@ function trapFocus(modal) {
 }
 
 async function openLibraryDoctor() {
-  if (!backendOnline) { showAppNotification('Backend offline', 'err'); return; }
+  if (!backendOnline) { showAppNotification(t('backendOffline'), 'err'); return; }
   let modal = document.getElementById('doctor-modal');
   if (modal) modal.remove();
   modal = document.createElement('div');
@@ -6444,7 +6522,7 @@ async function runEngineVerify(btn) {
       showAppNotification(t('verifyBrokenGeneric') + ': ' + (v.reason || 'unknown'), 'err', null, 8000);
     }
   } catch (e) {
-    showAppNotification('Verify failed: ' + e.message, 'err');
+    showAppNotification(t('tVerifyFailed') + ': ' + e.message, 'err');
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = orig; }
   }
@@ -6461,7 +6539,7 @@ async function setFileTagsPref() {
     const j = await r.json();
     if (tags) tags.checked = !!j.write_tags;
     if (ren)  ren.checked  = !!j.auto_rename;
-  } catch (e) { showAppNotification('Could not save: ' + e.message, 'err'); }
+  } catch (e) { showAppNotification(t('tCouldNotSave') + ': ' + e.message, 'err'); }
 }
 async function _hydrateFileTagsPref() {
   try {
@@ -6512,10 +6590,10 @@ async function openSimilarTracks(historyId) {
     body.innerHTML = j.results.map(rr => {
       const pct = Math.round(rr.similarity * 100);
       const reasons = (rr.reasons || []).map(x => t('simReason_' + x)).join(' · ');
-      const badges = [rr.bpm ? Math.round(rr.bpm) + ' BPM' : '', rr.key_note ? rr.key_note + ' ' + (rr.key_mode || '') : ''].filter(Boolean).join(' · ');
+      const badges = [rr.bpm ? Math.round(rr.bpm) + ' BPM' : '', rr.key_note ? rr.key_note + ' ' + modeLabel(rr.key_mode) : ''].filter(Boolean).join(' · ');
       return `
       <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg);border-radius:6px;margin-bottom:5px">
-        <img src="${resolveThumb(rr.thumbnail)}" onerror="window._thumbFail(this)" loading="lazy" decoding="async" style="width:42px;height:30px;object-fit:cover;border-radius:4px" alt=""/>
+        <img src="${escapeHtml(resolveThumb(rr.thumbnail))}" onerror="window._thumbFail(this)" loading="lazy" decoding="async" style="width:42px;height:30px;object-fit:cover;border-radius:4px" alt=""/>
         <div style="flex:1;min-width:0">
           <div style="font-size:12px;color:var(--white);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(rr.title || '(untitled)')}</div>
           <div style="font-size:10px;color:var(--hint)">${badges}${reasons ? ' · ' + reasons : ''}</div>
@@ -6542,7 +6620,7 @@ async function startFingerprintBackfill() {
     const j = await r.json();
     const prog = document.getElementById('dup-backfill-progress');
     if (prog) prog.textContent = `Started — ${j.queued} queued`;
-    showAppNotification(`Fingerprint backfill started — ${j.queued} tracks queued`, 'info');
+    showAppNotification(t('tBackfillStarted').replace('{n}', j.queued), 'info');
     // Reuse the main /events connection instead of opening a second one.
     // Two EventSources to the same endpoint means the server broadcasts
     // every event twice to the same renderer, doubling parse + dispatch
@@ -6554,7 +6632,7 @@ async function startFingerprintBackfill() {
           if (prog) prog.textContent = `${data.done}/${data.total} hashed…`;
         } else if (data.state === 'complete') {
           if (prog) prog.textContent = `Complete — ${data.done}/${data.total}`;
-          showAppNotification(`Fingerprint backfill complete — ${data.done} tracks hashed`, 'done');
+          showAppNotification(t('tBackfillDone').replace('{n}', data.done), 'done');
           // Detach this listener; one-shot
           if (window._es) window._es.removeEventListener('fingerprint-backfill', handler);
           setTimeout(() => openDuplicateFinder(), 800);
@@ -6585,7 +6663,7 @@ function renderBgAnalyzePill(d) {
     pill.id = 'bg-analyze-pill';
     pill.className = 'bg-pill';
     pill.addEventListener('click', () => fetch(API + '/bg-analyze/run', { method: 'POST' }).catch(()=>{}));
-    pill.title = 'Click to re-run / retry failed';
+    pill.title = t('bgPendingTitle');
     // Mount in the document body so it floats in the corner regardless
     // of which tab is active.
     document.body.appendChild(pill);
@@ -6637,6 +6715,66 @@ setTimeout(async () => {
 // whole list). Now: any number of requestRenderHistory() calls inside
 // one frame collapse to a single render before paint.
 let _renderHistoryQueued = false;
+// ─── BEGIN HISTORY PAGING ───
+// Round 82: the history list put every row in the page at once - ~2,250
+// rows / 44k elements on a real library, one of the suspects for the
+// window's memory peaking near 1 GB. Now the first HIST_PAGE rows are
+// rendered and another page is added whenever the list is scrolled near
+// its end. Searching, filtering, counts, select-all and the player's
+// prev/next all still work on the full list (they use histData, not the
+// page); only what is drawn is limited. Anything that needs a particular
+// row on screen calls histEnsureRowRendered(id) first.
+const HIST_PAGE = 150;
+let _histRenderLimit = HIST_PAGE;
+let _histLastQueryKey = '';
+let _histFilteredIds = [];   // ids of the full filtered list, in order
+let _histPagingGrow = false; // next render only adds a page
+
+// How many rows should be rendered for a scroll position: one more page
+// when the bottom of the list is within `margin` px of the viewport.
+function histNextLimit(limit, total, scrollTop, clientHeight, scrollHeight, margin) {
+  if (limit >= total) return limit;
+  if (scrollTop + clientHeight < scrollHeight - margin) return limit;
+  return Math.min(total, limit + HIST_PAGE);
+}
+// Limit needed so the row at `index` is on the page, with a little room
+// below it for the "keep the next row visible" scroll behaviour.
+function histLimitToShow(limit, index) {
+  if (index < 0 || index < limit) return limit;
+  return index + 1 + 20;
+}
+// ─── END HISTORY PAGING ───
+
+function histEnsureRowRendered(id) {
+  if (document.querySelector('.hist-row[data-id="' + id + '"]')) return true;
+  const idx = _histFilteredIds.indexOf(id);
+  const next = histLimitToShow(_histRenderLimit, idx);
+  if (next === _histRenderLimit) return false;
+  _histRenderLimit = next;
+  _histPagingGrow = true;
+  try { _renderHistoryImpl(); } catch (e) { console.error('renderHistory crashed:', e); }
+  return !!document.querySelector('.hist-row[data-id="' + id + '"]');
+}
+
+(function _histPagingScroll() {
+  const main = document.getElementById('main');
+  if (!main) return;
+  let ticking = false;
+  main.addEventListener('scroll', () => {
+    if (ticking || lastTab !== 'history') return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      ticking = false;
+      const next = histNextLimit(_histRenderLimit, _histFilteredIds.length, main.scrollTop, main.clientHeight, main.scrollHeight, 1200);
+      if (next !== _histRenderLimit) {
+        _histRenderLimit = next;
+        _histPagingGrow = true;
+        requestRenderHistory();
+      }
+    });
+  }, { passive: true });
+})();
+
 function requestRenderHistory(){
   if (_renderHistoryQueued) return;
   _renderHistoryQueued = true;
@@ -6780,6 +6918,12 @@ function showHistoryContextMenu(ev, id) {
     { label: t('ctxOpenAnalyze')   || 'Open in Analyze',     act: () => loadFromHistory(id) },
     { label: t('ctxSendStems')     || 'Send to Stem Separator', act: () => sendHistoryToStems(id) },
     { label: t('ctxSendTranscribe')|| 'Send to Transcribe',  act: () => sendHistoryToTranscribe(id) },
+    { label: t('ctxSendConvert'),                             act: () => sendHistoryToConvert(id) },
+    // Round 82: credit the producer. buy_url: link found in the YouTube
+    // description; '' = none; null = not looked up yet (older downloads).
+    ...(row.buy_url ? [{ label: t('ctxBuyBeat') + ' (' + _hostOfUrl(row.buy_url) + ')', act: () => openExternalLink(row.buy_url) }]
+      : (row.buy_url == null && row.youtube_url) ? [{ label: t('ctxBuyBeat') + '…', act: () => buyBeatFromHistory(id) }] : []),
+    ...(row.youtube_url ? [{ label: t('ctxAboutProducer'), act: () => openProducerAbout(id) }] : []),
     { sep: true },
     // Round 80: two items in this menu had never worked.
     //  - Favorite called a "toggle history favorite" function that does not
@@ -6839,7 +6983,7 @@ function showHistoryContextMenu(ev, id) {
     if (!btn) return;
     const i = parseInt(btn.dataset.i, 10);
     _closeHistoryCtxMenu();
-    try { items[i].act(); } catch (err) { showAppNotification('Action failed: ' + err.message, 'err'); }
+    try { items[i].act(); } catch (err) { showAppNotification(t('tActionFailed') + ': ' + err.message, 'err'); }
   });
 
   // Keyboard navigation: arrows move focus, Enter activates, Esc closes.
@@ -6867,25 +7011,63 @@ function showHistoryContextMenu(ev, id) {
   window.addEventListener('resize', _closeHistoryCtxMenu);
 }
 
-// Helper actions called by context menu. Some already exist (loadFromHistory,
-// deleteHistory); these are convenience wrappers for the rest.
-function sendHistoryToStems(id) {
+// Helper actions called by context menu (History and Stockpile rows).
+// Round 82: "Send to Stem Separator" and "Send to Transcribe" never worked.
+// They called switchTab(), stageStemsFromPath() and stageTranscribeFromPath(),
+// none of which exist, so they fell through to a toast saying "Switched to
+// ... Drop the file there" without switching or loading anything. They now
+// load the track for real; "Send to Convert" is new.
+function _histRowWithFile(id) {
   const row = histData.find(h => h.id === id);
-  if (!row || !row.file_path) return showAppNotification('No file path for this track', 'info');
-  if (typeof switchTab === 'function') switchTab('separator');
-  // Existing flow: stage the file via the file path. UI will pick it up.
-  if (typeof window.stageStemsFromPath === 'function') window.stageStemsFromPath(row.file_path);
-  else showAppNotification('Switched to Stem Separator. Drop the file there to start.', 'info');
+  if (!row || !row.file_path) { showAppNotification(t('sendNoFile'), 'info'); return null; }
+  return row;
 }
-function sendHistoryToTranscribe(id) {
-  const row = histData.find(h => h.id === id);
-  if (!row || !row.file_path) return showAppNotification('No file path for this track', 'info');
-  if (typeof switchTab === 'function') switchTab('transcribe');
-  if (typeof window.stageTranscribeFromPath === 'function') {
-    window.stageTranscribeFromPath(row.file_path, row.title || '');
-  } else {
-    showAppNotification('Switched to Transcribe. Drop the file there to start.', 'info');
+function sendHistoryToStems(id) {
+  const row = _histRowWithFile(id);
+  if (!row) return;
+  sepSourcePath = row.file_path;
+  sepSourceName = row.title || row.file_path.split(/[/\\]/).pop();
+  showSeparatorSource();
+  showTab(document.querySelector('[data-tab="stems"]'));
+}
+async function sendHistoryToTranscribe(id) {
+  const row = _histRowWithFile(id);
+  if (!row) return;
+  showTab(document.querySelector('[data-tab="transcribe"]'));
+  trSt(t('sendLoading'), 'spin');
+  try {
+    // Transcribe uploads a file, so the track is read back from the local
+    // server as one (the same bytes the player streams).
+    const r = await fetch(API + '/file?path=' + encodeURIComponent(row.file_path));
+    if (r.status === 404) {
+      // The user's situation, not a bug: a yellow warning (not reported).
+      trSt('', '');
+      showAppNotification(t('sendFileMissing'), 'warn', null, 6000);
+      return;
+    }
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const blob = await r.blob();
+    const name = row.file_path.split(/[/\\]/).pop();
+    stageTranscribeFile(new File([blob], name, { type: blob.type || 'audio/mpeg' }), id);
+  } catch (e) {
+    trSt('', '');
+    showAppNotification(t('sendFailed') + ': ' + e.message, 'err');
   }
+}
+function sendHistoryToConvert(ids) {
+  const list = (Array.isArray(ids) ? ids : [ids])
+    .map(id => histData.find(h => h.id === id))
+    .filter(h => h && h.file_path)
+    .map(h => ({ path: h.file_path, name: h.file_path.split(/[/\\]/).pop() }));
+  if (!list.length) return showAppNotification(t('sendNoFile'), 'info');
+  showTab(document.querySelector('[data-tab="convert"]'));
+  convInit();
+  convAddPaths(list);
+}
+function bulkSendToConvert() {
+  if (!selectedIds.size) return;
+  sendHistoryToConvert(Array.from(selectedIds));
+  toggleSelectMode();
 }
 
 function _renderHistoryImpl(){
@@ -6918,8 +7100,17 @@ function _renderHistoryImpl(){
   };
   const matchesSearch = (h) =>
     !q || (h.title || '').toLowerCase().includes(q) || (h.channel || '').toLowerCase().includes(q);
-  const rows = histData.filter(h => matchesSearch(h) && matchesFilter(h));
-  _updateHistSearchCount(rows.length, histData.length);
+  const allRows = histData.filter(h => matchesSearch(h) && matchesFilter(h));
+  _updateHistSearchCount(allRows.length, histData.length);
+  // Round 82: only the first _histRenderLimit rows go into the page; more
+  // are added as the list is scrolled (see HISTORY PAGING). A new search or
+  // filter starts from the top again.
+  const queryKey = q + '|' + filterVal;
+  if (queryKey !== _histLastQueryKey) { _histLastQueryKey = queryKey; _histRenderLimit = HIST_PAGE; }
+  _histFilteredIds = allRows.map(h => h.id);
+  const rows = allRows.slice(0, _histRenderLimit);
+  const pagingGrow = _histPagingGrow;
+  _histPagingGrow = false;
   // Pulse detection: rows whose id is newer than the highest id we'd
   // rendered before. On the first render we just set the baseline (no
   // pulse - otherwise every row would flash on app open). After that,
@@ -6991,7 +7182,7 @@ function _renderHistoryImpl(){
     const playIcon = isPlaying
       ? '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>'
       : '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="7,5 7,19 19,12"/></svg>';
-    const playBtn = selectMode ? '' : `<button class="hist-play ${isActive ? 'active' : ''} ${isPlaying ? 'playing' : ''}" tabindex="-1" onmousedown="this.blur()" onclick="event.stopPropagation();playFromHistory(${h.id});this.blur()" title="Preview">${playIcon}</button>`;
+    const playBtn = selectMode ? '' : `<button class="hist-play ${isActive ? 'active' : ''} ${isPlaying ? 'playing' : ''}" tabindex="-1" onmousedown="this.blur()" onclick="event.stopPropagation();playFromHistory(${h.id});this.blur()" title="${escapeHtml(t('previewWord'))}">${playIcon}</button>`;
     // Favorite heart - filled when favorited. Click toggles. The toggle
     // optimistically updates h.is_favorite then sends to the server so
     // there's no perceptible delay.
@@ -7005,13 +7196,13 @@ function _renderHistoryImpl(){
     // requirement so the behavior isn't a mystery on first try. Only set
     // in normal mode - in selectMode it'd contradict the actual single-click
     // selection behavior.
-    const rowTitle = selectMode ? '' : ' title="Double-click to open in Analyze"';
+    const rowTitle = selectMode ? '' : ' title="' + escapeHtml(t('uiDblClickAnalyze')) + '"';
     // Pulse rows that arrived since the last render (and only when this
     // isn't the first render). The class is removed after the animation
     // by the cleanup pass below so subsequent re-renders don't re-flash.
     const isNew = prevSeenHistId > 0 && (h.id || 0) > prevSeenHistId;
     const pulseClass = isNew ? ' row-pulse' : '';
-    return `<div class="${rowClass}${pulseClass}" data-id="${h.id}"${rowTitle} ${onclick} oncontextmenu="showHistoryContextMenu(event, ${h.id})" draggable="true" ondragstart="dragHistoryRowToExternal(event, ${h.id})">${playBtn}<img class="hist-thumb" loading="lazy" decoding="async" src="${resolveThumb(h.thumbnail)}" onerror="window._thumbFail(this)" alt=""/>${favBtn}<div class="hist-info"><div class="hist-title">${h.title||'(untitled)'}</div><div class="hist-meta">${[h.channel,h.created_at?.slice(0,16),fmtSec(h.duration)].filter(Boolean).join(' · ')}</div>${tagStrip}</div><div class="hist-badges">${h.bpm?`<span class="badge bpm">${Math.round(h.bpm)} BPM</span>`:''}${h.key_note?`<span class="badge key">${h.key_note} ${h.key_mode||''}</span>`:''}${h.format?`<span class="badge">${h.format.toUpperCase()}</span>`:''}</div>${selectMode?`<button class="btn xs danger" onclick="event.stopPropagation();deleteHistory(${h.id})">${t('histRemove')}</button>`:`<button class="btn xs" tabindex="-1" onmousedown="this.blur()" onclick="event.stopPropagation();openSimilarTracks(${h.id});this.blur()" title="${t('simBtn')}">≈</button>`}</div>`;
+    return `<div class="${rowClass}${pulseClass}" data-id="${h.id}"${rowTitle} ${onclick} oncontextmenu="showHistoryContextMenu(event, ${h.id})" draggable="true" ondragstart="dragHistoryRowToExternal(event, ${h.id})">${playBtn}<img class="hist-thumb" loading="lazy" decoding="async" src="${escapeHtml(resolveThumb(h.thumbnail))}" onerror="window._thumbFail(this)" alt=""/>${favBtn}<div class="hist-info"><div class="hist-title">${escapeHtml(h.title||'(untitled)')}</div><div class="hist-meta">${escapeHtml([h.channel,h.created_at?.slice(0,16),fmtSec(h.duration)].filter(Boolean).join(' · '))}</div>${tagStrip}</div><div class="hist-badges">${h.bpm?`<span class="badge bpm">${Math.round(h.bpm)} BPM</span>`:''}${h.key_note?`<span class="badge key">${escapeHtml(h.key_note + ' ' + modeLabel(h.key_mode))}</span>`:''}${h.format?`<span class="badge">${escapeHtml(String(h.format).toUpperCase())}</span>`:''}</div>${selectMode?`<button class="btn xs danger" onclick="event.stopPropagation();deleteHistory(${h.id})">${t('histRemove')}</button>`:`<button class="btn xs" tabindex="-1" onmousedown="this.blur()" onclick="event.stopPropagation();openSimilarTracks(${h.id});this.blur()" title="${t('simBtn')}">≈</button>`}</div>`;
   } // end buildHistoryRowHTML
 
   // Build a fingerprint for each row so we can detect which ones
@@ -7049,7 +7240,9 @@ function _renderHistoryImpl(){
   const FULL_REWRITE_THRESHOLD = 80;
   const selectModeChanged = window._lastRenderedSelectMode !== undefined && window._lastRenderedSelectMode !== selectMode;
   window._lastRenderedSelectMode = selectMode;
-  if (!existing.length || Math.abs(existing.length - rows.length) > FULL_REWRITE_THRESHOLD || selectModeChanged) {
+  // (A page added by scrolling goes through the per-row path: the rows
+  // already on screen keep their decoded thumbnails.)
+  if (!existing.length || (Math.abs(existing.length - rows.length) > FULL_REWRITE_THRESHOLD && !pagingGrow) || selectModeChanged) {
     list.innerHTML = rows.map(buildHistoryRowHTML).join('');
   } else {
     // Reconcile by data-id. Build a map of current DOM rows.
@@ -7140,7 +7333,8 @@ function _renderHistoryImpl(){
         const fresh = tmp.firstElementChild;
         if (fresh) {
           fresh.dataset.fp = fp;
-          fresh.classList.add('row-pulse');
+          // Rows revealed by scrolling aren't new downloads - no pulse.
+          if (!pagingGrow) fresh.classList.add('row-pulse');
           if (prevEl) prevEl.after(fresh); else list.prepend(fresh);
           prevEl = fresh;
         }
@@ -7214,10 +7408,10 @@ async function populateHistoryFilterDropdown() {
   // then user folders. "Untagged" is a useful pseudo-filter for cleanup
   // workflows ("what haven't I tagged yet?").
   sel.innerHTML =
-    '<option value="all">All tracks</option>' +
-    '<option value="untagged">Untagged</option>' +
-    '<option value="favorites">Favorites</option>' +
-    (folders.length ? '<optgroup label="Folders">' +
+    '<option value="all">' + escapeHtml(t('uiAllTracks')) + '</option>' +
+    '<option value="untagged">' + escapeHtml(t('spUntaggedLbl')) + '</option>' +
+    '<option value="favorites">' + escapeHtml(t('uiFavorites')) + '</option>' +
+    (folders.length ? '<optgroup label="' + escapeHtml(t('uiFoldersGroup')) + '">' +
       folders.map(f => `<option value="folder:${f.id}">${escapeHtml(f.name)} (${f.track_count || 0})</option>`).join('') +
       '</optgroup>' : '');
   // Restore previous selection if it's still valid
@@ -7240,6 +7434,10 @@ function playFromHistory(historyId) {
   // Set the Analyzer playlist context BEFORE loading. The mini player's
   // prev/next will walk this list to navigate, keeping all playback in the
   // Analyzer (single audio source).
+  // Shuffle ← should also come back from a track you picked by hand.
+  if (shuffleMode && analyzeMirrorActive && currentHistId && currentHistId !== historyId) {
+    shuffleBackPush(shuffleBack, currentHistId);
+  }
   analyzePlaylist = { tracks: visible, index: idx >= 0 ? idx : 0 };
 
   // FAST PATH: this track is already loaded in the Analyzer. Just toggle
@@ -7576,7 +7774,7 @@ async function loadFromHistory(id, opts){
   }
 
   if (!result.ok) {
-    showAppNotification('Could not load: file not found on disk','err');
+    showAppNotification(t('tFileNotOnDisk'),'err');
     // Release any pending transition lock so a follow-up click can recover
     if (typeof globalPlayer !== 'undefined') globalPlayer._transitionLock = false;
     return;
@@ -7601,7 +7799,7 @@ async function loadFromHistory(id, opts){
         row.transcript = full.transcript;   // cache on the row for export
       }
     } catch {}
-  }catch(e){showAppNotification('Could not load: '+e.message.slice(0,50),'err');}
+  }catch(e){showAppNotification(t('tCouldNotLoad')+': '+e.message.slice(0,50),'err');}
 }
 async function deleteHistory(id){
   // Styled confirm - danger style because removing from history is
@@ -7620,8 +7818,8 @@ async function deleteHistory(id){
 
 function setMetroBpm(v){metroBpm=parseInt(v);document.getElementById('metro-num').textContent=metroBpm;}
 function toggleMetro(){
-  if(metroOn){metroOn=false;clearTimeout(metroId);document.getElementById('metro-btn').textContent='Start';document.getElementById('metro-btn').classList.add('pri');document.querySelectorAll('.beat-dot').forEach(d=>d.classList.remove('lit'));}
-  else{metroOn=true;metroBeat=0;document.getElementById('metro-btn').textContent='Stop';document.getElementById('metro-btn').classList.remove('pri');if(!metroACtx)metroACtx=new AudioContext();scheduleBeat();}
+  if(metroOn){metroOn=false;clearTimeout(metroId);document.getElementById('metro-btn').textContent=t('metStart');document.getElementById('metro-btn').classList.add('pri');document.querySelectorAll('.beat-dot').forEach(d=>d.classList.remove('lit'));}
+  else{metroOn=true;metroBeat=0;document.getElementById('metro-btn').textContent=t('metStop');document.getElementById('metro-btn').classList.remove('pri');if(!metroACtx)metroACtx=new AudioContext();scheduleBeat();}
 }
 function scheduleBeat(){
   if(!metroOn)return;
@@ -7632,15 +7830,15 @@ function scheduleBeat(){
   gain.gain.setValueAtTime(0.3,metroACtx.currentTime);gain.gain.exponentialRampToValueAtTime(0.001,metroACtx.currentTime+0.08);osc.start();osc.stop(metroACtx.currentTime+0.08);
   metroBeat=(metroBeat+1)%sig;metroId=setTimeout(scheduleBeat,60000/metroBpm);
 }
-function tapBpm(){const now=performance.now();taps.push(now);if(taps.length>8)taps.shift();if(taps.length<2){document.getElementById('tap-ct').textContent='keep tapping…';return;}const avg=taps.slice(1).reduce((s,t,i)=>s+(t-taps[i]),0)/(taps.length-1);document.getElementById('tap-num').textContent=Math.round(60000/avg);document.getElementById('tap-ct').textContent=taps.length+' taps';clearTimeout(window._tt);window._tt=setTimeout(resetTap,2500);}
-function resetTap(){taps=[];document.getElementById('tap-num').textContent='—';document.getElementById('tap-ct').textContent='tap at least 4 times';}
+function tapBpm(){const now=performance.now();taps.push(now);if(taps.length>8)taps.shift();if(taps.length<2){document.getElementById('tap-ct').textContent=t('uiKeepTapping');return;}const avg=taps.slice(1).reduce((s,t,i)=>s+(t-taps[i]),0)/(taps.length-1);document.getElementById('tap-num').textContent=Math.round(60000/avg);document.getElementById('tap-ct').textContent=taps.length+' taps';clearTimeout(window._tt);window._tt=setTimeout(resetTap,2500);}
+function resetTap(){taps=[];document.getElementById('tap-num').textContent='—';document.getElementById('tap-ct').textContent=t('tapHint');}
 function renderRef(){
   const key=document.getElementById('ref-key')?.value||'C',mode=document.getElementById('ref-mode')?.value||'major';
   const N=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'],root=N.indexOf(key);
   const steps=mode==='major'?[0,2,4,5,7,9,11]:[0,2,3,5,7,8,10],scale=steps.map(s=>N[(root+s)%12]);
   const majQ=['maj','min','min','maj','maj','min','dim'],minQ=['min','dim','maj','min','min','maj','maj'],qs=mode==='major'?majQ:minQ;
   const roman=mode==='major'?['I','ii','iii','IV','V','vi','vii°']:['i','ii°','III','iv','v','VI','VII'];
-  document.getElementById('ref-out').innerHTML='<div style="margin-bottom:14px;font-size:14px;color:var(--muted)">Scale: <span style="color:var(--white);font-weight:500">'+scale.join(' · ')+'</span></div><div style="display:flex;flex-wrap:wrap;gap:7px">'+scale.map((note,i)=>'<div class="scale-note"><div class="rom">'+roman[i]+'</div><div class="note">'+note+'</div><div class="qual">'+qs[i]+'</div></div>').join('')+'</div>';
+  document.getElementById('ref-out').innerHTML='<div style="margin-bottom:14px;font-size:14px;color:var(--muted)">'+escapeHtml(t('uiScaleColon'))+' <span style="color:var(--white);font-weight:500">'+scale.join(' · ')+'</span></div><div style="display:flex;flex-wrap:wrap;gap:7px">'+scale.map((note,i)=>'<div class="scale-note"><div class="rom">'+roman[i]+'</div><div class="note">'+note+'</div><div class="qual">'+qs[i]+'</div></div>').join('')+'</div>';
 }
 // ── WAV encoder (AudioBuffer → ArrayBuffer) for drag-out export ──────────────
 function encodeWAV(audioBuffer) {
@@ -7692,9 +7890,11 @@ let dragReady = false;
 async function prepareDragWav() {
   if (!audioBuf) return;
   dragReady = false;
+  const forBuf = audioBuf;
   const name = (document.getElementById('player-name').textContent || 'audio').trim();
   const wavData = encodeWAV(audioBuf);
   const result = await api.writeTempWav(new Uint8Array(wavData), name);
+  if (audioBuf !== forBuf) return;   // another track loaded meanwhile: this file is not it
   if (result.ok) {
     dragTempPath = result.path;
     dragReady = true;
@@ -7829,7 +8029,7 @@ function renderSepQueue() {
 
 function sendToSeparator() {
   if (!lastFilePath) {
-    showAppNotification('Load a track first', 'err');
+    showAppNotification(t('tLoadTrackFirst'), 'err');
     return;
   }
   sepSourcePath = lastFilePath;
@@ -7843,7 +8043,7 @@ function loadSeparatorFile(e) {
   const f = e.target.files[0];
   if (!f) return;
   if (!f.path) {
-    showAppNotification('Cannot read file path', 'err');
+    showAppNotification(t('tCantReadPath'), 'err');
     return;
   }
   sepSourcePath = f.path;
@@ -10100,7 +10300,7 @@ function onMasterReferencePicked(ev) {
   const f = ev && ev.target && ev.target.files && ev.target.files[0];
   if (!f) return;
   if (!f.path) {
-    showAppNotification('Cannot read reference path', 'err');
+    showAppNotification(t('tCantReadRef'), 'err');
     return;
   }
   _setMasterReference(f.path, f.name);
@@ -10151,7 +10351,7 @@ window.addEventListener('DOMContentLoaded', () => {
     const f = e.dataTransfer.files && e.dataTransfer.files[0];
     if (!f) return;
     if (!f.path) {
-      showAppNotification('Cannot read dropped file path', 'err');
+      showAppNotification(t('tCantReadDropped'), 'err');
       return;
     }
     _setMasterReference(f.path, f.name);
@@ -10160,7 +10360,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
 function startMastering() {
   if (!sepSourcePath) {
-    showAppNotification('No source track to master', 'err');
+    showAppNotification(t('tNoMasterSource'), 'err');
     return;
   }
   const presetEl = document.getElementById('master-preset');
@@ -10168,7 +10368,7 @@ function startMastering() {
   // Reference-match needs a reference file. Block submission and prompt
   // if the user clicked Apply without picking one.
   if (preset === 'reference_match' && !masterReferencePath) {
-    showAppNotification('Pick a reference track first', 'info');
+    showAppNotification(t('tPickRefFirst'), 'info');
     return;
   }
   const btn = document.getElementById('btn-master');
@@ -10251,7 +10451,7 @@ function startMastering() {
         stats.style.whiteSpace = 'pre-line';
       }
       if (result) result.classList.remove('hidden');
-      showAppNotification('Mastered with ' + (m.preset_label || m.preset), 'ok');
+      showAppNotification(t('tMasteredWith') + ' ' + (m.preset_label || m.preset), 'ok');
     } catch {}
     if (btn) btn.disabled = false;
     if (lbl) lbl.textContent = 'Apply';
@@ -10289,10 +10489,10 @@ function playMastered() {
     a.volume = 0.9;
     a.play().catch(err => {
       diagLog('[master-preview] ' + err.message, 'err');
-      showAppNotification('Preview failed — open folder to play in your audio app', 'info');
+      showAppNotification(t('tPreviewFailedOpen'), 'info');
     });
   } catch (err) {
-    showAppNotification('Preview failed: ' + err.message, 'err');
+    showAppNotification(t('tPreviewFailed') + ': ' + err.message, 'err');
   }
 }
 
@@ -10372,7 +10572,7 @@ function dragHistoryRowToExternal(ev, histId) {
   const h = (histData || []).find(x => x.id === histId);
   if (!h) return;
   if (!h.file_path) {
-    showAppNotification('No file on disk for this track', 'warn');
+    showAppNotification(t('sendNoFile'), 'warn');
     ev.preventDefault();
     return;
   }
@@ -10383,7 +10583,7 @@ function dragStockpileRowToExternal(ev, trackId) {
   const tr = (spFvTracks || []).find(x => x.id === trackId);
   if (!tr) return;
   if (!tr.file_path) {
-    showAppNotification('No file on disk for this track', 'warn');
+    showAppNotification(t('sendNoFile'), 'warn');
     ev.preventDefault();
     return;
   }
@@ -10587,7 +10787,7 @@ window.addEventListener('DOMContentLoaded', () => {
       const f = e.dataTransfer.files[0];
       if (!f) return;
       if (!f.path) {
-        showAppNotification('Cannot read file path', 'err');
+        showAppNotification(t('tCantReadPath'), 'err');
         return;
       }
       sepSourcePath = f.path;
@@ -10989,7 +11189,7 @@ function copySetupDiag() {
       setTimeout(() => { btn.textContent = original; }, 1400);
     }
   }).catch(() => {
-    showAppNotification('Could not copy to clipboard', 'err');
+    showAppNotification(t('copyFailed'), 'err');
   });
 }
 
@@ -11197,8 +11397,8 @@ const T = {
     settingsSec_privacy:'Privacy',
     settingsSec_privacyDesc:'Crash reporting toggle',
     crashReportName:'Crash reporting',
-    crashReportDesc:'Anonymized crash reports are sent automatically so we can fix bugs faster. File paths, usernames, and YouTube URLs are scrubbed before transmission. No audio, no library content, and no personal data ever leaves your machine.',
-    crashReportStatus:'Active. Reports include error stacks + app version only.',
+    crashReportDesc:'When something goes wrong (a crash, or an error you see in the app or the browser extension), an error report is sent automatically so it can be fixed. Before it leaves your PC, your computer name, Windows user name, IP address, YouTube links, other web addresses and e-mail addresses are removed. No audio, no library and none of your files are ever sent.',
+    crashReportStatus:'Active. A report contains the error, where it happened, the app version, Windows version, CPU/RAM and a random install ID.',
     crashReportDiagBtn:'Run diagnostic',
     crashReportTestBtn:'Send test event',
     crashReportTestSending:'Sending...',
@@ -11284,6 +11484,27 @@ const T = {
     ctxOpenAnalyze:'Open in Analyze',
     ctxSendStems:'Send to Stem Separator',
     ctxSendTranscribe:'Send to Transcribe',
+    ctxSendConvert:'Send to Convert',
+    ctxBuyBeat:'Buy this beat',
+    ctxAboutProducer:'About the beatmaker',
+    buyLooking:'Looking for the purchase link…',
+    buyNone:'No purchase link in this video\'s description',
+    buyLookupFailed:'Could not read the video description',
+    aboutTitle:'About the beatmaker',
+    aboutFrom:'Links from the description of',
+    aboutBuy:'Buy this beat',
+    aboutNoLinks:'No links in the video description.',
+    aboutNote:'These links come from the video description - check they belong to the producer before buying.',
+    aboutCopyCredit:'Copy credit',
+    aboutCredited:'Credit copied',
+    aboutCopyEmail:'Copy e-mail',
+    aboutOpenVideo:'Open the video',
+    aboutClose:'Close',
+    sendNoFile:'This track has no file on disk',
+    sendLoading:'Loading the track…',
+    sendFailed:'Could not load the track',
+    sendFileMissing:'This track\'s file is missing - it may have been moved or deleted',
+    copied:'Copied',
     ctxFavorite:'Favorite',
     ctxUnfavorite:'Unfavorite',
     ctxCopyTitle:'Copy title',
@@ -11428,6 +11649,9 @@ const T = {
     watchOffNotif:'Watch folder off',
     ytdlpAvail:'update available - click to install',
     ytdlpUpToDate:'up to date',
+    ytdlpJsOk:'YouTube helper (Deno {v}) ready',
+    ytdlpJsDownloading:'setting up the YouTube helper (Deno)…',
+    ytdlpJsMissing:'YouTube helper (Deno) missing - some YouTube downloads may fail with 403',
     ytdlpSystem:'yt-dlp is system-installed - update it via your package manager',
     sepqTitle:'Separation queue',
     sepqWaiting:'waiting',
@@ -11528,6 +11752,314 @@ const T = {
     btnDiagnose:'Diagnose',
     logsName:'View logs',
     logsDesc:'Server + setup logs, useful for debugging',
+    reportName:'Report a problem',
+    reportDesc:'Something not working? Describe it and it gets sent to the developer.',
+    reportBtn:'Report',
+    uiReadyLoading:'Ready — loading app…',
+    spSeedsPh:'e.g. Mozzy, Luh Tyj, Sleepy Hallow',
+    spDescPh:'e.g. West coast trap, melodic minor hooks, hard 808s',
+    spNamePh:'e.g. Cali Trap',
+    rbVocalTrack:'Vocal Track',
+    rbGrabStem:'Grab a stem',
+    svRoom_Cathedral:'Cathedral',
+    svRoom_Hall:'Hall',
+    svRoom_Medium:'Medium',
+    svRoom_Room:'Room',
+    svRoom_Booth:'Booth',
+    uiScaleColon:'Scale:',
+    uiKeepTapping:'keep tapping…',
+    uiFoldersGroup:'Folders',
+    uiDblClickAnalyze:'Double-click to open in Analyze',
+    uiAnalyzingWord:'analyzing…',
+    uiModeMajor:'major',
+    uiModeMinor:'minor',
+    convFmt_alac:'ALAC (Apple Lossless)',
+    convFmt_mp4video:'MP4 video (picture + audio)',
+    convFmt_mp4:'MP4 (AAC audio)',
+    convSummaryFailed:'{n} failed',
+    convSummary:'{ok} converted',
+    convFailedMsg:'Conversion failed',
+    convQueued:'Queued',
+    convFailed:'Failed',
+    convDoneShow:'Done · show',
+    convNDone:'{n} done',
+    convNoteLossless:'Lossless: converting a lossy file (MP3, AAC…) to this keeps its quality but does not improve it.',
+    convNoteOgg:'Vorbis is lossy and quality-based; the bitrate is approximate.',
+    convNoteMp4:'Audio-only MP4 (AAC). AAC is lossy: converting a lossy file to a higher bitrate does not bring back quality.',
+    convNoteAac:'AAC is lossy: converting a lossy file to a higher bitrate does not bring back quality.',
+    convNoteMp3:'MP3 is lossy: converting a lossy file to a higher bitrate does not bring back quality.',
+    convNoteOpus:'Opus always encodes at 48 kHz.',
+    convBits:'{n}-bit',
+    convFloat32:'32-bit float',
+    convBitDepth:'Bit depth',
+    convSomeSkipped:'Some files could not be added (no path on disk).',
+    tInstallerFailed:'Could not start installer',
+    tUpdError:'Update error',
+    tUpdDlFailed:'Update download failed',
+    tRepairFailed:'Repair failed',
+    tRefreshFailed:'Refresh failed',
+    tLogsFailed:'Failed to fetch logs',
+    tDiagFailed:'Diagnose failed',
+    tBackendUnreachable:'Could not reach backend',
+    tPreviewFailed:'Preview failed',
+    tPreviewFailedOpen:'Preview failed — open folder to play in your audio app',
+    tMasteredWith:'Mastered with',
+    tPickRefFirst:'Pick a reference track first',
+    tNoMasterSource:'No source track to master',
+    tCantReadDropped:'Cannot read dropped file path',
+    tCantReadRef:'Cannot read reference path',
+    tCantReadPath:'Cannot read file path',
+    tLoadTrackFirst:'Load a track first',
+    tFileNotOnDisk:'Could not load: file not found on disk',
+    tActionFailed:'Action failed',
+    tBackfillDone:'Fingerprint indexing complete — {n} tracks indexed',
+    tBackfillStarted:'Fingerprint indexing started — {n} tracks queued',
+    tCouldNotSave:'Could not save',
+    tVerifyFailed:'Verify failed',
+    tCreateFolderFirst:'Create a Stockpile folder first',
+    tLoadFoldersFailed:'Failed to load folders',
+    tAllAlreadyIn:'All selected tracks were already in',
+    tCantRemoveDl:'Cannot remove an item that\'s currently downloading',
+    tCouldNotLoad:'Could not load',
+    tAlreadyDlQueue:'Already downloaded — see queue list',
+    navConvert:'Convert',
+    navSlowverb:'Slow + Reverb',
+    uiSkipMain:'Skip to main content',
+    uiDiagLog:'Diagnostic log',
+    uiLogFile:'Log file:',
+    uiBackTitle:'Back (Ctrl+Alt+←)',
+    uiBack:'Back',
+    uiForwardTitle:'Forward (Ctrl+Alt+→)',
+    uiForward:'Forward',
+    uiMinimize:'Minimize window',
+    uiMaximize:'Maximize window',
+    uiCloseWindow:'Close window',
+    uiWorkspace:'Workspace',
+    uiArtistTools:'Artist Tools',
+    uiBackToTop:'Back to top',
+    uiPlayPause:'Play / pause',
+    uiIntegrated:'Integrated',
+    uiShortTerm:'Short-term',
+    uiMomentary:'Momentary',
+    uiDynRange:'Dyn Range',
+    uiLiveSpectrum:'LIVE SPECTRUM ANALYZER',
+    uiLiveWhilePlaying:'Live while playing',
+    uiKeyLbl:'Key',
+    uiDuration:'Duration',
+    uiSeconds:'Seconds',
+    uiChordProg:'Chord Progressions',
+    uiAnalyzeFirst:'Analyze a track first',
+    uiCompatKeys:'Compatible Keys — Camelot',
+    uiClosestScale:'Closest Scale Match',
+    uiPitchPreview:'Pitch Preview',
+    uiTrackNotes:'Track Notes',
+    uiNotesPh:'Write lyrics ideas, structure, vocal notes…',
+    uiClearSource:'Clear source file',
+    uiSplitLead:'Split lead vocal from BV / samples',
+    uiBestEffort:'— best effort',
+    uiSplitLeadDesc:'Adds an extra pass that separates the vocals stem into "lead_vocal" (main performance) and "back_vocal" (harmonies + ad-libs + samples). Adds ~30-60s on CPU. Quality varies by track — perfect on clean pop/R&B, less reliable on dense rap.',
+    uiEnsemble:'Ensemble — better piano / guitar / other',
+    uiQualityBonus:'— quality-bonus',
+    uiEnsembleDesc:'Runs a second Stage 2 model and averages outputs on harmonic stems. Lifts SDR by 0.3-0.8 dB and reduces model-specific artifacts (kick bleed, attack smearing). Adds ~30% to Stage 2 runtime. Requires quality \'high\' or \'ultra\' — ignored on \'fast\'.',
+    uiVocalEnsemble:'Vocal ensemble — cleaner vocals',
+    uiVocalBonus:'— vocal-quality bonus',
+    uiVocalEnsembleDesc:'Runs an additional vocal isolation model (different architecture) and averages outputs with the primary. Cancels each model\'s specific weaknesses (BS-Roformer sibilance leak, MDX-Net breath softness). Lifts vocal SDR by 0.3-0.6 dB. Cost: roughly doubles Stage 1 runtime.',
+    uiDereverb:'De-reverb vocal',
+    uiDryVocal:'— dry vocal for sampling',
+    uiDereverbDesc:'Removes reverb tail and slap echo from the isolated vocal stem. Replaces the wet vocal with a dry version. Targets "lead_vocal" when the split toggle is on, otherwise the merged "vocals" stem. Adds ~20-40s on CPU.',
+    uiQualityAdvanced:'Quality Advanced',
+    uiBalanced:'Balanced',
+    uiFullness:'Fullness restoration',
+    uiFullSubtle:'Subtle — barely-there enhancement',
+    uiFullBalanced:'Balanced — default sweet spot',
+    uiFullAggressive:'Aggressive — for very thin stems',
+    uiPerPass:'Per-pass controls (override preset)',
+    uiSustain:'Sustain rebuild',
+    uiSustainDesc:'Rebuilds truncated note tails (piano, guitar, other). 0 = off, 1× = balanced, 2× = aggressive.',
+    uiDucking:'Ghost-ducking lift',
+    uiDuckingDesc:'Max boost for moments where a stem dipped behind the original mix. 0 dB = off, +4 dB = balanced, +8 dB = aggressive.',
+    uiTransient:'Transient consistency',
+    uiTransientDesc:'Equalizes attack levels across the track. 0 dB = off, ±3 dB = balanced, ±8 dB = aggressive.',
+    uiResetOverrides:'Reset overrides to preset',
+    uiSeparating:'Separating…',
+    uiVocalIsolation:'Vocal isolation',
+    uiEditStems:'Edit stems in timeline',
+    uiOpenDaw:'Open Mini-DAW',
+    uiCloseResults:'Close results',
+    uiMaster:'Master',
+    uiRuleBased:'— rule-based, no AI',
+    uiMasterLoud:'Loudness Normalize — hit −14 LUFS',
+    uiMasterBright:'Bright — adds air (+2 dB > 6 kHz)',
+    uiMasterWarm:'Warm — adds body (+2 dB < 250 Hz)',
+    uiMasterRef:'Reference Match — match a track you like',
+    uiApply:'Apply',
+    uiDropRef:'Drop a reference track or click to pick',
+    uiRemoveRef:'Remove reference',
+    uiMatchStrength:'Match strength',
+    uiStarting:'Starting…',
+    uiTransDrop:'Drop a vocal or audio file',
+    uiTransDropSub:'Works best on vocals-only tracks',
+    uiModelTiny:'Tiny — fastest',
+    uiModelBase:'Base — recommended',
+    uiModelSmall:'Small',
+    uiModelMedium:'Medium — best',
+    uiAutoDetect:'Auto-detect',
+    uiLangBi:'Bilingual (FR + EN)',
+    uiLangPatois:'Jamaican Patois (+ EN)',
+    uiLangIgbo:'Igbo (+ EN)',
+    uiLangEn:'English',
+    uiLangFr:'French',
+    uiLangEs:'Spanish',
+    uiLangEsEn:'Spanish (+ EN)',
+    uiLangPt:'Portuguese',
+    uiLangPtEn:'Portuguese (+ EN)',
+    uiLangYoEn:'Yoruba (+ EN)',
+    uiLangSwEn:'Swahili (+ EN)',
+    uiLangHaEn:'Hausa (+ EN)',
+    uiLangHa:'Hausa',
+    uiTransIdle:'Drop an audio file above to begin',
+    uiTranscript:'Transcript',
+    uiTranscriptPh:'Transcript appears here…',
+    uiRunsLocally:'Runs locally — no audio or text leaves your machine.',
+    svSub:'Slow it down, speed it up, drown it in reverb - hear every change as you make it',
+    uiTrack:'Track',
+    uiNothingLoaded:'Nothing loaded',
+    uiPresets:'Presets',
+    uiSpeed:'Speed',
+    uiReverb:'Reverb',
+    uiReverbHint:'How much of the room you hear',
+    uiRoomSize:'Room size',
+    uiMedium:'Medium',
+    uiRoomHint:'Small booth through to a cathedral',
+    uiBass:'Bass',
+    uiBassHint:'Lifts everything under 120 Hz',
+    uiKeepPitch:'Keep the original pitch when changing speed',
+    uiExportFormat:'Export format',
+    uiFmtMaster:'master',
+    uiFmtCd:'CD / streaming',
+    uiFmtLossless:'lossless, smaller',
+    uiFmtRef:'reference copy',
+    uiPlayOrPause:'Play or pause',
+    uiMute:'Mute / Unmute',
+    uiSearchBeats:'Search your beats…',
+    uiSearchBeatsAria:'Search your beats',
+    uiScaleNotesAria:'Scale notes - click to include or exclude a note from pitch correction',
+    uiRvMixAria:'Reverb mix',
+    uiRvDecayAria:'Reverb decay',
+    uiRvDampAria:'Reverb damping',
+    uiRvPreAria:'Reverb pre-delay',
+    uiVocalVol:'Vocal volume',
+    uiBeatVol:'Beat volume',
+    uiZoomOut:'Zoom out',
+    uiZoomIn:'Zoom in',
+    uiScrollTimeline:'Scroll timeline',
+    uiTransport:'Playback transport',
+    uiPickBeatTitle:'Pick a specific beat',
+    uiAutotuneSettings:'Autotune settings',
+    uiToolsSub:'Metronome, tap BPM, and scale reference',
+    convSub:'Convert audio files to MP3, WAV, FLAC, AIFF, M4A, OGG and more — in batches',
+    convDropTitle:'Drop audio or video files here',
+    convDropSub:'or click to choose files · MP3, WAV, FLAC, M4A, AAC, OGG, OPUS, AIFF, WMA · MP4, MOV, MKV, WEBM (the audio is extracted)',
+    convOutput:'Output',
+    convBitrate:'Bitrate',
+    convSampleRate:'Sample rate',
+    convKeep:'Keep original',
+    convChannels:'Channels',
+    convStereo:'Stereo',
+    convSaveTo:'Save to:',
+    convDestDefault:'A “Converted” folder next to each original',
+    convChooseFolder:'Choose folder…',
+    convUseConverted:'Use “Converted” folders',
+    convFiles:'Files',
+    convClearList:'Clear list',
+    convGo:'Convert',
+    convNoFiles:'No files added yet.',
+    uiClearSearchTitle:'Clear search (Esc)',
+    uiClearSearch:'Clear search',
+    uiFilterFolder:'Filter by folder',
+    uiAllTracks:'All tracks',
+    uiFavorites:'Favorites',
+    uiBatchTagTitle:'Apply a Stockpile tag to all selected tracks',
+    uiBatchTag:'Tag…',
+    uiUnfavorite:'Unfavorite',
+    uiReanalyze:'Re-analyze',
+    uiReanalyzeTitle:'Re-run BPM/key analysis on all selected',
+    uiBatchSepTitle:'Queue selected tracks for stem separation',
+    uiBatchConvTitle:'Convert selected tracks to another format',
+    uiBatchStockTitle:'Move selected to Stockpile folder',
+    uiBatchDelTitle:'Delete from history (files remain on disk)',
+    uiBatchDelAria:'Delete from history',
+    uiClickToChange:'Click to change',
+    uiMoving:'Moving…',
+    uiAutoOrgTitle:'Suggest a folder for each untagged track based on artist, mood, BPM, and key similarity',
+    uiNoTracksYet:'No tracks yet',
+    uiSetupFirstDl:'First-time download',
+    uiSetupSize:'~1.2GB total · runs once · all local, no cloud',
+    uiSetupTime:'Time',
+    uiSetupTimeVal:'5–15 minutes depending on connection',
+    uiSetupWhat:'What\'s installed',
+    uiSetupSkipLater:'Skip — I\'ll set up later',
+    uiSetupRerun:'You can re-run setup anytime from Settings → Engines.',
+    uiSetupOverall:'Overall',
+    uiSetupProgressNote:'Downloading engines and AI models. Setup keeps running even if you close this dialog — you can reopen and rejoin from Settings.',
+    uiSetupShowLog:'Show diagnostic log (for support)',
+    uiSetupReady:'Stem separator and transcription are ready to use.',
+    uiShuffle:'Shuffle',
+    uiPrevTitle:'Previous track (←)',
+    uiPrev:'Previous track',
+    uiPlayPauseTitle:'Play / pause (Space)',
+    uiNextTitle:'Next track (→)',
+    uiNext:'Next track',
+    uiLoop:'Loop',
+    uiToggleFav:'Toggle favorite',
+    uiNotepad:'Notepad',
+    uiNotepadPh:'Jot something about this track…',
+    uiSavedAuto:'Saved automatically',
+    uiScrollFollow:'Toggle scroll-follow',
+    uiUpdateAvail:'Update available',
+    uiInstall:'Install',
+    uiLater:'Later',
+    convPicChoose:'Choose a picture',
+    convPicChange:'click the picture to change it',
+    convPicNeeded:'Choose a picture for the video first.',
+    convPicBadType:'Use a JPG, PNG, WEBP, BMP or GIF picture.',
+    convVidSize:'Video size',
+    convSize1080:'1920×1080 (YouTube)',
+    convSize720:'1280×720 (smaller file)',
+    convSizeSquare:'1080×1080 (square)',
+    convSizeVertical:'1080×1920 (TikTok, Reels, Shorts)',
+    convVidFit:'Picture',
+    convFitBlur:'Whole picture, blurred background',
+    convFitBlack:'Whole picture, black bars',
+    convFitCrop:'Fill the frame (edges cut)',
+    convVideoNote:'A video of your picture with the track as its sound, ready to upload. About 12 seconds per 3-minute track at 1080p. The audio is AAC (lossy).',
+    libFoundTitle:'Your library was found',
+    libFoundBody:'Freq.Phull found a copy of your library in your Stockpile folder. Restore it to get back your tracks, folders, BPM/key, notes and favorites.',
+    libSummary:'{tracks} tracks · {folders} folders',
+    libSaved:'saved',
+    libRestore:'Restore',
+    libStartFresh:'Start fresh',
+    libRestoring:'Restoring your library…',
+    libRestored:'Library restored: {tracks} tracks, {folders} folders.',
+    libMissing:'{n} files weren\'t found - History can relink them.',
+    libRestoreFailed:'Could not restore the library',
+    libReplaceWarn:'This replaces the {n} tracks in your current library. They are kept in a backup file in the app\'s data folder.',
+    libRebuildTitle:'Rebuild your library from this folder?',
+    libRebuildBody:'This folder has {files} tracks in {folders} style folders but no library backup (it was made by an older version). Freq.Phull can add them to your library with their folders. BPM and key are analysed again in the background.',
+    libRebuildBtn:'Rebuild',
+    libRebuilding:'Rebuilding your library…',
+    libRebuilt:'Library rebuilt: {tracks} tracks added, {folders} folders.',
+    libNothing:'No library backup or audio files found in that folder.',
+    libSettingName:'Restore library',
+    libSettingDesc:'Bring back your library from a Stockpile folder after reinstalling or on a new PC. A copy is saved in the Stockpile folder automatically.',
+    libSettingBtn:'Choose folder',
+    reportTitle:'Report a problem',
+    reportPlaceholder:'What happened? What were you doing when it went wrong?',
+    reportIncludeLog:'Attach the end of the app log (helps a lot)',
+    reportPrivacy:'Your computer name, Windows user name, IP address, links and e-mail addresses are removed before sending. Please don\'t type personal information.',
+    reportSend:'Send',
+    reportSent:'Thanks! Report sent (#{id})',
+    reportFailed:'Could not send the report',
     devBuild:'Development build',
     checking:'Checking…',
     // ── Storage breakdown modal ──
@@ -11944,18 +12476,18 @@ const T = {
     enginesDiagDescGeneric:"L'analyse en arrière-plan est en pause. Lancez la configuration pour installer Python et les paquets requis.",
     enginesDiagDescDeps:"Python est installé mais un paquet requis n'a pas pu être installé. Relancez la configuration pour réessayer.",
     enginesDiagRetry:'Relancer la configuration',
-    settingsSec_privacy:'Confidentialite',
+    settingsSec_privacy:'Confidentialité',
     settingsSec_privacyDesc:'Rapports d\'erreurs',
     crashReportName:'Rapports d\'erreurs',
-    crashReportDesc:'Des rapports anonymes sont envoyés automatiquement pour nous aider à corriger les bugs. Les chemins de fichiers, noms d\'utilisateur et URL YouTube sont anonymisés avant transmission. Aucun audio, aucun contenu de bibliothèque, aucune donnée personnelle ne quitte jamais votre machine.',
-    crashReportStatus:'Actif. Rapports limités aux erreurs et à la version de l\'application.',
+    crashReportDesc:'Quand quelque chose ne va pas (un plantage, ou une erreur affichée dans l\'application ou l\'extension), un rapport d\'erreur est envoyé automatiquement pour pouvoir la corriger. Avant qu\'il quitte votre PC, le nom de votre ordinateur, votre nom d\'utilisateur Windows, votre adresse IP, vos liens YouTube, les autres adresses web et les adresses e-mail sont retirés. Aucun audio, aucune bibliothèque et aucun de vos fichiers n\'est jamais envoyé.',
+    crashReportStatus:'Actif. Un rapport contient l\'erreur, l\'endroit où elle s\'est produite, la version de l\'application, la version de Windows, le CPU/la RAM et un identifiant d\'installation aléatoire.',
     crashReportDiagBtn:'Diagnostic',
     crashReportTestBtn:'Envoyer un événement test',
-    crashReportTestSending:'Envoi...',
+    crashReportTestSending:'Envoi…',
     crashReportTestSent:'Événement test envoyé',
     crashReportTestQueued:'Événement test en attente - vérifiez Sentry dans 1-2 min',
     crashReportTestFailed:'Échec de l\'envoi',
-    crashReportDiagLoading:'Vérification...',
+    crashReportDiagLoading:'Vérification…',
     dlPhaseConverting:'Conversion…',
     selfHealStart:'Auto-réparation des moteurs démarrée',
     selfHealDone:'Moteurs réparés automatiquement - tout fonctionne à nouveau',
@@ -11965,9 +12497,9 @@ const T = {
     liteOn:'Mode léger activé - effets réduits',
     liteOff:'Mode léger désactivé - effets complets',
     verifyName:'Vérifier les moteurs',
-    verifyDesc:'Vérifie en profondeur chaque composant IA (analyse, pistes, transcription) et identifie précisément ce qui est casse. Reparation en un clic.',
+    verifyDesc:'Vérifie en profondeur chaque composant IA (analyse, stems, transcription) et identifie précisément ce qui est cassé. Réparation en un clic.',
     verifyBtn:'Vérifier maintenant',
-    verifyRunning:'Vérification...',
+    verifyRunning:'Vérification…',
     verifyAllOk:'Tous les moteurs sont opérationnels',
     verifyBroken:'Paquets cassés détectés',
     verifyClickRepair:'cliquez pour réparer automatiquement',
@@ -11984,9 +12516,9 @@ const T = {
     idTitleName:'Corriger les entrées nommées avec un ID de vidéo',
     idTitleDesc:'Certaines pistes ont été enregistrées avec l\'ID de la vidéo YouTube au lieu du vrai nom. L\'audio est intact - le vrai titre est récupéré depuis la source et le fichier est renommé. Rien n\'est retéléchargé.',
     idTitleBtn:'Corriger les noms',
-    idTitleWorking:'En cours...',
+    idTitleWorking:'En cours…',
     idTitleNone:'Aucune entrée à renommer',
-    idTitleStarted:'Récupération des titres pour {n} pistes...',
+    idTitleStarted:'Récupération des titres pour {n} pistes…',
     idTitleDone:'{n} pistes renommées',
     idTitleFailed:'Impossible de corriger les noms',
     doctorName:'Docteur de bibliothèque',
@@ -11995,15 +12527,15 @@ const T = {
     doctorStuckTitle:'Pistes abandonnées par l\'analyseur',
     doctorStuckDesc:'{n} piste(s) ont échoué à l\'analyse 3 fois et ne seront plus retentées automatiquement. C\'est généralement un fichier corrompu ou inhabituel. Réparez le fichier ou réinstallez les moteurs, puis relancez ci-dessous.',
     doctorRetry:'Relancer',
-    doctorRetrying:'Nouvelle tentative...',
+    doctorRetrying:'Nouvelle tentative…',
     doctorRetryQueued:'Nouvelle tentative d\'analyse mise en file',
     doctorRetryFailed:'Impossible de relancer',
     doctorTitle:'Docteur de bibliothèque',
-    doctorScanning:'Analyse de votre bibliothèque en cours...',
-    doctorClean:'Tout est bon - {n} pistes analysées, aucune discordance titre/audio trouvee.',
+    doctorScanning:'Analyse de votre bibliothèque en cours…',
+    doctorClean:'Tout est bon - {n} pistes analysées, aucune discordance titre/audio trouvée.',
     doctorOriginal:'L\'audio appartient à',
     doctorSuspects:'Ces entrées partagent le même audio sous un autre nom',
-    doctorSameAudio:'Meme audio, titre différent - probablement corrompu',
+    doctorSameAudio:'Même audio, titre différent - probablement corrompu',
     doctorRedl:'Re-télécharger',
     doctorNoUrl:'Aucune URL source enregistrée',
     doctorFixed:'Réparé',
@@ -12033,7 +12565,28 @@ const T = {
     closeWord:'Fermer',
     ctxOpenAnalyze:'Ouvrir dans Analyse',
     ctxSendStems:'Envoyer au séparateur de pistes',
-    ctxSendTranscribe:'Envoyer a la transcription',
+    ctxSendTranscribe:'Envoyer à la transcription',
+    ctxSendConvert:'Envoyer vers Convertir',
+    ctxBuyBeat:'Acheter cette prod',
+    ctxAboutProducer:'À propos du beatmaker',
+    buyLooking:'Recherche du lien d\'achat…',
+    buyNone:'Pas de lien d\'achat dans la description de la vidéo',
+    buyLookupFailed:'Impossible de lire la description de la vidéo',
+    aboutTitle:'À propos du beatmaker',
+    aboutFrom:'Liens trouvés dans la description de',
+    aboutBuy:'Acheter cette prod',
+    aboutNoLinks:'Aucun lien dans la description de la vidéo.',
+    aboutNote:'Ces liens viennent de la description de la vidéo - vérifiez qu\'ils appartiennent bien au beatmaker avant d\'acheter.',
+    aboutCopyCredit:'Copier le crédit',
+    aboutCredited:'Crédit copié',
+    aboutCopyEmail:'Copier l\'e-mail',
+    aboutOpenVideo:'Ouvrir la vidéo',
+    aboutClose:'Fermer',
+    sendNoFile:'Ce morceau n\'a pas de fichier sur le disque',
+    sendLoading:'Chargement du morceau…',
+    sendFailed:'Impossible de charger le morceau',
+    sendFileMissing:'Le fichier de ce morceau est introuvable - il a peut-être été déplacé ou supprimé',
+    copied:'Copié',
     ctxFavorite:'Ajouter aux favoris',
     ctxUnfavorite:'Retirer des favoris',
     ctxCopyTitle:'Copier le titre',
@@ -12044,13 +12597,13 @@ const T = {
     copyFailed:'Impossible de copier dans le presse-papiers',
     folderMissing:'Ce dossier n\'existe plus - le fichier a peut-être été déplacé',
     transReady:'Prêt',
-    transStartBtn:'Demarrer la transcription',
+    transStartBtn:'Démarrer la transcription',
     spTagged:'Etiquete',
-    transPhaseLoading:'Chargement du modèle {model}...',
-    transPhaseListening:'Detection des segments de parole...',
-    transPhaseDecoding:'Decodage par exploration (5 candidats)...',
-    transPhaseAligning:'Alignement précis des mots...',
-    transPhaseAlmost:'Presque terminé - finalisation...',
+    transPhaseLoading:'Chargement du modèle {model}…',
+    transPhaseListening:'Détection des segments de parole…',
+    transPhaseDecoding:'Décodage par exploration (5 candidats)…',
+    transPhaseAligning:'Alignement précis des mots…',
+    transPhaseAlmost:'Presque terminé - finalisation…',
     transEstShort:'un instant',
     transEstMin:'~{n} min',
     transComplete:'Transcription terminée en {time}',
@@ -12063,8 +12616,8 @@ const T = {
     clearWord:'Effacer',
     settingsSec_general:'Général',
     settingsSec_generalDesc:'Langue et emplacement de la bibliothèque',
-    settingsSec_library:'Bibliotheque',
-    settingsSec_libraryDesc:'Organisation et etiquetage des pistes',
+    settingsSec_library:'Bibliothèque',
+    settingsSec_libraryDesc:'Organisation et étiquetage des pistes',
     settingsSec_maintenance:'Maintenance',
     settingsSec_maintenanceDesc:'Nettoyage du stockage et réparation',
     settingsSec_performance:'Performance',
@@ -12077,8 +12630,8 @@ const T = {
     settingsSec_extensionDesc:'Compagnon Chrome / Edge / Brave',
     settingsSec_diagnostics:'Diagnostics',
     settingsSec_diagnosticsDesc:'Vérifications de chemins et journaux',
-    settingsSec_about:'A propos',
-    settingsSec_aboutDesc:'Version et credits',
+    settingsSec_about:'À propos',
+    settingsSec_aboutDesc:'Version et crédits',
 
     // ── Bouton Supprimer par ligne (mode selection uniquement) ──
     histRemove:'Supprimer',
@@ -12086,9 +12639,9 @@ const T = {
     // ── bouton fenetre de mise a jour ──
 
     // ── acceleration materielle ──
-    hwAccelName:'Acceleration matérielle',
+    hwAccelName:'Accélération matérielle',
     hwAccelDesc:"Utilise le GPU pour le rendu, les animations et les canvas de l'analyseur. Recommandé ACTIVÉ pour la plupart des utilisateurs. Désactivez uniquement si vous voyez des artefacts graphiques, des flashs blancs, ou si le ventilateur de votre ordinateur s'emballe juste en faisant défiler la page - certains GPU intégrés gèrent mal Electron. Un redémarrage de l'application est requis.",
-    hwAccelUnavailable:"Le toggle d'accélération matérielle est indisponible sur cette version",
+    hwAccelUnavailable:"L'option d'accélération matérielle est indisponible dans cette version",
     hwAccelOnNotif:'Accélération matérielle : ACTIVÉE',
     hwAccelOffNotif:'Accélération matérielle : DÉSACTIVÉE',
     hwAccelRestartTitle:'Redémarrage requis',
@@ -12100,16 +12653,16 @@ const T = {
     extLinkDesc:'Une extension Chrome qui ajoute un bouton Grab sur YouTube pour envoyer les beats directement vers Freq.Phull. Elle est incluse dans l\'app - un clic la copie dans votre dossier Téléchargements.',
     extLinkHowTo:'Comment installer',
     extHowToTitle:'Installer l\'extension de navigateur',
-    extHowToSub:'Chrome, Edge, Brave, Opera, Arc - tout navigateur base sur Chromium. Installation en 1 minute.',
+    extHowToSub:'Chrome, Edge, Brave, Opera, Arc - tout navigateur basé sur Chromium. Installation en 1 minute.',
     extHowToStep1Title:'Obtenez le dossier de l\'extension',
     extHowToStep1Desc:'Cliquez sur Obtenir l\'extension. Le dossier est copié directement dans votre dossier Téléchargements, prêt à charger - rien à décompresser. Laissez-le en place pour que l\'app puisse le tenir à jour.',
     extHowToStep1Btn:'Ouvrir les Releases',
     extDownloadBtn:'Obtenir l\'extension',
-    extDownloadProgress:'Téléchargement...',
+    extDownloadProgress:'Téléchargement…',
     extBundledLbl:'Dans cette app', extInstalledLbl:'Votre copie',
     extAutoUpdated:'Extension mise à jour',
     extRestartChrome:'Redémarrez Chrome pour appliquer.',
-    extChecking:'Vérification...',
+    extChecking:'Vérification…',
     extNotInstalled:'Aucune copie installée - utilisez d\'abord Obtenir l\'extension',
     extUpToDate:'L\'extension est à jour',
     extUpdateName:'Garder l\'extension à jour',
@@ -12124,26 +12677,26 @@ const T = {
     extHowToStep2Title:'Ouvrez votre page d\'extensions',
     extHowToStep2Desc:'Collez ceci dans la barre d\'adresse de votre navigateur et appuyez sur Entrée :',
     extHowToStep3Title:'Activez le Mode développeur',
-    extHowToStep3Desc:'Bascule en haut à droite de la page des extensions. Permet d\'installer des extensions locales ; a faire une seule fois.',
-    extHowToStep4Title:'Cliquez sur "Charger l\'extension non empaquetee"',
+    extHowToStep3Desc:'Interrupteur en haut à droite de la page des extensions. Permet d\'installer des extensions locales ; à faire une seule fois.',
+    extHowToStep4Title:'Cliquez sur « Charger l\'extension non empaquetée »',
     extHowToStep4Desc:'Le bouton apparaît une fois le Mode développeur activé. Sélectionnez le dossier décompressé à l\'étape 1 (celui qui contient manifest.json).',
-    extHowToStep5Title:'Epinglez et utilisez',
+    extHowToStep5Title:'Épinglez et utilisez',
     extHowToStep5Desc:'Cliquez sur l\'icône de pièce de puzzle dans la barre d\'outils du navigateur, puis sur l\'épingle à côté de Freq.Phull. Le panneau de l\'extension s\'ouvrira à côté de toute vidéo YouTube ; appuyez sur Grab pour l\'envoyer à l\'app.',
-    extHowToTip:'Astuce : gardez Freq.Phull desktop ouvert. L\'extension communique avec sur 127.0.0.1:47891 - les téléchargements arrivent automatiquement dans votre bibliothèque.',
+    extHowToTip:'Astuce : gardez Freq.Phull ouvert sur le PC. L\'extension communique avec lui sur 127.0.0.1:47891 - les téléchargements arrivent automatiquement dans votre bibliothèque.',
     // ── Notifications de verification au demarrage (0.2.8) ──
-    updCheckingBoot:'Vérification des mises à jour...',
+    updCheckingBoot:'Vérification des mises à jour…',
     updUpToDate:'Vous êtes à jour',
 
     // ── Reparation des metadonnees (0.2.7) ──
-    storRepairThumbs:'Reparer les miniatures manquantes',
-    storRepairScanning:'Recherche des entrées avec miniatures ou durée manquantes...',
-    storRepairNone:'Toutes les entrées ont des métadonnées complètes. Rien a réparer.',
+    storRepairThumbs:'Réparer les miniatures manquantes',
+    storRepairScanning:'Recherche des entrées avec miniatures ou durée manquantes…',
+    storRepairNone:'Toutes les entrées ont des métadonnées complètes. Rien à réparer.',
     storRepairConfirm:'{n} entrées ont des métadonnées manquantes.\n\n{twin} peuvent être corrigées instantanément en copiant depuis une entrée jumelle (YouTube original).\n{probe} seront analysées avec ffmpeg (plus lent, ~50ms chacune).\n\nContinuer ?',
     storRepairDone:'{n} entrées réparées ({twin} par jumelage, {probe} via ffprobe)',
 
     // ── Verrouillage de defilement (0.2.6) ──
     scrollLockOn:'Suivi de la piste en lecture dans Historique',
-    scrollLockOff:'Navigation libre - la piste change sans defilement',
+    scrollLockOff:'Navigation libre - la piste change sans défilement',
     scrollLockTitleOn:'Suivi actif - cliquez pour naviguer librement pendant la lecture',
     scrollLockTitleOff:'Navigation libre - cliquez pour suivre la piste en lecture',
 
@@ -12179,6 +12732,9 @@ const T = {
     watchOffNotif:'Surveillance du dossier désactivée',
     ytdlpAvail:'mise à jour disponible - cliquez pour installer',
     ytdlpUpToDate:'à jour',
+    ytdlpJsOk:'Assistant YouTube (Deno {v}) prêt',
+    ytdlpJsDownloading:'installation de l\'assistant YouTube (Deno)…',
+    ytdlpJsMissing:'Assistant YouTube (Deno) manquant - certains téléchargements YouTube peuvent échouer (403)',
     ytdlpSystem:'yt-dlp est installé au niveau système - mettez-le à jour via votre gestionnaire de paquets',
     sepqTitle:'File de séparation',
     sepqWaiting:'en attente',
@@ -12188,10 +12744,10 @@ const T = {
     sepSendSelected:'Séparer',
     simBtn:'Trouver des pistes similaires',
     simTitle:'Pistes similaires',
-    simLooking:'Comparaison des empreintes, du mood, du BPM et de la tonalité…',
+    simLooking:'Comparaison des empreintes, de l\'ambiance, du BPM et de la tonalité…',
     simNone:'Aucune piste similaire trouvée. Plus de pistes doivent être indexées ou analysées - lancez l\'indexation dans Trouver les doublons, ou analysez davantage votre bibliothèque.',
     simOpen:'Ouvrir',
-    simReason_sound:'son', simReason_mood:'mood', simReason_bpm:'BPM', simReason_key:'tonalité',
+    simReason_sound:'son', simReason_mood:'ambiance', simReason_bpm:'BPM', simReason_key:'tonalité',
 
     // ── i18n balayage lot 2 (0.1.0) ──
     backendOfflineRetry:'Moteur hors ligne - réessayez dans un instant',
@@ -12279,6 +12835,314 @@ const T = {
     btnDiagnose:'Diagnostiquer',
     logsName:'Voir les journaux',
     logsDesc:'Journaux du serveur et de l\'installation, utiles pour le débogage',
+    reportName:'Signaler un problème',
+    reportDesc:'Quelque chose ne marche pas ? Décrivez-le, et c\'est envoyé au développeur.',
+    reportBtn:'Signaler',
+    uiReadyLoading:'Prêt — chargement de l\'application…',
+    spSeedsPh:'ex. Mozzy, Luh Tyj, Sleepy Hallow',
+    spDescPh:'ex. Trap West Coast, mélodies en mineur, 808 lourdes',
+    spNamePh:'ex. Cali Trap',
+    rbVocalTrack:'Piste voix',
+    rbGrabStem:'Récupérer une piste',
+    svRoom_Cathedral:'Cathédrale',
+    svRoom_Hall:'Salle',
+    svRoom_Medium:'Moyenne',
+    svRoom_Room:'Pièce',
+    svRoom_Booth:'Cabine',
+    uiScaleColon:'Gamme :',
+    uiKeepTapping:'continuez à taper…',
+    uiFoldersGroup:'Dossiers',
+    uiDblClickAnalyze:'Double-cliquez pour ouvrir dans Analyser',
+    uiAnalyzingWord:'analyse…',
+    uiModeMajor:'majeur',
+    uiModeMinor:'mineur',
+    convFmt_alac:'ALAC (Apple sans perte)',
+    convFmt_mp4video:'Vidéo MP4 (image + audio)',
+    convFmt_mp4:'MP4 (audio AAC)',
+    convSummaryFailed:'{n} en échec',
+    convSummary:'{ok} converti(s)',
+    convFailedMsg:'Échec de la conversion',
+    convQueued:'En attente',
+    convFailed:'Échec',
+    convDoneShow:'Terminé · afficher',
+    convNDone:'{n} terminé(s)',
+    convNoteLossless:'Sans perte : convertir un fichier compressé (MP3, AAC…) dans ce format garde sa qualité sans l\'améliorer.',
+    convNoteOgg:'Le Vorbis est avec perte et basé sur la qualité ; le débit est approximatif.',
+    convNoteMp4:'MP4 audio seul (AAC). L\'AAC est avec perte : convertir un fichier compressé à un débit plus élevé ne rend pas la qualité perdue.',
+    convNoteAac:'L\'AAC est avec perte : convertir un fichier compressé à un débit plus élevé ne rend pas la qualité perdue.',
+    convNoteMp3:'Le MP3 est avec perte : convertir un fichier compressé à un débit plus élevé ne rend pas la qualité perdue.',
+    convNoteOpus:'L\'Opus est toujours encodé à 48 kHz.',
+    convBits:'{n} bits',
+    convFloat32:'32 bits flottant',
+    convBitDepth:'Résolution',
+    convSomeSkipped:'Certains fichiers n\'ont pas pu être ajoutés (pas de chemin sur le disque).',
+    tInstallerFailed:'Impossible de lancer l\'installeur',
+    tUpdError:'Erreur de mise à jour',
+    tUpdDlFailed:'Échec du téléchargement de la mise à jour',
+    tRepairFailed:'Échec de la réparation',
+    tRefreshFailed:'Échec de l\'actualisation',
+    tLogsFailed:'Impossible de récupérer les journaux',
+    tDiagFailed:'Échec du diagnostic',
+    tBackendUnreachable:'Moteur injoignable',
+    tPreviewFailed:'Échec de l\'aperçu',
+    tPreviewFailedOpen:'L\'aperçu a échoué — ouvrez le dossier pour l\'écouter dans votre lecteur',
+    tMasteredWith:'Masterisé avec',
+    tPickRefFirst:'Choisissez d\'abord un morceau de référence',
+    tNoMasterSource:'Aucune piste à masteriser',
+    tCantReadDropped:'Impossible de lire le chemin du fichier déposé',
+    tCantReadRef:'Impossible de lire le chemin de la référence',
+    tCantReadPath:'Impossible de lire le chemin du fichier',
+    tLoadTrackFirst:'Chargez d\'abord une piste',
+    tFileNotOnDisk:'Chargement impossible : fichier introuvable sur le disque',
+    tActionFailed:'L\'action a échoué',
+    tBackfillDone:'Indexation terminée — {n} pistes indexées',
+    tBackfillStarted:'Indexation des empreintes lancée — {n} pistes en file',
+    tCouldNotSave:'Enregistrement impossible',
+    tVerifyFailed:'Échec de la vérification',
+    tCreateFolderFirst:'Créez d\'abord un dossier Stockpile',
+    tLoadFoldersFailed:'Impossible de charger les dossiers',
+    tAllAlreadyIn:'Toutes les pistes sélectionnées étaient déjà dans',
+    tCantRemoveDl:'Impossible de retirer un élément en cours de téléchargement',
+    tCouldNotLoad:'Chargement impossible',
+    tAlreadyDlQueue:'Déjà téléchargé — voir la file',
+    navConvert:'Convertir',
+    navSlowverb:'Slowed + Reverb',
+    uiSkipMain:'Aller au contenu principal',
+    uiDiagLog:'Journal de diagnostic',
+    uiLogFile:'Fichier journal :',
+    uiBackTitle:'Retour (Ctrl+Alt+←)',
+    uiBack:'Retour',
+    uiForwardTitle:'Suivant (Ctrl+Alt+→)',
+    uiForward:'Suivant',
+    uiMinimize:'Réduire la fenêtre',
+    uiMaximize:'Agrandir la fenêtre',
+    uiCloseWindow:'Fermer la fenêtre',
+    uiWorkspace:'Espace de travail',
+    uiArtistTools:'Outils d\'artiste',
+    uiBackToTop:'Retour en haut',
+    uiPlayPause:'Lecture / pause',
+    uiIntegrated:'Intégrée',
+    uiShortTerm:'Court terme',
+    uiMomentary:'Momentanée',
+    uiDynRange:'Plage dyn.',
+    uiLiveSpectrum:'ANALYSEUR DE SPECTRE EN DIRECT',
+    uiLiveWhilePlaying:'En direct pendant la lecture',
+    uiKeyLbl:'Tonalité',
+    uiDuration:'Durée',
+    uiSeconds:'Secondes',
+    uiChordProg:'Progressions d\'accords',
+    uiAnalyzeFirst:'Analysez d\'abord une piste',
+    uiCompatKeys:'Tonalités compatibles — Camelot',
+    uiClosestScale:'Gamme la plus proche',
+    uiPitchPreview:'Aperçu de la transposition',
+    uiTrackNotes:'Notes de la piste',
+    uiNotesPh:'Idées de paroles, structure, notes de voix…',
+    uiClearSource:'Retirer le fichier source',
+    uiSplitLead:'Séparer la voix lead des chœurs / samples',
+    uiBestEffort:'— au mieux',
+    uiSplitLeadDesc:'Ajoute une passe qui sépare le stem de voix en « lead_vocal » (voix principale) et « back_vocal » (chœurs + ad-libs + samples). Ajoute ~30-60 s sur CPU. La qualité dépend du morceau : parfaite sur de la pop/R&B propre, moins fiable sur du rap dense.',
+    uiEnsemble:'Ensemble — meilleurs piano / guitare / autres',
+    uiQualityBonus:'— bonus qualité',
+    uiEnsembleDesc:'Lance un second modèle d\'étape 2 et fait la moyenne sur les stems harmoniques. Gagne 0,3-0,8 dB de SDR et réduit les artefacts propres à un modèle (fuite du kick, attaques étalées). Ajoute ~30 % à la durée de l\'étape 2. Nécessite la qualité « Haute » ou « Ultra » - ignoré en « Rapide ».',
+    uiVocalEnsemble:'Ensemble voix — voix plus propres',
+    uiVocalBonus:'— bonus qualité voix',
+    uiVocalEnsembleDesc:'Lance un modèle d\'isolation vocale supplémentaire (architecture différente) et fait la moyenne avec le principal. Compense les faiblesses de chacun (sifflantes de BS-Roformer, souffles adoucis de MDX-Net). Gagne 0,3-0,6 dB de SDR sur la voix. Coût : environ deux fois la durée de l\'étape 1.',
+    uiDereverb:'Retirer la réverb de la voix',
+    uiDryVocal:'— voix sèche pour sampler',
+    uiDereverbDesc:'Retire la queue de réverb et l\'écho court du stem de voix isolé, et remplace la voix réverbérée par une version sèche. S\'applique à « lead_vocal » si la séparation lead est activée, sinon au stem « vocals ». Ajoute ~20-40 s sur CPU.',
+    uiQualityAdvanced:'Qualité avancée',
+    uiBalanced:'Équilibré',
+    uiFullness:'Restauration du corps',
+    uiFullSubtle:'Subtil — amélioration à peine perceptible',
+    uiFullBalanced:'Équilibré — le bon réglage par défaut',
+    uiFullAggressive:'Agressif — pour les stems très maigres',
+    uiPerPass:'Réglages par passe (remplacent le préréglage)',
+    uiSustain:'Reconstruction du sustain',
+    uiSustainDesc:'Reconstruit les fins de notes coupées (piano, guitare, autres). 0 = désactivé, 1× = équilibré, 2× = agressif.',
+    uiDucking:'Compensation des creux',
+    uiDuckingDesc:'Gain max pour les moments où un stem passe sous le mix d\'origine. 0 dB = désactivé, +4 dB = équilibré, +8 dB = agressif.',
+    uiTransient:'Régularité des attaques',
+    uiTransientDesc:'Égalise le niveau des attaques sur tout le morceau. 0 dB = désactivé, ±3 dB = équilibré, ±8 dB = agressif.',
+    uiResetOverrides:'Revenir au préréglage',
+    uiSeparating:'Séparation…',
+    uiVocalIsolation:'Isolation de la voix',
+    uiEditStems:'Modifier les stems sur la timeline',
+    uiOpenDaw:'Ouvrir le mini-DAW',
+    uiCloseResults:'Fermer les résultats',
+    uiMaster:'Mastering',
+    uiRuleBased:'— par règles, sans IA',
+    uiMasterLoud:'Normaliser le volume — viser −14 LUFS',
+    uiMasterBright:'Brillant — ajoute de l\'air (+2 dB > 6 kHz)',
+    uiMasterWarm:'Chaud — ajoute du corps (+2 dB < 250 Hz)',
+    uiMasterRef:'Référence — imiter un morceau que vous aimez',
+    uiApply:'Appliquer',
+    uiDropRef:'Déposez un morceau de référence ou cliquez pour choisir',
+    uiRemoveRef:'Retirer la référence',
+    uiMatchStrength:'Intensité',
+    uiStarting:'Démarrage…',
+    uiTransDrop:'Déposez une voix ou un fichier audio',
+    uiTransDropSub:'Marche le mieux sur des pistes voix seules',
+    uiModelTiny:'Tiny — le plus rapide',
+    uiModelBase:'Base — recommandé',
+    uiModelSmall:'Small',
+    uiModelMedium:'Medium — le meilleur',
+    uiAutoDetect:'Détection auto',
+    uiLangBi:'Bilingue (FR + EN)',
+    uiLangPatois:'Patois jamaïcain (+ EN)',
+    uiLangIgbo:'Igbo (+ EN)',
+    uiLangEn:'Anglais',
+    uiLangFr:'Français',
+    uiLangEs:'Espagnol',
+    uiLangEsEn:'Espagnol (+ EN)',
+    uiLangPt:'Portugais',
+    uiLangPtEn:'Portugais (+ EN)',
+    uiLangYoEn:'Yoruba (+ EN)',
+    uiLangSwEn:'Swahili (+ EN)',
+    uiLangHaEn:'Haoussa (+ EN)',
+    uiLangHa:'Haoussa',
+    uiTransIdle:'Déposez un fichier audio ci-dessus pour commencer',
+    uiTranscript:'Transcription',
+    uiTranscriptPh:'La transcription apparaît ici…',
+    uiRunsLocally:'Tout se passe sur votre PC — aucun audio ni texte n\'en sort.',
+    svSub:'Ralentissez, accélérez, noyez dans la réverb - chaque changement s\'entend en direct',
+    uiTrack:'Piste',
+    uiNothingLoaded:'Rien de chargé',
+    uiPresets:'Préréglages',
+    uiSpeed:'Vitesse',
+    uiReverb:'Réverb',
+    uiReverbHint:'Quelle part de la pièce on entend',
+    uiRoomSize:'Taille de la pièce',
+    uiMedium:'Moyenne',
+    uiRoomHint:'D\'une petite cabine à une cathédrale',
+    uiBass:'Basses',
+    uiBassHint:'Remonte tout ce qui est sous 120 Hz',
+    uiKeepPitch:'Garder la hauteur d\'origine en changeant la vitesse',
+    uiExportFormat:'Format d\'export',
+    uiFmtMaster:'master',
+    uiFmtCd:'CD / streaming',
+    uiFmtLossless:'sans perte, plus léger',
+    uiFmtRef:'copie de référence',
+    uiPlayOrPause:'Lecture ou pause',
+    uiMute:'Couper / rétablir le son',
+    uiSearchBeats:'Chercher dans vos beats…',
+    uiSearchBeatsAria:'Chercher dans vos beats',
+    uiScaleNotesAria:'Notes de la gamme - cliquez pour inclure ou exclure une note de la correction',
+    uiRvMixAria:'Mélange de la réverb',
+    uiRvDecayAria:'Décroissance de la réverb',
+    uiRvDampAria:'Amortissement de la réverb',
+    uiRvPreAria:'Pré-délai de la réverb',
+    uiVocalVol:'Volume de la voix',
+    uiBeatVol:'Volume du beat',
+    uiZoomOut:'Dézoomer',
+    uiZoomIn:'Zoomer',
+    uiScrollTimeline:'Faire défiler la timeline',
+    uiTransport:'Commandes de lecture',
+    uiPickBeatTitle:'Choisir un beat précis',
+    uiAutotuneSettings:'Réglages de l\'autotune',
+    uiToolsSub:'Métronome, tap tempo et référence des gammes',
+    convSub:'Convertissez vos fichiers audio en MP3, WAV, FLAC, AIFF, M4A, OGG et plus — par lots, ou en vidéo MP4 avec une image',
+    convDropTitle:'Déposez des fichiers audio ou vidéo ici',
+    convDropSub:'ou cliquez pour choisir · MP3, WAV, FLAC, M4A, AAC, OGG, OPUS, AIFF, WMA · MP4, MOV, MKV, WEBM (le son est extrait)',
+    convOutput:'Sortie',
+    convBitrate:'Débit',
+    convSampleRate:'Fréquence d\'échantillonnage',
+    convKeep:'Garder l\'original',
+    convChannels:'Canaux',
+    convStereo:'Stéréo',
+    convSaveTo:'Enregistrer dans :',
+    convDestDefault:'Un dossier « Converted » à côté de chaque original',
+    convChooseFolder:'Choisir un dossier…',
+    convUseConverted:'Utiliser les dossiers « Converted »',
+    convFiles:'Fichiers',
+    convClearList:'Vider la liste',
+    convGo:'Convertir',
+    convNoFiles:'Aucun fichier pour l\'instant.',
+    uiClearSearchTitle:'Effacer la recherche (Échap)',
+    uiClearSearch:'Effacer la recherche',
+    uiFilterFolder:'Filtrer par dossier',
+    uiAllTracks:'Toutes les pistes',
+    uiFavorites:'Favoris',
+    uiBatchTagTitle:'Étiqueter toutes les pistes sélectionnées dans un dossier Stockpile',
+    uiBatchTag:'Étiqueter…',
+    uiUnfavorite:'Retirer des favoris',
+    uiReanalyze:'Réanalyser',
+    uiReanalyzeTitle:'Relancer l\'analyse BPM/tonalité sur la sélection',
+    uiBatchSepTitle:'Mettre la sélection en file pour la séparation de stems',
+    uiBatchConvTitle:'Convertir la sélection dans un autre format',
+    uiBatchStockTitle:'Déplacer la sélection vers le dossier Stockpile',
+    uiBatchDelTitle:'Supprimer de l\'historique (les fichiers restent sur le disque)',
+    uiBatchDelAria:'Supprimer de l\'historique',
+    uiClickToChange:'Cliquez pour changer',
+    uiMoving:'Déplacement…',
+    uiAutoOrgTitle:'Suggérer un dossier pour chaque piste non étiquetée, selon l\'artiste, l\'ambiance, le BPM et la tonalité',
+    uiNoTracksYet:'Aucune piste pour l\'instant',
+    uiSetupFirstDl:'Premier téléchargement',
+    uiSetupSize:'~1,2 Go au total · une seule fois · tout en local, pas de cloud',
+    uiSetupTime:'Durée',
+    uiSetupTimeVal:'5 à 15 minutes selon la connexion',
+    uiSetupWhat:'Ce qui est installé',
+    uiSetupSkipLater:'Passer — je le ferai plus tard',
+    uiSetupRerun:'Vous pouvez relancer l\'installation à tout moment depuis Paramètres → Moteurs IA.',
+    uiSetupOverall:'Global',
+    uiSetupProgressNote:'Téléchargement des moteurs et des modèles IA. L\'installation continue même si vous fermez cette fenêtre — vous pouvez la rouvrir depuis les Paramètres.',
+    uiSetupShowLog:'Afficher le journal de diagnostic (pour le support)',
+    uiSetupReady:'Le séparateur de stems et la transcription sont prêts.',
+    uiShuffle:'Lecture aléatoire',
+    uiPrevTitle:'Piste précédente (←)',
+    uiPrev:'Piste précédente',
+    uiPlayPauseTitle:'Lecture / pause (Espace)',
+    uiNextTitle:'Piste suivante (→)',
+    uiNext:'Piste suivante',
+    uiLoop:'Boucle',
+    uiToggleFav:'Ajouter / retirer des favoris',
+    uiNotepad:'Bloc-notes',
+    uiNotepadPh:'Notez quelque chose sur ce morceau…',
+    uiSavedAuto:'Enregistré automatiquement',
+    uiScrollFollow:'Suivre la piste en lecture',
+    uiUpdateAvail:'Mise à jour disponible',
+    uiInstall:'Installer',
+    uiLater:'Plus tard',
+    convPicChoose:'Choisir une image',
+    convPicChange:'cliquez sur l\'image pour la changer',
+    convPicNeeded:'Choisissez d\'abord une image pour la vidéo.',
+    convPicBadType:'Utilisez une image JPG, PNG, WEBP, BMP ou GIF.',
+    convVidSize:'Taille de la vidéo',
+    convSize1080:'1920×1080 (YouTube)',
+    convSize720:'1280×720 (fichier plus léger)',
+    convSizeSquare:'1080×1080 (carré)',
+    convSizeVertical:'1080×1920 (vertical : TikTok, Reels, Shorts)',
+    convVidFit:'Image',
+    convFitBlur:'Image entière, fond flouté',
+    convFitBlack:'Image entière, bandes noires',
+    convFitCrop:'Remplir le cadre (bords coupés)',
+    convVideoNote:'Une vidéo de votre image avec le morceau en son, prête à publier. Environ 12 secondes par morceau de 3 minutes en 1080p. L\'audio est en AAC (avec perte).',
+    libFoundTitle:'Votre bibliothèque a été retrouvée',
+    libFoundBody:'Freq.Phull a trouvé une copie de votre bibliothèque dans votre dossier Stockpile. Restaurez-la pour retrouver vos morceaux, dossiers, BPM/tonalités, notes et favoris.',
+    libSummary:'{tracks} morceaux · {folders} dossiers',
+    libSaved:'enregistrée le',
+    libRestore:'Restaurer',
+    libStartFresh:'Repartir de zéro',
+    libRestoring:'Restauration de votre bibliothèque…',
+    libRestored:'Bibliothèque restaurée : {tracks} morceaux, {folders} dossiers.',
+    libMissing:'{n} fichiers introuvables - l\'Historique peut les relier.',
+    libRestoreFailed:'Impossible de restaurer la bibliothèque',
+    libReplaceWarn:'Cela remplace les {n} morceaux de votre bibliothèque actuelle. Ils sont gardés dans une sauvegarde dans le dossier de données de l\'application.',
+    libRebuildTitle:'Reconstruire votre bibliothèque depuis ce dossier ?',
+    libRebuildBody:'Ce dossier contient {files} morceaux dans {folders} dossiers de style, mais pas de sauvegarde de bibliothèque (créé par une ancienne version). Freq.Phull peut les ajouter à votre bibliothèque avec leurs dossiers. Les BPM et tonalités sont réanalysés en arrière-plan.',
+    libRebuildBtn:'Reconstruire',
+    libRebuilding:'Reconstruction de votre bibliothèque…',
+    libRebuilt:'Bibliothèque reconstruite : {tracks} morceaux ajoutés, {folders} dossiers.',
+    libNothing:'Aucune sauvegarde ni fichier audio dans ce dossier.',
+    libSettingName:'Restaurer la bibliothèque',
+    libSettingDesc:'Récupérez votre bibliothèque depuis un dossier Stockpile après une réinstallation ou sur un nouveau PC. Une copie est enregistrée automatiquement dans le dossier Stockpile.',
+    libSettingBtn:'Choisir le dossier',
+    reportTitle:'Signaler un problème',
+    reportPlaceholder:'Que s\'est-il passé ? Que faisiez-vous quand ça a mal tourné ?',
+    reportIncludeLog:'Joindre la fin du journal de l\'application (aide beaucoup)',
+    reportPrivacy:'Le nom de votre ordinateur, votre nom d\'utilisateur Windows, votre adresse IP, les liens et les adresses e-mail sont retirés avant l\'envoi. Merci de ne pas écrire d\'informations personnelles.',
+    reportSend:'Envoyer',
+    reportSent:'Merci ! Rapport envoyé (#{id})',
+    reportFailed:'Impossible d\'envoyer le rapport',
     devBuild:'Version de développement',
     checking:'Vérification…',
     // ── Fenêtre Répartition du stockage ──
@@ -12369,18 +13233,18 @@ const T = {
     sepStageDone:'Terminé', sepFailed:'Échec de la séparation',
     sepStageVocal:'Voix', sepStageInst:'Instrumental',
     sepDirectLabel:'Garder les samples vocaux du beat',
-    sepDirectDesc:'Saute l\'Étape 1. Plus rapide. Les samples vocaux dans l\'instrumental (ad-libs, vocal chops) restent dans « other » au lieu d\'être fusionnés avec la voix principale.',
+    sepDirectDesc:'Saute l\'étape 1. Plus rapide. Les samples vocaux de l\'instrumental (ad-libs, vocal chops) restent dans « other » au lieu d\'être fusionnés avec la voix principale.',
     sepNoTrack:'Aucune piste chargée', sepBackendOffline:'Moteur hors ligne',
     sepReady:'Stems prêts', sepPreparing:'Préparation…',
     sepPlay:'Lecture', sepPause:'Pause', sepMute:'Muet', sepSolo:'Solo',
-    sepPlayAll:'Tout lire', sepPauseAll:'Tout mettre en pause', sepStopAll:'Stop',
+    sepPlayAll:'Tout lire', sepPauseAll:'Tout mettre en pause', sepStopAll:'Tout arrêter',
     sepMixerTitle:'Mixeur', sepVolume:'Volume', sepReset:'Réinitialiser les niveaux',
 
     // Stockpile FR
     spTitle:'Stockpile', spSub:'Organisez vos beats par style, ambiance et artiste',
-    spFolders:'Dossiers de style', spTagged:'Étiquetés', spCommitted:'Engagés', spUntaggedLbl:'Sans étiquette',
+    spFolders:'Dossiers de style', spTagged:'Étiquetés', spCommitted:'Classés', spUntaggedLbl:'Sans étiquette',
     spDestTitle:'Destination du stockpile',
-    spDestHint:'Les pistes étiquetées vont dans <code>{root}/{nom du dossier}/</code> lors de l\'engagement.',
+    spDestHint:'Les pistes étiquetées vont dans <code>{root}/{nom du dossier}/</code> lors du classement.',
     spStyleFolders:'Dossiers de style', spNewFolderBtn:'+ Nouveau dossier',
     spNoFolders:'Aucun dossier pour l\'instant.',
     spNoFoldersHint:'Créez votre premier dossier de style - Cali Trap, Detroit, Atlanta Trap, Drill, peu importe la scène.',
@@ -12480,13 +13344,13 @@ const T = {
     spSortKey:'Tonalité',
     spSearchInFolder:'Chercher dans ce dossier…',
     // Tools tab
-    toolsTitle:'Outils', metronome:'Métronome', tapBpm:'Tap BPM',
+    toolsTitle:'Outils', metronome:'Métronome', tapBpm:'Tap tempo',
     scaleRef:'Référence des gammes et accords',
     metStart:'Démarrer', metStop:'Arrêter',
     tapHint:'tapez au moins 4 fois', reset:'Réinitialiser',
     // History tab
     histTitle:'Historique', histSub:'Toutes les pistes téléchargées - BPM et tonalité enregistrés automatiquement',
-    svTitle:'Ralenti + Réverbe',
+    svTitle:'Slowed + Reverb',
     svEmptyTitle:'Chargez une piste pour commencer',
     svPickBtn:'Choisir dans la bibliothèque',
     svOpenBtn:'Ouvrir un fichier',
@@ -12495,7 +13359,7 @@ const T = {
     svConvolution:'réverbe à convolution',
     svVolumeHint:'Niveau d\'écoute seulement - la copie enregistrée garde le niveau de la piste',
     svPlay:'Lecture', svPause:'Pause',
-    svDecoding:'Décodage de l\'audio...',
+    svDecoding:'Décodage de l\'audio…',
     svNeedsWav:'Ce fichier n\'a pas pu être lu. S\'il est sur un disque inaccessible à l\'app, ajoutez-le d\'abord à votre bibliothèque.',
     svLoadFailed:'Impossible de charger cette piste',
     svNoLibrary:'Votre bibliothèque est vide - téléchargez d\'abord quelque chose',
@@ -12503,7 +13367,7 @@ const T = {
     svPickTitle:'Choisissez une piste',
     svHintTape:'Ralentir baisse aussi la hauteur, comme une cassette',
     svHintKeep:'La vitesse change, la hauteur reste',
-    svRendering:'Rendu...',
+    svRendering:'Rendu…',
     svRenderingLong:'Application des réglages à un vrai fichier. Quelques secondes.',
     svRenderFailed:'Échec du rendu',
     svSaved:'{f} enregistré - cliquez pour ouvrir le dossier',
@@ -12512,7 +13376,7 @@ const T = {
     searchTracks:'Rechercher des pistes…', select:'Sélectionner', cancel:'Annuler',
     selectAll:'Tout sélectionner', selected:'sélectionnée(s)',
     toStockpile:'<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v13H3zM3 7l3-4h12l3 4M12 3v17"/></svg> Vers le stockage', moveTo:'Déplacer vers…',
-    stockpile:'Stockage', stockpileNotSet:'Non défini - cliquez pour choisir',
+    stockpile:'Stockpile', stockpileNotSet:'Non défini - cliquez pour choisir',
     noHistory:'Aucun historique pour l\'instant - téléchargez une piste pour commencer',
     noMatch:'Aucune piste correspondante', remove:'Supprimer',
     // Settings
@@ -12520,7 +13384,7 @@ const T = {
     langLabel:'Langue', langDesc:'Choisissez la langue de l\'application',
     autoLabel:'Analyse automatique au téléchargement',
     autoDesc:'Lorsque désactivé, les téléchargements ne basculent pas vers l\'analyseur - utilisez la notification pour y accéder. Idéal pour les téléchargements en lot.',
-    stockLabel:'Dossier de stockage',
+    stockLabel:'Dossier Stockpile',
     repairLabel:'Réparer l\'historique', repairDesc:'Scanne le stockage et les téléchargements pour reconnecter les fichiers déplacés.',
     repairBtn:'Scanner maintenant', repairFixed:'fichiers reconnectés', repairOk:'Tous les fichiers sont correctement liés.',
     repairReviewTitle:'Vérifier les correspondances',
@@ -12541,7 +13405,7 @@ const T = {
     setupStage_whisper:'Modèle de transcription',
     setupStage_verify:'Vérification',
     setupStageDone:'terminé',
-    setupEstimating:'Estimation...',
+    setupEstimating:'Estimation…',
     setupTimeLeft:'Environ {t} restant',
     setupSecondsWord:'secondes',
     setupMinuteWord:'minute',
@@ -12620,8 +13484,8 @@ const T = {
     rbAtMicGeneric:'Microphone',
     rbAtMonitor:"Écoute avec l'autotune",
     rbAtBake:"Autotune sur l'enregistrement",
-    rbAtHint:"Utilisez un casque pendant l'écoute - sur haut-parleurs, le micro capte sa propre sortie surveillée et ça hurle",
-    rbAtBakeReminder:"L'écoute rend seulement l'effet audible en direct - cochez aussi \u00abAutotune sur l'enregistrement\u00bb si vous le voulez dans le fichier enregistré",
+    rbAtHint:"Utilisez un casque pendant l'écoute : sur des enceintes, le micro reprend le son et ça siffle (larsen)",
+    rbAtBakeReminder:"L'écoute rend seulement l'effet audible en direct - cochez aussi \u00ab\u00a0Autotune sur l'enregistrement\u00a0\u00bb si vous le voulez dans le fichier enregistré",
     rbAtKey:'Tonalité',
     rbAtScale:'Gamme',
     rbAtPianoTitle:'Notes',
@@ -12690,7 +13554,7 @@ function t(key) { return (T[lang] && T[lang][key]) || T.en[key] || key; }
 
 function applyLang() {
   // Nav buttons
-  const navMap = {download:'download',analyze:'analyze',transcribe:'transcribe',stems:'stems',tools:'tools',history:'history',settings:'settings',random:'navRandomBeats'};
+  const navMap = {download:'download',analyze:'analyze',transcribe:'transcribe',stems:'stems',tools:'tools',history:'history',settings:'settings',random:'navRandomBeats',slowverb:'navSlowverb',convert:'navConvert'};
   document.querySelectorAll('.nav-btn').forEach(btn => {
     const tab = btn.dataset.tab;
     if (tab && navMap[tab]) {
@@ -12710,6 +13574,8 @@ function applyLang() {
     'tab-history': ['histTitle', 'histSub'],
     'tab-settings': ['setTitle', 'setSub'],
     'tab-random': ['rbTitle', 'rbSub'],
+    'tab-convert': ['navConvert', 'convSub'],
+    'tab-slowverb': ['svTitle', 'svSub'],
   };
   for (const [id, [titleKey, subKey]] of Object.entries(headers)) {
     const pane = document.getElementById(id);
@@ -12730,6 +13596,7 @@ function applyLang() {
   else if (selBtn && selectMode) selBtn.textContent = t('cancel');
 
   // Batch bar labels
+  updateSelCount();
   const checkAll = document.querySelector('#hist-batch .hb-check span');
   if (checkAll) checkAll.textContent = t('selectAll');
   const btnStock = document.getElementById('btn-stockpile');
@@ -13004,6 +13871,13 @@ function applyLang() {
     const k = el.getAttribute('data-i18n');
     if (k) el.textContent = t(k);
   });
+  // Round 82: tooltips, screen-reader labels and placeholders too.
+  for (const [attr, target] of [['data-i18n-title', 'title'], ['data-i18n-aria', 'aria-label'], ['data-i18n-ph', 'placeholder']]) {
+    document.querySelectorAll('[' + attr + ']').forEach(el => {
+      const k = el.getAttribute(attr);
+      if (k) el.setAttribute(target, t(k));
+    });
+  }
 
   // Render settings page if visible
   renderSettings();
@@ -13075,7 +13949,7 @@ async function sendTestCrashReport() {
       );
     }
   } catch (e) {
-    showAppNotification('Could not reach backend: ' + e.message, 'err');
+    showAppNotification(t('tBackendUnreachable') + ': ' + e.message, 'err');
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = t('crashReportTestBtn'); }
   }
@@ -13096,7 +13970,7 @@ function applyEnginesStatusToUI(j) {
   const el = document.getElementById('engines-status-desc');
   if (!el) return;
   if (j.installed) {
-    el.textContent = 'Installed' + (j.info && j.info.date ? ' · ' + j.info.date : '');
+    el.textContent = t('enginesInstalled') + (j.info && j.info.date ? ' · ' + j.info.date : '');
     el.style.color = '#e8e8e8';
   } else if (j.info && j.info.python) {
     // Marker exists but invalid (stale/old format). Tell the user it needs re-setup.
@@ -13519,6 +14393,20 @@ function renderSettings() {
               </div>
               <button class="btn sm" onclick="viewLogs()">${t('logsName')}</button>
             </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('reportName')}</div>
+                <div class="setting-desc">${t('reportDesc')}</div>
+              </div>
+              <button class="btn sm" onclick="openReportProblem()">${t('reportBtn')}</button>
+            </div>
+        <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">${t('libSettingName')}</div>
+                <div class="setting-desc">${t('libSettingDesc')}</div>
+              </div>
+              <button class="btn sm" onclick="libRestoreFromSettings()">${t('libSettingBtn')}</button>
+            </div>
       </div></div>
     </div>
     <div class="settings-section" data-section="privacy">
@@ -13654,7 +14542,7 @@ async function diagnosePaths() {
     `;
     modal.style.display = 'flex';
   } catch (e) {
-    showAppNotification('Diagnose failed: ' + e.message, 'err');
+    showAppNotification(t('tDiagFailed') + ': ' + e.message, 'err');
   }
 }
 
@@ -13662,7 +14550,7 @@ function copyDiagOutput() {
   const el = document.getElementById('diag-output');
   if (!el) return;
   navigator.clipboard.writeText(el.textContent || '').then(() => {
-    showAppNotification('Copied to clipboard', 'done');
+    showAppNotification(t('copied'), 'done');
   }).catch(e => showAppNotification('' + e.message, 'err'));
 }
 
@@ -13736,7 +14624,7 @@ async function viewLogs() {
     window._logsCurrentTab = 0;
     switchLogTab(0);
   } catch (e) {
-    showAppNotification('Failed to fetch logs: ' + e.message, 'err');
+    showAppNotification(t('tLogsFailed') + ': ' + e.message, 'err');
   }
 }
 
@@ -13779,7 +14667,7 @@ async function refreshLogs() {
     window._logsData = j;
     switchLogTab(window._logsCurrentTab || 0);
   } catch (e) {
-    showAppNotification('Refresh failed: ' + e.message, 'err');
+    showAppNotification(t('tRefreshFailed') + ': ' + e.message, 'err');
   }
 }
 
@@ -13787,7 +14675,7 @@ function copyCurrentLog() {
   const out = document.getElementById('logs-output');
   if (!out) return;
   navigator.clipboard.writeText(out.textContent || '').then(() => {
-    showAppNotification('Copied to clipboard', 'done');
+    showAppNotification(t('copied'), 'done');
   }).catch(e => showAppNotification('' + e.message, 'err'));
 }
 
@@ -13813,7 +14701,7 @@ async function repairHistory(silent) {
       // second render - that's the visible "jiggle" on app load.
       await loadHistory();
     } else if (!silent && data.broken === 0) {
-      showAppNotification('All tracks are already linked', 'info');
+      showAppNotification(t('repairOk'), 'info');
     }
 
     // If there are review items, surface them in a modal
@@ -13838,7 +14726,7 @@ async function repairHistory(silent) {
       }
     }
   } catch (e) {
-    if (!silent) showAppNotification('Repair failed: ' + e.message, 'err');
+    if (!silent) showAppNotification(t('tRepairFailed') + ': ' + e.message, 'err');
   }
 }
 
@@ -14044,12 +14932,12 @@ async function manualCheckForUpdates() {
 // keeping it out of the static HTML keeps app.js leaner.
 async function openStorageBreakdown() {
   if (!backendOnline) {
-    showAppNotification('Backend offline', 'err');
+    showAppNotification(t('backendOffline'), 'err');
     return;
   }
   const root = (typeof stockpileFolder !== 'undefined' && stockpileFolder) ? stockpileFolder : '';
   if (!root) {
-    showAppNotification('Set a stockpile folder in Settings first', 'warn');
+    showAppNotification(t('setStockpileFirst'), 'warn');
     return;
   }
 
@@ -14563,6 +15451,9 @@ async function renderStockpileUntagged() {
   for (const track of slice) {
     const row = document.createElement('div');
     row.className = 'sp-untagged-row';
+    // Same right-click menu as History (Round 82): send to Stems,
+    // Transcribe or Convert, copy, show in folder.
+    row.addEventListener('contextmenu', (e) => showHistoryContextMenu(e, track.id));
     // These rows carried no artwork at all, so a list of beats read as a
     // wall of text - the one place artwork helps most, since the titles
     // are near-identical.
@@ -14573,7 +15464,7 @@ async function renderStockpileUntagged() {
       ${utThumb}
       <div class="sp-ut-textcol">
         <div class="sp-ut-title">${escapeHtml(track.title || track.file_path || '?')}</div>
-        <div class="sp-ut-meta">${track.bpm ? `${Math.round(track.bpm)} BPM` : ''}${track.key_note ? ` · ${escapeHtml(track.key_note)} ${escapeHtml(track.key_mode || '')}` : ''}</div>
+        <div class="sp-ut-meta">${track.bpm ? `${Math.round(track.bpm)} BPM` : ''}${track.key_note ? ` · ${escapeHtml(track.key_note)} ${escapeHtml(modeLabel(track.key_mode))}` : ''}</div>
       </div>
       <div class="sp-ut-suggestions" id="sp-sug-${track.id}">
         <span style="font-size:10px;color:var(--hint)">${t('spLoadingSugs')}</span>
@@ -14821,6 +15712,21 @@ async function openFolderView(folder) {
   }
 }
 
+// Round 82: reload the open folder's tracks without touching its search box
+// or sort (openFolderView resets both). The tag-changed handler has always
+// called this name behind a `typeof` guard, but it was never defined, so an
+// open folder view never refreshed after a tag change.
+async function loadFolderTracks(folderId) {
+  if (!spFvFolder || spFvFolder.id !== folderId) return;
+  try {
+    const r = await fetch(API + '/stockpile/folders/' + folderId + '/tracks');
+    const j = await r.json();
+    if (!spFvFolder || spFvFolder.id !== folderId) return;   // closed meanwhile
+    spFvTracks = j.tracks || [];
+    renderFolderTracks();
+  } catch (e) { /* keep showing what's there */ }
+}
+
 function closeFolderView() {
   // Stop any playing preview
   folderViewStopPlay();
@@ -14890,7 +15796,7 @@ function renderFolderTracks() {
   list.innerHTML = visible.map(tr => {
     const meta = [
       tr.bpm ? `<span class="badge">${Math.round(tr.bpm)} BPM</span>` : '',
-      tr.key_note ? `<span class="badge">${escapeHtml(tr.key_note)} ${escapeHtml(tr.key_mode || '')}</span>` : '',
+      tr.key_note ? `<span class="badge">${escapeHtml(tr.key_note)} ${escapeHtml(modeLabel(tr.key_mode))}</span>` : '',
       tr.duration ? `<span class="badge">${fmtSec(tr.duration)}</span>` : '',
       tr.mood_label ? `<span class="badge">${escapeHtml(tr.mood_label)}</span>` : '',
       tr.stockpile_committed ? `<span class="badge committed">${t('spCommitted') || 'Committed'}</span>` : '',
@@ -14907,7 +15813,7 @@ function renderFolderTracks() {
     // chord progression, LUFS, dynamic range, etc.). The title is the
     // primary surface so it gets a hover affordance.
     return `
-      <div class="sp-fv-row" data-id="${tr.id}" draggable="true" ondragstart="dragStockpileRowToExternal(event, ${tr.id})">
+      <div class="sp-fv-row" data-id="${tr.id}" draggable="true" ondragstart="dragStockpileRowToExternal(event, ${tr.id})" oncontextmenu="showHistoryContextMenu(event, ${tr.id})">
         <button class="sp-fv-play ${isPlaying}" tabindex="-1" onmousedown="this.blur()" onclick="folderViewPlayTrack(${tr.id});this.blur()" title="${t('spPreview') || 'Preview'}">${playGlyph}</button>
         ${thumb}
         <div class="sp-fv-info sp-fv-info-clickable" onclick="folderViewOpenAnalysis(${tr.id})" title="${t('spOpenAnalysis') || 'Open full analysis'}">
@@ -15215,7 +16121,7 @@ function showMiniPlayerForTrack(track) {
   if (subEl) {
     const sub = [
       track.bpm ? Math.round(track.bpm) + ' BPM' : null,
-      (track.key_note ? (track.key_note + ' ' + (track.key_mode || '')).trim() : null),
+      (track.key_note ? (track.key_note + ' ' + modeLabel(track.key_mode)).trim() : null),
     ].filter(Boolean).join(' · ');
     subEl.textContent = sub;
     subEl.style.cursor = 'pointer';
@@ -15355,6 +16261,8 @@ function _scrollActiveRowIntoView(explicitId) {
     else if (globalPlayer && globalPlayer.track && globalPlayer.track.id) id = globalPlayer.track.id;
   }
   if (!id) return;
+  // Round 82: the list is paged; render down to this track if needed.
+  histEnsureRowRendered(id);
   const row = document.querySelector('.hist-row[data-id="' + id + '"]');
   if (!row) return;
   const container = document.getElementById('main');
@@ -15378,11 +16286,14 @@ async function globalPlayerPrev() {
   // Mirror mode: walk the Analyzer playlist (set by playFromHistory). The
   // Analyzer remains the audio source - we just swap the loaded track.
   if (analyzeMirrorActive) {
-    if (!analyzePlaylist || !analyzePlaylist.tracks || analyzePlaylist.index <= 0) {
+    const shuffledBack = (shuffleMode && analyzePlaylist && analyzePlaylist.tracks)
+      ? shuffleBackPop(shuffleBack, analyzePlaylist.tracks, analyzePlaylist.index) : null;
+    if (!analyzePlaylist || !analyzePlaylist.tracks ||
+        (shuffledBack == null ? analyzePlaylist.index <= 0 : shuffledBack < 0)) {
       showAppNotification(t('miniNoPrev') || 'No previous track', 'info');
       return;
     }
-    const prevIdx = analyzePlaylist.index - 1;
+    const prevIdx = shuffledBack == null ? analyzePlaylist.index - 1 : shuffledBack;
     const prevTrack = analyzePlaylist.tracks[prevIdx];
     analyzePlaylist.index = prevIdx;
     // Force handoff resume so Analyzer keeps playing the new track
@@ -15399,6 +16310,13 @@ async function globalPlayerPrev() {
     return;
   }
   const ctx = globalPlayer.context;
+  if (shuffleMode && ctx && ctx.tracks) {
+    const sIdx = shuffleBackPop(shuffleBack, ctx.tracks, ctx.index);
+    if (sIdx < 0) { showAppNotification(t('miniNoPrev') || 'No previous track', 'info'); return; }
+    playTrack(ctx.tracks[sIdx], { ...ctx, index: sIdx });
+    _scrollActiveRowIntoView(ctx.tracks[sIdx] && ctx.tracks[sIdx].id);
+    return;
+  }
   if (!ctx || !ctx.tracks || ctx.index <= 0) return;
   const prevIdx = ctx.index - 1;
   const prevTrack = ctx.tracks[prevIdx];
@@ -15419,8 +16337,9 @@ async function globalPlayerNext() {
     let nextIdx;
     if (shuffleMode && analyzePlaylist.tracks.length > 1) {
       // Random pick - avoid the current track so we always move
-      do { nextIdx = Math.floor(Math.random() * analyzePlaylist.tracks.length); }
-      while (nextIdx === analyzePlaylist.index);
+      nextIdx = shufflePickNext(analyzePlaylist.tracks.length, analyzePlaylist.index, Math.random);
+      const cur = analyzePlaylist.tracks[analyzePlaylist.index];
+      shuffleBackPush(shuffleBack, cur && cur.id);
     } else {
       nextIdx = analyzePlaylist.index + 1;
       if (nextIdx >= analyzePlaylist.tracks.length) {
@@ -15448,6 +16367,13 @@ async function globalPlayerNext() {
     return;
   }
   const ctx = globalPlayer.context;
+  if (shuffleMode && ctx && ctx.tracks && ctx.tracks.length > 1) {
+    const sIdx = shufflePickNext(ctx.tracks.length, ctx.index, Math.random);
+    shuffleBackPush(shuffleBack, ctx.tracks[ctx.index] && ctx.tracks[ctx.index].id);
+    playTrack(ctx.tracks[sIdx], { ...ctx, index: sIdx });
+    _scrollActiveRowIntoView(ctx.tracks[sIdx] && ctx.tracks[sIdx].id);
+    return;
+  }
   if (!ctx || !ctx.tracks || ctx.index >= ctx.tracks.length - 1) return;
   const nextIdx = ctx.index + 1;
   const nextTrack = ctx.tracks[nextIdx];
@@ -15469,6 +16395,37 @@ async function globalPlayerNext() {
 let shuffleMode = (localStorage.getItem('hk_shuffle') === '1');
 let loopMode = localStorage.getItem('hk_loop') || 'none';
 
+// Round 82 ("when using shuffle going to the last track should go back to
+// the last track sent u to, not to a new track"): with shuffle on, ← used to
+// step to index-1 of the list, which after a random jump is just another
+// unrelated track. Every shuffled move forward now remembers the track it
+// left; ← walks back through those, → stays random.
+// ─── BEGIN SHUFFLE HISTORY CORE
+const SHUFFLE_BACK_MAX = 200;
+function shuffleBackPush(stack, id) {
+  if (id == null || stack[stack.length - 1] === id) return;
+  stack.push(id);
+  if (stack.length > SHUFFLE_BACK_MAX) stack.splice(0, stack.length - SHUFFLE_BACK_MAX);
+}
+// Index (in tracks) of the last track shuffle left, or -1. Skips ids that are
+// no longer in the list (deleted, or a different playlist was started).
+function shuffleBackPop(stack, tracks, currentIdx) {
+  while (stack.length) {
+    const id = stack.pop();
+    const i = tracks.findIndex(tr => tr && tr.id === id);
+    if (i >= 0 && i !== currentIdx) return i;
+  }
+  return -1;
+}
+function shufflePickNext(len, currentIdx, rand) {
+  if (len < 2) return 0;
+  // One draw, never the current track (no retry loop)
+  const r = Math.floor(rand() * (len - 1));
+  return r >= currentIdx ? r + 1 : r;
+}
+// ─── END SHUFFLE HISTORY CORE
+let shuffleBack = [];
+
 function applyModeButtonStates() {
   const shuf = document.getElementById('sp-fv-mini-shuffle');
   if (shuf) shuf.classList.toggle('on', shuffleMode);
@@ -15486,6 +16443,7 @@ function applyModeButtonStates() {
 
 function toggleShuffleMode() {
   shuffleMode = !shuffleMode;
+  shuffleBack = [];
   localStorage.setItem('hk_shuffle', shuffleMode ? '1' : '0');
   applyModeButtonStates();
   showAppNotification(shuffleMode ? '<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><path d="m4 20 17-17M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg> ' + (t('miniShuffleOn') || 'Shuffle on') : (t('miniShuffleOff') || 'Shuffle off'), 'info');
@@ -15519,9 +16477,8 @@ function pickNextTrackAfterEnd() {
   if (!ctx || !ctx.tracks || ctx.tracks.length === 0) return false;
   let nextIdx;
   if (shuffleMode && ctx.tracks.length > 1) {
-    // Random pick that isn't the current index
-    do { nextIdx = Math.floor(Math.random() * ctx.tracks.length); }
-    while (nextIdx === ctx.index);
+    nextIdx = shufflePickNext(ctx.tracks.length, ctx.index, Math.random);
+    shuffleBackPush(shuffleBack, ctx.tracks[ctx.index] && ctx.tracks[ctx.index].id);
   } else {
     nextIdx = ctx.index + 1;
     if (nextIdx >= ctx.tracks.length) {
@@ -16188,7 +17145,7 @@ const RB_AT_SCALES = ['chromatic', 'major', 'minor', 'harmonicMinor', 'melodicMi
 // report can be matched to the exact build unambiguously, no more
 // "it's from the new build" back-and-forth with no way to verify it.
 // Bump this string every time a build is delivered.
-const RB_BUILD_ID = 'r81';
+const RB_BUILD_ID = 'r82';
 try { rbLog('Topliner build: ' + RB_BUILD_ID); } catch (e) {}
 const NOTE_NAMES_RB = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 // Mirrors SCALE_INTERVALS in renderer/autotune-worklet.js exactly (that
@@ -16479,7 +17436,7 @@ function rbPickerRenderList() {
     const isPlaying = !!(globalPlayer.track && globalPlayer.track.id === h.id);
     const subParts = [];
     if (h.bpm) subParts.push(Math.round(h.bpm) + ' BPM');
-    if (h.key_note) subParts.push((h.key_note + ' ' + (h.key_mode || '')).trim());
+    if (h.key_note) subParts.push((h.key_note + ' ' + modeLabel(h.key_mode)).trim());
     const thumb = h.thumbnail
       ? '<img src="' + String(h.thumbnail).replace(/"/g, '&quot;') + '" alt=""/>'
       : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>';
@@ -16569,7 +17526,7 @@ function rbRenderTrack(track, opts) {
   if (badges) {
     const parts = [];
     if (track.bpm) parts.push(Math.round(track.bpm) + ' BPM');
-    if (track.key_note) parts.push((track.key_note + ' ' + (track.key_mode || '')).trim());
+    if (track.key_note) parts.push((track.key_note + ' ' + modeLabel(track.key_mode)).trim());
     if (track.duration) parts.push(fmt2time(track.duration));
     badges.innerHTML = parts.length
       ? parts.map(p => '<span class="rb-badge">' + escapeHtml(p) + '</span>').join('')
@@ -17896,13 +18853,12 @@ function rbReverbParamMap(p) {
   return {
     dryGain: 1 - mix,
     wetGain: mix,
-    // Freeverb's own room-size -> feedback formula (0.7 + size*0.28) -
-    // stays comfortably under 1 (stable, won't build up into a runaway
-    // loop) across the entire 0-1 decay range, at any decay setting.
-    feedback: 0.7 + decay * 0.28,
-    // Brighter tail at damping=0, darker at damping=1; floored well above
-    // 0 so the tail never goes fully silent/lowpassed into nothing.
-    dampFreq: Math.max(800, 11000 - damping * 9500),
+    // Round 82 (convolution reverb): decay sets the room's RT60, 0.4-4 s.
+    // The old comb mapping (feedback 0.7 + decay*0.28) measured BACKWARDS:
+    // RT60 3.1 s at decay 0.2, 0.36 s at 0.5, 0.12 s at 0.8.
+    rt60: 0.4 + decay * 3.6,
+    // 0 = bright tail, 1 = dark; used to shape the response's treble decay.
+    damping,
     preDelaySec: Math.max(0, Math.min(0.25, preDelayMsRaw / 1000)),
   };
 }
@@ -17965,66 +18921,114 @@ function rbCreateLimiter(ctx) {
   return { input: comp, output: ceiling, dispose() { try { comp.disconnect(); } catch (e) {} try { ceiling.disconnect(); } catch (e) {} } };
 }
 
-// Schroeder/Freeverb-style reverb built entirely from stock Web Audio
-// nodes - no custom worklet DSP needed for this one. Four parallel comb
-// filters (feedback delay line + a lowpass in the feedback path for
-// damping) are summed and run through two series allpass filters for
-// diffusion, then blended against the dry signal by the Mix control.
-// Returns {input, output, setParams(p), dispose()} - input/output are
-// plain GainNodes, so this composes into any chain with a single
-// .connect() at each end regardless of what's built inside.
+// Convolution reverb for Topliner (Round 82). Replaces the Freeverb-style
+// four-comb network, whose "allpass" stage was two biquads - phase shift,
+// no added echo density - so the tail was four sparse, regularly spaced
+// repeats ringing at the combs' resonances: the metallic sound of a
+// spring in a tin. A ConvolverNode with a synthesised room response gives
+// a dense tail the way Slow + Reverb's renderer already does (lib/impulse.js),
+// at the cost of an FFT convolution the browser runs natively.
+//
+// The response: a few early reflections, then decorrelated stereo noise
+// decaying to -60 dB over RT60, low-passed with a cutoff that falls over
+// time (treble dies first in real rooms; without that a synthetic tail
+// sounds like hiss). Same controls as before:
+//   decay   -> RT60 0.4 s .. 4 s
+//   damping -> how bright the tail starts and how fast the treble dies
+// Changing decay/damping rebuilds the response off the audio thread's
+// path and crossfades two convolvers, so a live tweak doesn't click.
+function rbBuildReverbIR(ctx, rt60, damping) {
+  const sr = ctx.sampleRate;
+  const len = Math.max(1, Math.ceil(sr * Math.min(rt60 * 1.15, 4.6)));
+  const ir = ctx.createBuffer(2, len, sr);
+  // Two cascaded one-poles (12 dB/oct). A single one (6 dB/oct) measured
+  // too weak: 46% of the tail's energy still above 4 kHz at full damping.
+  const fStart = 10000 - damping * 6000;              // tail starts this bright
+  const fEnd = Math.max(350, 2600 - damping * 2200);   // ...and ends this dark
+  for (let ch = 0; ch < 2; ch++) {
+    const d = ir.getChannelData(ch);
+    // Small deterministic PRNG per channel: decorrelated L/R, identical
+    // every build (no shimmer when the response is rebuilt).
+    let seed = ch ? 0x9e3779b9 : 0x7f4a7c15;
+    const rnd = () => { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return ((seed >>> 0) / 4294967296) * 2 - 1; };
+    let lp = 0, lp2 = 0;
+    for (let i = 0; i < len; i++) {
+      const t = i / sr;
+      const env = Math.pow(10, -3 * t / rt60);          // -60 dB at rt60
+      const fc = fStart * Math.pow(fEnd / fStart, Math.min(1, t / rt60));
+      const a = 1 - Math.exp(-2 * Math.PI * fc / sr);   // one-pole low-pass, twice
+      lp += a * (rnd() - lp);
+      lp2 += a * (lp - lp2);
+      // 3 ms fade-in so the tail doesn't start with a click.
+      d[i] = lp2 * env * Math.min(1, t / 0.003);
+    }
+    // Early reflections: the room's geometry, heard before the tail.
+    const taps = ch ? [7.1, 13.3, 19.9, 27.4, 36.2] : [5.3, 11.7, 17.9, 24.8, 33.5];
+    taps.forEach((ms, k) => {
+      const i = Math.floor(ms / 1000 * sr);
+      if (i < len) d[i] += (k % 2 ? -1 : 1) * 0.5 * Math.pow(0.72, k);
+    });
+  }
+  return ir;
+}
+
 function rbCreateReverbUnit(ctx) {
   const input = ctx.createGain();
   const output = ctx.createGain();
   const preDelay = ctx.createDelay(1);
   const dryGain = ctx.createGain();
   const wetGain = ctx.createGain();
-
   input.connect(dryGain);
   dryGain.connect(output);
   input.connect(preDelay);
-
-  // Classic Freeverb comb tunings (samples @ 44.1kHz) - deliberately not
-  // simple multiples of each other so the four combs don't reinforce the
-  // same periodicity and ring with an audible metallic pitch.
-  const combTunings = [1557, 1617, 1491, 1422];
-  const combs = combTunings.map((samples) => {
-    const delay = ctx.createDelay(1);
-    delay.delayTime.value = samples / 44100;
-    const feedback = ctx.createGain();
-    const damp = ctx.createBiquadFilter();
-    damp.type = 'lowpass';
-    damp.frequency.value = 8000;
-    preDelay.connect(delay);
-    delay.connect(damp);
-    damp.connect(feedback);
-    feedback.connect(delay);
-    return { delay, feedback, damp };
+  // Two convolvers, one audible at a time; a new response is loaded into
+  // the silent one and crossfaded in.
+  const slots = [0, 1].map(() => {
+    const conv = ctx.createConvolver();
+    conv.normalize = true;
+    const g = ctx.createGain();
+    g.gain.value = 0;
+    preDelay.connect(conv);
+    conv.connect(g);
+    g.connect(wetGain);
+    return { conv, g };
   });
-  const combSum = ctx.createGain();
-  combSum.gain.value = 0.25; // summing 4 combs - scale back down to unity-ish
-  combs.forEach((c) => c.damp.connect(combSum));
-
-  const ap1 = ctx.createBiquadFilter();
-  ap1.type = 'allpass'; ap1.frequency.value = 500; ap1.Q.value = 1;
-  const ap2 = ctx.createBiquadFilter();
-  ap2.type = 'allpass'; ap2.frequency.value = 1500; ap2.Q.value = 1;
-  combSum.connect(ap1);
-  ap1.connect(ap2);
-  ap2.connect(wetGain);
   wetGain.connect(output);
+  let live = -1, lastKey = '', pending = null;
+
+  function loadIR(rt60, damping) {
+    const key = rt60.toFixed(2) + '/' + damping.toFixed(2);
+    if (key === lastKey) return;
+    lastKey = key;
+    const next = live === 0 ? 1 : 0;
+    slots[next].conv.buffer = rbBuildReverbIR(ctx, rt60, damping);
+    const now = ctx.currentTime;
+    slots[next].g.gain.cancelScheduledValues(now);
+    slots[next].g.gain.setValueAtTime(slots[next].g.gain.value, now);
+    slots[next].g.gain.linearRampToValueAtTime(1, now + 0.08);
+    if (live >= 0) {
+      slots[live].g.gain.cancelScheduledValues(now);
+      slots[live].g.gain.setValueAtTime(slots[live].g.gain.value, now);
+      slots[live].g.gain.linearRampToValueAtTime(0, now + 0.08);
+    }
+    live = next;
+  }
 
   function setParams(p) {
     const m = rbReverbParamMap(p);
     rbRampParam(dryGain.gain, m.dryGain, ctx);
     rbRampParam(wetGain.gain, m.wetGain, ctx);
     rbRampParam(preDelay.delayTime, m.preDelaySec, ctx);
-    combs.forEach((c) => { rbRampParam(c.feedback.gain, m.feedback, ctx); rbRampParam(c.damp.frequency, m.dampFreq, ctx); });
+    // Building a 4 s stereo response takes a few ms; a slider drag fires
+    // many updates, so only the last one in a 120 ms burst rebuilds.
+    if (live < 0) { loadIR(m.rt60, m.damping); return; }
+    if (pending) clearTimeout(pending);
+    pending = setTimeout(() => { pending = null; loadIR(m.rt60, m.damping); }, 120);
   }
 
   function dispose() {
-    const all = [input, output, preDelay, dryGain, wetGain, combSum, ap1, ap2,
-      ...combs.map((c) => c.delay), ...combs.map((c) => c.feedback), ...combs.map((c) => c.damp)];
+    if (pending) { clearTimeout(pending); pending = null; }
+    const all = [input, output, preDelay, dryGain, wetGain, ...slots.map((s) => s.conv), ...slots.map((s) => s.g)];
     all.forEach((n) => { try { n.disconnect(); } catch (e) {} });
   }
 
@@ -19765,12 +20769,15 @@ function rbReviewDiscard() {
 // has nowhere to put anything. Rather than leaving that switch silently
 // unreachable, offer to set the root once, right after the app is ready.
 // Skipping just means "ask me later" - it does not turn anything on.
-function rbMaybeShowFirstRunSetup() {
+async function rbMaybeShowFirstRunSetup(skipRestoreCheck) {
   try {
     if (stockpileFolder) return;
     if (localStorage.getItem('fp_setup_seen') === '1') return;
   } catch (e) { return; }
   if (document.getElementById('first-run-modal')) return;
+  // A fresh install on a PC that had Freq.Phull: offer the library backup
+  // kept in the Stockpile folder before asking to set one up from scratch.
+  if (!skipRestoreCheck && await libOfferFoundBackups()) return;
   const modal = document.createElement('div');
   modal.className = 'setup-modal';
   modal.id = 'first-run-modal';
@@ -19811,9 +20818,147 @@ async function rbPickFirstRunFolder() {
     if (toggle) toggle.checked = true;
     syncPrefsToServer();
     showAppNotification(t('setupStockDone'), 'done', null, 4000);
+    rbDismissFirstRunSetup();
+    libCheckPickedFolder(folder);
+    return;
   }
   rbDismissFirstRunSetup();
 }
+
+// ── Library backup in the Stockpile folder (Round 82) ─────────────────────
+// The server keeps a copy of the library in <Stockpile>\.freqphull\. After a
+// reinstall that lost AppData, these bring it back (server: LIBRARY BACKUP
+// CORE). A Stockpile folder without a backup is rebuilt from its folders.
+function libModal(title, bodyHtml, buttons) {
+  const old = document.getElementById('lib-modal');
+  if (old) old.remove();
+  const modal = document.createElement('div');
+  modal.className = 'setup-modal';
+  modal.id = 'lib-modal';
+  modal.style.display = 'flex';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-label', title);
+  // Actions are looked up by index: no path ever goes into an attribute.
+  const acts = [];
+  const btns = buttons.map((b) => { acts.push(b.fn); return '<button class="btn sm' + (b.pri ? ' pri' : '') + '" data-lib="' + (acts.length - 1) + '">' + escapeHtml(b.label) + '</button>'; }).join('');
+  modal.innerHTML = '<div class="setup-card" style="max-width:500px;padding:26px">' +
+    '<div style="font-size:17px;font-weight:700;margin-bottom:10px">' + escapeHtml(title) + '</div>' +
+    '<div style="font-size:13.5px;color:var(--muted);line-height:1.55;margin-bottom:18px">' + bodyHtml + '</div>' +
+    '<div class="row" style="justify-content:flex-end;gap:8px;flex-wrap:wrap">' + btns + '</div></div>';
+  modal.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-lib]');
+    if (!b) return;
+    modal.remove();
+    const fn = acts[parseInt(b.dataset.lib, 10)];
+    if (fn) fn();
+  });
+  document.body.appendChild(modal);
+  if (typeof trapFocus === 'function') trapFocus(modal);
+}
+function _libWhen(iso) {
+  try { return new Date(iso).toLocaleDateString(lang === 'fr' ? 'fr-FR' : undefined, { year: 'numeric', month: 'short', day: 'numeric' }); } catch { return ''; }
+}
+function _libSummary(b) {
+  return t('libSummary').replace('{tracks}', b.tracks || 0).replace('{folders}', b.folders || 0) + (b.written_at ? ' · ' + t('libSaved') + ' ' + _libWhen(b.written_at) : '');
+}
+
+// Fresh install with an empty library: search for backups and offer them.
+// Returns true when an offer was shown.
+async function libOfferFoundBackups() {
+  let j;
+  try { j = await (await fetch(API + '/library/backups')).json(); } catch { return false; }
+  if (!j || j.libraryTracks > 0 || !Array.isArray(j.backups) || !j.backups.length) return false;
+  const list = j.backups.slice(0, 3);
+  const body = escapeHtml(t('libFoundBody')) + list.map((b) =>
+    '<div style="margin-top:10px;padding:8px 10px;border:1px solid var(--border2);border-radius:8px"><div style="color:var(--text);word-break:break-all">' +
+    escapeHtml(b.root) + '</div><div style="font-size:12px;color:var(--hint)">' + escapeHtml(_libSummary(b)) + '</div></div>').join('');
+  libModal(t('libFoundTitle'), body, [
+    { label: t('libStartFresh'), fn: () => rbMaybeShowFirstRunSetup(true) },
+    ...list.map((b, i) => ({ label: list.length > 1 ? t('libRestore') + ' ' + (i + 1) : t('libRestore'), pri: i === 0, fn: () => libRestoreFrom(b.root) })),
+  ]);
+  return true;
+}
+
+async function libRestoreFrom(root) {
+  showAppNotification(t('libRestoring'), 'info', null, 4000);
+  let j;
+  try {
+    const r = await fetch(API + '/library/restore', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ root }) });
+    j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  } catch (e) {
+    showAppNotification(t('libRestoreFailed') + ': ' + e.message, 'err', null, 9000);
+    return;
+  }
+  // Settings kept by the server come back with the library; copy the ones
+  // this window also keeps, so they agree.
+  try {
+    const p = await (await fetch(API + '/prefs')).json();
+    localStorage.setItem('fp_stockpile', root);
+    localStorage.setItem('fp_setup_seen', '1');
+    if (p.auto_send != null) localStorage.setItem('freqphull.autoSend', p.auto_send === '1' ? '1' : '0');
+    if (p.download_to_stockpile != null) localStorage.setItem('freqphull.downloadToStockpile', p.download_to_stockpile === '1' ? '1' : '0');
+    if (p.watch_folder != null) localStorage.setItem('freqphull.watchFolder', p.watch_folder === '1' ? '1' : '0');
+    if (p.auto_tag != null) localStorage.setItem('freqphull.autoTag', p.auto_tag === '0' ? '0' : '1');
+  } catch {}
+  let msg = t('libRestored').replace('{tracks}', j.tracks).replace('{folders}', j.folders);
+  if (j.missing) msg += ' ' + t('libMissing').replace('{n}', j.missing);
+  try { sessionStorage.setItem('fp_lib_restored_msg', msg); } catch {}
+  location.reload();
+}
+
+async function libRebuildFrom(root) {
+  showAppNotification(t('libRebuilding'), 'info', null, 4000);
+  try {
+    const r = await fetch(API + '/library/rebuild', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ root }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    try { localStorage.setItem('fp_stockpile', root); localStorage.setItem('fp_setup_seen', '1'); } catch {}
+    try { sessionStorage.setItem('fp_lib_restored_msg', t('libRebuilt').replace('{tracks}', j.tracks).replace('{folders}', j.folders)); } catch {}
+    location.reload();
+  } catch (e) {
+    showAppNotification(t('libRestoreFailed') + ': ' + e.message, 'err', null, 9000);
+  }
+}
+
+// A Stockpile folder was just picked. With an empty library, offer what the
+// folder can give back. With `explicit` (Settings button) it offers it even
+// when the library has tracks, and says so.
+async function libCheckPickedFolder(folder, explicit) {
+  let j;
+  try { j = await (await fetch(API + '/library/inspect?root=' + encodeURIComponent(folder))).json(); } catch { return; }
+  if (!j || j.error) return;
+  if (j.libraryTracks > 0 && !explicit) return;
+  if (j.backup) {
+    const body = escapeHtml(t('libFoundBody')) + '<div style="margin-top:10px;color:var(--hint)">' + escapeHtml(_libSummary(j.backup)) + '</div>' +
+      (j.libraryTracks > 0 ? '<div style="margin-top:10px">' + escapeHtml(t('libReplaceWarn').replace('{n}', j.libraryTracks)) + '</div>' : '');
+    libModal(t('libFoundTitle'), body, [
+      { label: t('cancelWord') },
+      { label: t('libRestore'), pri: true, fn: () => libRestoreFrom(folder) },
+    ]);
+  } else if (j.files > 0) {
+    libModal(t('libRebuildTitle'), escapeHtml(t('libRebuildBody').replace('{files}', j.files).replace('{folders}', j.folders)), [
+      { label: t('cancelWord') },
+      { label: t('libRebuildBtn'), pri: true, fn: () => libRebuildFrom(folder) },
+    ]);
+  } else if (explicit) {
+    showAppNotification(t('libNothing'), 'info', null, 5000);
+  }
+}
+
+// Settings → Restore library: pick the Stockpile folder.
+async function libRestoreFromSettings() {
+  const folder = await api.pickFolder();
+  if (folder) libCheckPickedFolder(folder, true);
+}
+
+// The message for a restore that reloaded the window.
+window.addEventListener('DOMContentLoaded', () => {
+  let m = null;
+  try { m = sessionStorage.getItem('fp_lib_restored_msg'); sessionStorage.removeItem('fp_lib_restored_msg'); } catch {}
+  if (m) setTimeout(() => showAppNotification(m, 'done', null, 9000), 1500);
+});
 
 // Initial volume load happens on first DOMContentLoaded
 window.addEventListener('DOMContentLoaded', () => {
@@ -19851,7 +20996,6 @@ window.addEventListener('DOMContentLoaded', () => {
 // Ctrl+1..9 -> switch tabs by index
 (function installGlobalShortcuts(){
   // Tab order mirrors the visible button order in the topbar.
-  const TAB_ORDER = ['analyze','transcribe','separator','master','history','stockpile','settings'];
 
   function activeModal() {
     // Most opened-by-us modals add either .modal-overlay (not hidden) or .setup-modal
@@ -19882,7 +21026,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
   function focusVisibleSearch() {
     // History search is the most common; if Stockpile tab is open, use its.
-    const tab = document.querySelector('.tabbtn.on');
+    const tab = document.querySelector('.nav-btn.on');
     const which = tab ? tab.dataset.tab : null;
     let id = 'hist-search';
     if (which === 'stockpile') id = 'sp-search';
@@ -19925,10 +21069,14 @@ window.addEventListener('DOMContentLoaded', () => {
 
     // Ctrl+1..9 tab switching.
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+      // Round 82: these shortcuts never worked - switchTab() didn't exist,
+      // and TAB_ORDER used names that aren't tabs ('separator', 'master').
+      // Ctrl+N now opens the N-th tab as the sidebar shows it, skipping
+      // hidden ones, so it always matches what's on screen.
       const idx = parseInt(e.key, 10) - 1;
-      const name = TAB_ORDER[idx];
-      if (name && typeof switchTab === 'function') {
-        switchTab(name);
+      const visible = Array.from(document.querySelectorAll('.nav-btn[data-tab]')).filter((b) => b.offsetParent !== null);
+      if (visible[idx]) {
+        showTab(visible[idx]);
         e.preventDefault();
       }
     }
@@ -20353,7 +21501,7 @@ function renderMatchPreview(folderId, data) {
     const isOn = sel.has(m.id) ? 'checked' : '';
     const meta = [
       m.bpm ? `${Math.round(m.bpm)} BPM` : null,
-      m.key_note ? `${m.key_note} ${m.key_mode || ''}` : null,
+      m.key_note ? escapeHtml(`${m.key_note} ${modeLabel(m.key_mode)}`) : null,
       m.match_type === 'artist' ? `<span style="color:#e8e8e8">${t('spMatchArtist')} "${escapeHtml(m.matched_seed)}"</span>` : `<span style="color:#a0a0c0">${t('spMatchMood')}</span>`,
     ].filter(Boolean).join(' · ');
     return `
@@ -20716,7 +21864,7 @@ async function onUpdateBannerPrimary() {
       if (!result || !result.ok) {
         // Download failed - surface as a notification + revert to AVAILABLE
         if (typeof showAppNotification === 'function') {
-          showAppNotification('Update download failed: ' + (result && result.error || 'unknown'), 'err', null, 6000);
+          showAppNotification(t('tUpdDlFailed') + ': ' + (result && result.error || 'unknown'), 'err', null, 6000);
         }
         _updateState = 'AVAILABLE';
         _renderUpdateBanner();
@@ -20724,7 +21872,7 @@ async function onUpdateBannerPrimary() {
       // On success, the onReady event handler flips state to READY.
     } catch (e) {
       if (typeof showAppNotification === 'function') {
-        showAppNotification('Update error: ' + e.message, 'err', null, 6000);
+        showAppNotification(t('tUpdError') + ': ' + e.message, 'err', null, 6000);
       }
       _updateState = 'AVAILABLE';
       _renderUpdateBanner();
@@ -20755,7 +21903,7 @@ async function onUpdateBannerPrimary() {
       await window.api.updater.install();
     } catch (e) {
       if (typeof showAppNotification === 'function') {
-        showAppNotification('Could not start installer: ' + e.message, 'err', null, 6000);
+        showAppNotification(t('tInstallerFailed') + ': ' + e.message, 'err', null, 6000);
       }
     }
   }
@@ -21012,6 +22160,7 @@ let convFormats = null;      // from /convert/formats
 let convOutDir = null;       // null = "Converted" folder next to each original
 let convBusy = false;
 let convAbort = null;
+let convImage = null;        // MP4 video: background picture (absolute path)
 const CONV_PREFS_KEY = 'fp_convert_prefs';
 
 function convLoadPrefs() {
@@ -21025,6 +22174,8 @@ function convSavePrefs() {
       rate: document.getElementById('conv-rate').value,
       ch: document.getElementById('conv-ch').value,
       outDir: convOutDir,
+      vsize: document.getElementById('conv-vsize').value,
+      fit: document.getElementById('conv-fit').value,
     }));
   } catch {}
 }
@@ -21038,13 +22189,17 @@ async function convInit() {
   const prefs = convLoadPrefs();
   const fmtSel = document.getElementById('conv-format');
   fmtSel.innerHTML = Object.entries(convFormats).map(([k, f]) =>
-    '<option value="' + k + '">' + escapeHtml(f.label) + '</option>').join('');
+    '<option value="' + k + '">' + escapeHtml(T.en['convFmt_' + k] ? t('convFmt_' + k) : f.label) + '</option>').join('');
   if (prefs.format && convFormats[prefs.format]) fmtSel.value = prefs.format;
   convFormatChanged(prefs.quality);
   if (prefs.rate && fmtSel.value !== 'opus') document.getElementById('conv-rate').value = prefs.rate;
   if (prefs.ch) document.getElementById('conv-ch').value = prefs.ch;
   convOutDir = prefs.outDir || null;
   convRenderDest();
+  if (prefs.vsize) document.getElementById('conv-vsize').value = prefs.vsize;
+  if (prefs.fit) document.getElementById('conv-fit').value = prefs.fit;
+  // The picture is not remembered between launches (only size and fit are):
+  // a new session starts without one.
   ['conv-quality', 'conv-rate', 'conv-ch'].forEach(id =>
     document.getElementById(id).addEventListener('change', convSavePrefs));
 }
@@ -21056,30 +22211,32 @@ function convFormatChanged(preferredQuality) {
   const q = document.getElementById('conv-quality');
   const lbl = document.getElementById('conv-quality-lbl');
   if (f.lossy) {
-    lbl.textContent = 'Bitrate';
+    lbl.textContent = t('convBitrate');
     q.innerHTML = f.bitrates.map(b => '<option value="' + b + '">' + b + ' kbps</option>').join('');
   } else {
-    lbl.textContent = 'Bit depth';
-    q.innerHTML = f.bitDepths.map(b => '<option value="' + b + '">' + (b === '32f' ? '32-bit float' : b + '-bit') + '</option>').join('');
+    lbl.textContent = t('convBitDepth');
+    q.innerHTML = f.bitDepths.map(b => '<option value="' + b + '">' + (b === '32f' ? t('convFloat32') : t('convBits').replace('{n}', b)) + '</option>').join('');
   }
   if (typeof preferredQuality === 'string' && [...q.options].some(o => o.value === preferredQuality)) q.value = preferredQuality;
   const rate = document.getElementById('conv-rate');
   rate.disabled = fmt === 'opus';
   if (fmt === 'opus') rate.value = '48000';
   const notes = {
-    opus: 'Opus always encodes at 48 kHz.',
-    mp3: 'MP3 is lossy: converting a lossy file to a higher bitrate does not bring back quality.',
-    m4a: 'AAC is lossy: converting a lossy file to a higher bitrate does not bring back quality.',
-    mp4: 'Audio-only MP4 (AAC). AAC is lossy: converting a lossy file to a higher bitrate does not bring back quality.',
-    ogg: 'Vorbis is lossy and quality-based; the bitrate is approximate.',
+    opus: t('convNoteOpus'),
+    mp3: t('convNoteMp3'),
+    m4a: t('convNoteAac'),
+    mp4: t('convNoteMp4'),
+    mp4video: t('convVideoNote'),
+    ogg: t('convNoteOgg'),
   };
+  document.getElementById('conv-video').style.display = f.video ? 'flex' : 'none';
   document.getElementById('conv-note').textContent = notes[fmt] ||
-    (f.lossy ? '' : 'Lossless: converting a lossy file (MP3, AAC…) to this keeps its quality but does not improve it.');
+    (f.lossy ? '' : t('convNoteLossless'));
   convSavePrefs();
 }
 
 function convRenderDest() {
-  document.getElementById('conv-dest').textContent = convOutDir || 'A “Converted” folder next to each original';
+  document.getElementById('conv-dest').textContent = convOutDir || t('convDestDefault');
   document.getElementById('conv-dest-reset').style.display = convOutDir ? '' : 'none';
 }
 async function convPickFolder() {
@@ -21098,12 +22255,50 @@ function convAddPaths(list) {
     convFiles.push({ path, name: name || path.split(/[\\/]/).pop(), status: 'queued', pct: 0 });
     added++;
   }
-  if (skipped) showAppNotification('Some files could not be added (no path on disk).', 'err', null, 4000);
+  if (skipped) showAppNotification(t('convSomeSkipped'), 'err', null, 4000);
   if (added) convRenderList();
 }
 function convAddFromInput(input) {
   convAddPaths([...input.files].map(f => ({ path: f.path, name: f.name })));
   input.value = '';
+}
+// MP4 video background picture. The preview loads the file straight from
+// disk (the page itself is a file:// page); the path is set as a property,
+// never put into markup.
+const CONV_IMAGE_RE = /\.(jpe?g|png|webp|bmp|gif)$/i;
+function convSetImage(p, quiet) {
+  if (p && !CONV_IMAGE_RE.test(p)) {
+    if (!quiet) showAppNotification(t('convPicBadType'), 'err', null, 4000);
+    return;
+  }
+  convImage = p || null;
+  const img = document.getElementById('conv-pic-img');
+  const empty = document.getElementById('conv-pic-empty');
+  const name = document.getElementById('conv-pic-name');
+  if (convImage) {
+    img.onerror = () => { img.style.display = 'none'; empty.style.display = ''; };
+    img.src = 'file:///' + convImage.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/').replace(/^([A-Za-z])%3A/, '$1:');
+    img.style.display = '';
+    empty.style.display = 'none';
+    name.textContent = convImage.split(/[\\/]/).pop() + ' · ' + t('convPicChange');
+  } else {
+    img.removeAttribute('src');
+    img.style.display = 'none';
+    empty.style.display = '';
+    name.textContent = '';
+  }
+  if (!quiet) convSavePrefs();
+}
+function convPicFromInput(input) {
+  const f = input.files && input.files[0];
+  if (f && f.path) convSetImage(f.path);
+  input.value = '';
+}
+function convPicDrop(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f && f.path) convSetImage(f.path);
 }
 function convDragOver(e) { e.preventDefault(); e.currentTarget.style.borderColor = 'var(--accent, #7c5cff)'; }
 function convDragLeave(e) { e.currentTarget.style.borderColor = ''; }
@@ -21127,9 +22322,9 @@ function convRenderList() {
   const list = document.getElementById('conv-list');
   const done = convFiles.filter(f => f.status === 'done').length;
   document.getElementById('conv-count').textContent = convFiles.length
-    ? '(' + convFiles.length + (done ? ', ' + done + ' done' : '') + ')' : '';
+    ? '(' + convFiles.length + (done ? ', ' + t('convNDone').replace('{n}', done) : '') + ')' : '';
   const go = document.getElementById('conv-go');
-  go.textContent = convBusy ? 'Cancel' : 'Convert';
+  go.textContent = convBusy ? t('cancelWord') : t('convGo');
   go.disabled = !convBusy && !convFiles.some(f => f.status !== 'done');
   document.getElementById('conv-clear').disabled = convBusy;
   if (!convFiles.length) {
@@ -21139,9 +22334,9 @@ function convRenderList() {
   list.innerHTML = convFiles.map((f, i) => {
     let st = '';
     if (f.status === 'working') st = '<span style="color:var(--muted)">' + (f.pct || 0) + '%</span>';
-    else if (f.status === 'done') st = '<a href="#" onclick="window.api.showInFolder(convFiles[' + i + '].output);return false" style="color:var(--green, #3ecf8e)">Done · show</a>';
-    else if (f.status === 'error') st = '<span style="color:#e84040">Failed</span>';
-    else st = '<span style="color:var(--hint)">Queued</span>';
+    else if (f.status === 'done') st = '<a href="#" onclick="window.api.showInFolder(convFiles[' + i + '].output);return false" style="color:var(--green, #3ecf8e)">' + escapeHtml(t('convDoneShow')) + '</a>';
+    else if (f.status === 'error') st = '<span style="color:#e84040">' + escapeHtml(t('convFailed')) + '</span>';
+    else st = '<span style="color:var(--hint)">' + escapeHtml(t('convQueued')) + '</span>';
     const bar = f.status === 'working'
       ? '<div style="height:3px;background:var(--border, rgba(255,255,255,.08));border-radius:2px;margin-top:6px"><div style="height:3px;width:' + (f.pct || 0) + '%;background:var(--accent, #7c5cff);border-radius:2px"></div></div>' : '';
     const err = f.status === 'error' ? '<div style="font-size:12px;color:#e84040;margin-top:4px;word-break:break-all">' + escapeHtml(f.error || '') + '</div>' : '';
@@ -21167,6 +22362,12 @@ async function convStart() {
     outDir: convOutDir,
   };
   if (convFormats[fmt].lossy) body.bitrate = q; else body.bitDepth = q;
+  if (convFormats[fmt].video) {
+    if (!convImage) { showAppNotification(t('convPicNeeded'), 'err', null, 4000); return; }
+    body.image = convImage;
+    body.videoSize = document.getElementById('conv-vsize').value;
+    body.fit = document.getElementById('conv-fit').value;
+  }
   todo.forEach(x => { x.f.status = 'queued'; x.f.pct = 0; x.f.error = null; });
   convBusy = true;
   convAbort = new AbortController();
@@ -21178,7 +22379,7 @@ async function convStart() {
       body: JSON.stringify(body), signal: convAbort.signal,
     });
     if (!res.ok) {
-      let msg = 'Conversion failed';
+      let msg = t('convFailedMsg');
       try { msg = (await res.json()).error || msg; } catch {}
       throw new Error(msg);
     }
@@ -21204,7 +22405,7 @@ async function convStart() {
       }
     }
   } catch (e) {
-    if (e.name !== 'AbortError') showAppNotification(e.message || 'Conversion failed', 'err', null, 6000);
+    if (e.name !== 'AbortError') showAppNotification(e.message || t('convFailedMsg'), 'err', null, 6000);
   } finally {
     todo.forEach(x => { if (x.f.status === 'working') { x.f.status = 'queued'; x.f.pct = 0; } });
     convBusy = false;
@@ -21212,7 +22413,7 @@ async function convStart() {
     convRenderList();
   }
   if (summary) {
-    const msg = summary.ok + ' converted' + (summary.failed ? ', ' + summary.failed + ' failed' : '');
+    const msg = t('convSummary').replace('{ok}', summary.ok) + (summary.failed ? ', ' + t('convSummaryFailed').replace('{n}', summary.failed) : '');
     showAppNotification(msg, summary.failed ? 'err' : 'ok', null, 4000);
   }
 }
@@ -21224,3 +22425,147 @@ document.addEventListener('click', e => {
   if (b) convInit();
 });
 setTimeout(() => { try { convInit(); } catch {} }, 6000);
+
+// ── Report a problem (Round 82) ─────────────────────────────────────────
+// Settings → Diagnostics. Sends the user's own description (and, if they
+// tick the box, the end of the app log) to /report-problem, which reports
+// it like any other error, with the same privacy scrubbing.
+function openReportProblem() {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.innerHTML = `
+    <div class="modal-card" style="max-width:480px">
+      <div class="modal-title">${escapeHtml(t('reportTitle'))}</div>
+      <textarea id="rp-text" maxlength="2000" rows="6" placeholder="${escapeHtml(t('reportPlaceholder'))}"
+        style="width:100%;box-sizing:border-box;margin-top:10px;padding:10px;background:var(--bg);color:var(--white);border:1px solid var(--border);border-radius:8px;font:inherit;font-size:13px;resize:vertical"></textarea>
+      <label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:13px;cursor:pointer">
+        <input type="checkbox" id="rp-log" checked/> ${escapeHtml(t('reportIncludeLog'))}
+      </label>
+      <div class="modal-detail" style="margin-top:8px">${escapeHtml(t('reportPrivacy'))}</div>
+      <div class="modal-actions">
+        <button class="btn sm" id="rp-cancel">${escapeHtml(t('cancelWord'))}</button>
+        <button class="btn sm pri" id="rp-send">${escapeHtml(t('reportSend'))}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const text = overlay.querySelector('#rp-text');
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector('#rp-cancel').onclick = close;
+  overlay.querySelector('#rp-send').onclick = async () => {
+    const msg = text.value.trim();
+    if (msg.length < 3) { text.focus(); return; }
+    const btn = overlay.querySelector('#rp-send');
+    btn.disabled = true;
+    try {
+      const tab = document.querySelector('.nav-btn.on');
+      const r = await fetch(API + '/report-problem', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg, includeLog: overlay.querySelector('#rp-log').checked, tab: tab ? tab.dataset.tab : '' }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.ok) {
+        close();
+        showAppNotification(t('reportSent').replace('{id}', j.id), 'ok', null, 5000);
+      } else {
+        btn.disabled = false;
+        showAppNotification(t('reportFailed') + (j.error ? ': ' + j.error : ''), 'warn', null, 6000);
+      }
+    } catch (e) {
+      btn.disabled = false;
+      showAppNotification(t('reportFailed') + ': ' + e.message, 'warn', null, 6000);
+    }
+  };
+  setTimeout(() => text.focus(), 30);
+}
+
+
+// ── Credit the producer (Round 82) ───────────────────────────────────────
+// "Buy this beat" and "About the beatmaker" in the track right-click menu.
+// The links come from the YouTube description (server: BUY LINK CORE).
+// They open in the user's own browser: window.open is refused inside the
+// app and handed to the system browser by main.js (lockWindowToApp), which
+// only lets http(s) through. Checked here too, so nothing else is tried.
+function _hostOfUrl(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; }
+}
+function openExternalLink(url) {
+  let u;
+  try { u = new URL(url); } catch { return; }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return;
+  window.open(u.href, '_blank', 'noopener');
+}
+async function fetchProducerInfo(id) {
+  const r = await fetch(API + '/history/' + id + '/producer');
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  // Keep the list's copy in step so the menu shows the link next time.
+  const row = histData.find((h) => h.id === id);
+  if (row) row.buy_url = j.buy || '';
+  return j;
+}
+async function buyBeatFromHistory(id) {
+  showAppNotification(t('buyLooking'), 'info', null, 2500);
+  try {
+    const j = await fetchProducerInfo(id);
+    if (j.buy) openExternalLink(j.buy);
+    else showAppNotification(t('buyNone'), 'info', null, 5000);
+  } catch (e) {
+    showAppNotification(t('buyLookupFailed') + ': ' + e.message, 'warn', null, 6000);
+  }
+}
+const _PRODUCER_ICONS = { Instagram: '📷', TikTok: '🎵', X: '𝕏', YouTube: '▶', SoundCloud: '☁', Spotify: '🎧', Snapchat: '👻',
+  Facebook: 'f', Twitch: '🎮', Discord: '💬', WhatsApp: '📞', Links: '🔗', BeatStars: '🛒', Website: '🌐' };
+async function openProducerAbout(id) {
+  const row = histData.find((h) => h.id === id) || {};
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.innerHTML = `<div class="modal-card" style="max-width:460px">
+    <div class="modal-title">${escapeHtml(t('aboutTitle'))}</div>
+    <div id="pa-body" class="modal-body">${escapeHtml(t('buyLooking'))}</div>
+    <div class="modal-actions"><button class="btn sm" id="pa-close">${escapeHtml(t('aboutClose'))}</button></div></div>`;
+  document.body.appendChild(overlay);
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector('#pa-close').onclick = close;
+  const body = overlay.querySelector('#pa-body');
+  let j;
+  try { j = await fetchProducerInfo(id); }
+  catch (e) { body.textContent = t('buyLookupFailed') + ': ' + e.message; return; }
+  if (!document.body.contains(overlay)) return;   // closed while loading
+  // Every action is looked up in this array by index - no URL is ever put
+  // into an attribute or run as code.
+  const actions = [];
+  const btn = (label, fn, cls) => { actions.push(fn); return `<button class="btn sm ${cls || ''}" data-pa="${actions.length - 1}" style="margin:4px 6px 0 0">${escapeHtml(label)}</button>`; };
+  const producer = j.channel || row.channel || '';
+  let html = `<div style="font-size:18px;font-weight:600;color:var(--white)">${escapeHtml(producer || '?')}</div>
+    <div style="font-size:12px;color:var(--hint);margin-top:2px">${escapeHtml(t('aboutFrom'))} “${escapeHtml(j.title || row.title || '')}”</div>`;
+  if (j.buy) html += `<div style="margin-top:12px">${btn('🛒 ' + t('aboutBuy') + ' (' + (j.buyHost || _hostOfUrl(j.buy)) + ')', () => openExternalLink(j.buy), 'pri')}</div>`;
+  if (j.socials && j.socials.length) {
+    html += '<div style="margin-top:10px">' + j.socials.map((s) =>
+      btn((_PRODUCER_ICONS[s.kind] || '🔗') + ' ' + s.kind + (s.handle && s.kind !== 'Website' ? ' · ' + s.handle : s.kind === 'Website' ? ' · ' + s.handle : ''), () => openExternalLink(s.url))).join('') + '</div>';
+  } else if (!j.buy) {
+    html += `<div style="margin-top:12px;color:var(--muted)">${escapeHtml(t('aboutNoLinks'))}</div>`;
+  }
+  html += '<div style="margin-top:12px">';
+  if (producer) html += btn(t('aboutCopyCredit'), () => navigator.clipboard.writeText('prod. by ' + producer).then(() => showAppNotification(t('aboutCredited'), 'ok', null, 1500)).catch(() => {}));
+  if (j.email) html += btn(t('aboutCopyEmail') + ' · ' + j.email, () => navigator.clipboard.writeText(j.email).then(() => showAppNotification(t('copied'), 'ok', null, 1500)).catch(() => {}));
+  if (j.youtubeUrl) html += btn('▶ ' + t('aboutOpenVideo'), () => openExternalLink(j.youtubeUrl));
+  html += '</div>';
+  if (j.buy || (j.socials && j.socials.length)) html += `<div class="modal-detail" style="margin-top:12px">${escapeHtml(t('aboutNote'))}</div>`;
+  body.innerHTML = html;
+  body.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-pa]');
+    if (!b) return;
+    const fn = actions[parseInt(b.dataset.pa, 10)];
+    if (fn) fn();
+  });
+}

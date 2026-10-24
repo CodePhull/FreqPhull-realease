@@ -17,6 +17,29 @@
 // as they do in the side panel - no second implementation to maintain.
 const HAS_SIDE_PANEL = !!(chrome.sidePanel && chrome.sidePanel.open);
 
+// ── Error reporting (v4.6.0) ──────────────────────────────────────────────
+// Faults in this service worker go to the local Freq.Phull app, which
+// reports them to Sentry with its privacy scrubbing. Nothing is sent
+// anywhere else, or at all when the app isn't running.
+const _bgSent = new Set();
+function reportBg(message, stack) {
+  try {
+    const msg = String(message || '').slice(0, 300);
+    if (!msg || _bgSent.has(msg) || _bgSent.size >= 20) return;
+    _bgSent.add(msg);
+    fetch('http://127.0.0.1:47891/client-error', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'ext-crash', message: msg, source: 'background',
+        extVersion: chrome.runtime.getManifest().version, stack: stack ? String(stack).slice(0, 4000) : null }),
+    }).catch(() => {});
+  } catch (e) {}
+}
+self.addEventListener('error', (e) => reportBg(e && e.message, e && e.error && e.error.stack));
+self.addEventListener('unhandledrejection', (e) => {
+  const r = e && e.reason;
+  reportBg((r && r.message) || String(r || 'unknown rejection'), r && r.stack);
+});
+
 if (HAS_SIDE_PANEL) {
   // Lets a click on the toolbar icon open the panel natively.
   try {

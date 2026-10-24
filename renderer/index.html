@@ -3696,7 +3696,7 @@ button:focus:not(:focus-visible){outline:none}
 </div>
   <!-- Accessibility: keyboard users can jump past the sidebar.
        Visible only when focused (.skip-link CSS in the polish block). -->
-  <a href="#main" class="skip-link" onclick="document.getElementById('main')?.focus();return false;">Skip to main content</a>
+  <a data-i18n="uiSkipMain" href="#main" class="skip-link" onclick="document.getElementById('main')?.focus();return false;">Skip to main content</a>
 
 <!-- Loading screen with diagnostic log -->
 <div id="loading">
@@ -3706,9 +3706,9 @@ button:focus:not(:focus-visible){outline:none}
   <div class="load-sub">Artist Edition</div>
   <div class="load-bar-wrap"><div class="load-bar"></div></div>
   <div class="load-status" id="load-status">Starting backend…</div>
-  <div class="diag-title">Diagnostic log</div>
+  <div data-i18n="uiDiagLog" class="diag-title">Diagnostic log</div>
   <div id="diag"></div>
-  <div id="log-path-row">Log file: <span id="log-path-txt">loading…</span></div>
+  <div id="log-path-row"><span data-i18n="uiLogFile">Log file:</span> <span id="log-path-txt">loading…</span></div>
 </div>
 
 <!-- Titlebar -->
@@ -3716,10 +3716,10 @@ button:focus:not(:focus-visible){outline:none}
   <img class="tb-logo" src="../assets/hk-logo.png" alt="HK" onerror="this.style.display='none'"/>
   <div class="tb-div"></div>
   <div class="tb-nav">
-    <button class="tb-nav-btn" id="tb-back" onclick="tabHistoryBack()" title="Back (Ctrl+Alt+←)" disabled aria-label="Back">
+    <button data-i18n-aria="uiBack" data-i18n-title="uiBackTitle" class="tb-nav-btn" id="tb-back" onclick="tabHistoryBack()" title="Back (Ctrl+Alt+←)" disabled aria-label="Back">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
     </button>
-    <button class="tb-nav-btn" id="tb-forward" onclick="tabHistoryForward()" title="Forward (Ctrl+Alt+→)" disabled aria-label="Forward">
+    <button data-i18n-aria="uiForward" data-i18n-title="uiForwardTitle" class="tb-nav-btn" id="tb-forward" onclick="tabHistoryForward()" title="Forward (Ctrl+Alt+→)" disabled aria-label="Forward">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
     </button>
   </div>
@@ -3729,19 +3729,19 @@ button:focus:not(:focus-visible){outline:none}
   <div class="tb-sp"></div>
   <div class="tb-dot-row">
     <div class="tb-dot loading" id="tb-dot"></div>
-    <span class="tb-dot-txt" id="tb-txt">Starting…</span>
+    <span data-i18n="uiStarting" class="tb-dot-txt" id="tb-txt">Starting…</span>
   </div>
   <div class="tb-ctrls">
-    <button class="tb-btn" onclick="api.minimize()" aria-label="Minimize window"><svg width="11" height="2"><rect width="11" height="2" fill="currentColor"/></svg></button>
-    <button class="tb-btn" onclick="api.maximize()" aria-label="Maximize window"><svg width="10" height="10"><rect x=".5" y=".5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
-    <button class="tb-btn x" onclick="api.close()" aria-label="Close window"><svg width="10" height="10"><line x1="1" y1="1" x2="9" y2="9" stroke="currentColor" stroke-width="1.5"/><line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" stroke-width="1.5"/></svg></button>
+    <button data-i18n-aria="uiMinimize" class="tb-btn" onclick="api.minimize()" aria-label="Minimize window"><svg width="11" height="2"><rect width="11" height="2" fill="currentColor"/></svg></button>
+    <button data-i18n-aria="uiMaximize" class="tb-btn" onclick="api.maximize()" aria-label="Maximize window"><svg width="10" height="10"><rect x=".5" y=".5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
+    <button data-i18n-aria="uiCloseWindow" class="tb-btn x" onclick="api.close()" aria-label="Close window"><svg width="10" height="10"><line x1="1" y1="1" x2="9" y2="9" stroke="currentColor" stroke-width="1.5"/><line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" stroke-width="1.5"/></svg></button>
   </div>
 </div>
 
 <!-- Layout -->
 <div id="layout">
-  <nav id="sidebar" aria-label="Workspace">
-    <div class="nav-sec">Workspace</div>
+  <nav data-i18n-aria="uiWorkspace" id="sidebar" aria-label="Workspace">
+    <div data-i18n="uiWorkspace" class="nav-sec">Workspace</div>
     <button class="nav-btn on" data-tab="download" onclick="showTab(this)">
       <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
       Download
@@ -3770,7 +3770,7 @@ button:focus:not(:focus-visible){outline:none}
       <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="8" cy="8.3" r="1" fill="currentColor" stroke="none"/><circle cx="16" cy="8.3" r="1" fill="currentColor" stroke="none"/><circle cx="8" cy="15.7" r="1" fill="currentColor" stroke="none"/><circle cx="16" cy="15.7" r="1" fill="currentColor" stroke="none"/></svg>
       Topliner
     </button>
-    <div class="nav-sec" style="margin-top:4px">Artist Tools</div>
+    <div data-i18n="uiArtistTools" class="nav-sec" style="margin-top:4px">Artist Tools</div>
     <button class="nav-btn" data-tab="tools" onclick="showTab(this)">
       <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
       Tools
@@ -3797,10 +3797,10 @@ button:focus:not(:focus-visible){outline:none}
     <div class="tab-pane on" id="tab-download">
       <div class="ph"><div class="ph-title">Download</div><div class="ph-sub">Paste a YouTube URL and save as MP3, WAV, FLAC and more</div></div>
       <div class="card">
-        <div class="card-lbl">YouTube URL</div>
+        <div data-i18n="ytUrl" class="card-lbl">YouTube URL</div>
         <div class="row mb" id="url-row" style="position:relative">
           <input type="text" id="url-in" class="url-inp" placeholder="https://www.youtube.com/watch?v=…"/>
-          <button class="btn pri" id="btn-fetch" onclick="fetchInfo()" style="height:50px;padding:0 26px;font-size:15px">Fetch</button>
+          <button data-i18n="fetch" class="btn pri" id="btn-fetch" onclick="fetchInfo()" style="height:50px;padding:0 26px;font-size:15px">Fetch</button>
         </div>
         <div class="card-lbl" style="margin-top:6px">Format</div>
         <div class="fmt-row">
@@ -3811,7 +3811,7 @@ button:focus:not(:focus-visible){outline:none}
           <button class="fmt" data-fmt="m4a" onclick="setFmt(this)">M4A</button>
         </div>
       </div>
-      <div class="status hidden" id="dl-status"><div class="dot" id="dl-dot"></div><span id="dl-txt">Paste a YouTube URL to get started</span></div>
+      <div class="status hidden" id="dl-status"><div class="dot" id="dl-dot"></div><span data-i18n="dlPaste" id="dl-txt">Paste a YouTube URL to get started</span></div>
 
       <!-- ── Download Queue panel ────────────────────────────────────────
            Visible whenever there are items in the queue OR completed
@@ -3850,7 +3850,7 @@ button:focus:not(:focus-visible){outline:none}
           <button class="btn sm" onclick="pickFolder()">Change</button>
           <button class="btn sm pri" id="btn-dl" onclick="startDownload()">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            Download
+            <span data-i18n="download">Download</span>
           </button>
         </div>
         <div class="hidden" id="dl-prog-wrap">
@@ -3876,7 +3876,7 @@ button:focus:not(:focus-visible){outline:none}
           <canvas id="waveform"></canvas><div class="playbar" id="playbar" style="left:0%"></div>
         </div>
         <div class="transport">
-          <button class="play-btn" onclick="togglePlay()" aria-label="Play / pause"><svg id="play-ico" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg></button>
+          <button data-i18n-aria="uiPlayPause" class="play-btn" onclick="togglePlay()" aria-label="Play / pause"><svg id="play-ico" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg></button>
           <span class="ttime" id="ttime">0:00 / 0:00</span>
           <div class="seek" id="seek-bar" onclick="seekBar(event)"><div class="seek-fill" id="seek-fill"></div></div>
           <!-- Volume fader -->
@@ -3916,17 +3916,17 @@ button:focus:not(:focus-visible){outline:none}
           <!-- Stats -->
           <div class="meter-stats">
             <div class="meter-stat">
-              <div class="meter-stat-lbl">Integrated</div>
+              <div data-i18n="uiIntegrated" class="meter-stat-lbl">Integrated</div>
               <div class="meter-stat-val" id="stat-lufs">-∞</div>
               <div class="meter-stat-unit">LUFS</div>
             </div>
             <div class="meter-stat">
-              <div class="meter-stat-lbl">Short-term</div>
+              <div data-i18n="uiShortTerm" class="meter-stat-lbl">Short-term</div>
               <div class="meter-stat-val" id="stat-short">-∞</div>
               <div class="meter-stat-unit">LUFS</div>
             </div>
             <div class="meter-stat">
-              <div class="meter-stat-lbl">Momentary</div>
+              <div data-i18n="uiMomentary" class="meter-stat-lbl">Momentary</div>
               <div class="meter-stat-val" id="stat-mom">-∞</div>
               <div class="meter-stat-unit">LUFS</div>
             </div>
@@ -3941,7 +3941,7 @@ button:focus:not(:focus-visible){outline:none}
               <div class="meter-stat-unit">dBFS</div>
             </div>
             <div class="meter-stat">
-              <div class="meter-stat-lbl">Dyn Range</div>
+              <div data-i18n="uiDynRange" class="meter-stat-lbl">Dyn Range</div>
               <div class="meter-stat-val" id="stat-dr">—</div>
               <div class="meter-stat-unit">dBFS</div>
             </div>
@@ -3955,8 +3955,8 @@ button:focus:not(:focus-visible){outline:none}
                much higher resolution + temporal animation. -->
           <div style="margin-top:14px">
             <div class="meter-stat-lbl" style="margin-bottom:8px;display:flex;align-items:center;gap:6px">
-              <span>LIVE SPECTRUM ANALYZER</span>
-              <span class="pro-live-dot" id="pro-spectrum-live-dot" title="Live while playing">●</span>
+              <span data-i18n="uiLiveSpectrum">LIVE SPECTRUM ANALYZER</span>
+              <span data-i18n-title="uiLiveWhilePlaying" class="pro-live-dot" id="pro-spectrum-live-dot" title="Live while playing">●</span>
               <span class="pro-spectrum-readout" id="pro-spectrum-readout"></span>
             </div>
             <div class="pro-spectrum" id="pro-spectrum">
@@ -3970,28 +3970,28 @@ button:focus:not(:focus-visible){outline:none}
       <div class="hidden" id="metrics-wrap">
         <div class="metrics">
           <div class="metric"><div class="m-lbl">Tempo</div><div class="m-val dim" id="bpm">—</div><div class="m-sub">BPM</div><div class="m-conf"><div class="m-conf-fill" id="bpm-conf"></div></div></div>
-          <div class="metric"><div class="m-lbl">Key</div><div class="m-val dim" id="key">—</div><div class="m-sub" id="key-mode">—</div><div class="m-conf"><div class="m-conf-fill" id="key-conf"></div></div></div>
-          <div class="metric"><div class="m-lbl">Duration</div><div class="m-val dim" id="dur">—</div><div class="m-sub">Seconds</div><div class="m-conf"><div class="m-conf-fill" id="dur-conf"></div></div></div>
+          <div class="metric"><div data-i18n="uiKeyLbl" class="m-lbl">Key</div><div class="m-val dim" id="key">—</div><div class="m-sub" id="key-mode">—</div><div class="m-conf"><div class="m-conf-fill" id="key-conf"></div></div></div>
+          <div class="metric"><div data-i18n="uiDuration" class="m-lbl">Duration</div><div class="m-val dim" id="dur">—</div><div data-i18n="uiSeconds" class="m-sub">Seconds</div><div class="m-conf"><div class="m-conf-fill" id="dur-conf"></div></div></div>
         </div>
         <!-- Top 3 key candidates — shown when confidence is low, critical for autotune -->
         <div id="key-candidates" style="display:none;padding:0 4px 12px"></div>
         <div class="ag">
-          <div class="ag-card"><div class="ag-title">Chord Progressions</div><div class="chord-list" id="chord-list"><div style="font-size:14px;color:var(--hint)">Analyze a track first</div></div></div>
-          <div class="ag-card"><div class="ag-title">Compatible Keys — Camelot</div><div class="cam-grid" id="cam-grid"><div style="font-size:14px;color:var(--hint)">—</div></div></div>
-          <div class="ag-card"><div class="ag-title">Closest Scale Match</div><div class="scale-family-list" id="scale-family-list"><div style="font-size:14px;color:var(--hint)">Analyze a track first</div></div></div>
+          <div class="ag-card"><div data-i18n="uiChordProg" class="ag-title">Chord Progressions</div><div class="chord-list" id="chord-list"><div data-i18n="uiAnalyzeFirst" style="font-size:14px;color:var(--hint)">Analyze a track first</div></div></div>
+          <div class="ag-card"><div data-i18n="uiCompatKeys" class="ag-title">Compatible Keys — Camelot</div><div class="cam-grid" id="cam-grid"><div style="font-size:14px;color:var(--hint)">—</div></div></div>
+          <div class="ag-card"><div data-i18n="uiClosestScale" class="ag-title">Closest Scale Match</div><div class="scale-family-list" id="scale-family-list"><div data-i18n="uiAnalyzeFirst" style="font-size:14px;color:var(--hint)">Analyze a track first</div></div></div>
           <div class="ag-card">
-            <div class="ag-title">Pitch Preview</div>
+            <div data-i18n="uiPitchPreview" class="ag-title">Pitch Preview</div>
             <div class="pitch-row"><span class="pitch-val" id="pitch-lbl">0</span><input type="range" id="pitch-sl" min="-6" max="6" value="0" step="1" oninput="setPitch(this.value)"/><span style="font-size:13px;color:var(--hint)">±6st</span></div>
             <div style="font-size:13px;color:var(--muted);margin-bottom:12px" id="pitch-key">—</div>
-            <button class="btn sm" style="width:100%" onclick="setPitch(0);document.getElementById('pitch-sl').value=0">Reset</button>
+            <button data-i18n="reset" class="btn sm" style="width:100%" onclick="setPitch(0);document.getElementById('pitch-sl').value=0">Reset</button>
           </div>
         </div>
         <!-- Professional analysis panel — injected here by applyAnalysisResult -->
         <div id="pro-metrics-wrap"></div>
 
         <div class="card mt2">
-          <div class="sh"><div class="sh-title">Track Notes</div><span style="font-size:13px;color:var(--hint)" id="notes-saved"></span></div>
-          <textarea class="notes-box" id="notes-box" placeholder="Write lyrics ideas, structure, vocal notes…" oninput="scheduleNoteSave()"></textarea>
+          <div class="sh"><div data-i18n="uiTrackNotes" class="sh-title">Track Notes</div><span style="font-size:13px;color:var(--hint)" id="notes-saved"></span></div>
+          <textarea data-i18n-ph="uiNotesPh" class="notes-box" id="notes-box" placeholder="Write lyrics ideas, structure, vocal notes…" oninput="scheduleNoteSave()"></textarea>
         </div>
 
         <!-- Send to Separator -->
@@ -4019,7 +4019,7 @@ button:focus:not(:focus-visible){outline:none}
 
       <!-- Loaded source + options -->
       <div class="card hidden" id="stems-options">
-        <div class="sh"><div class="sh-title" id="stems-source-name">—</div><button class="btn xs" onclick="clearSeparatorSource()" aria-label="Clear source file"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+        <div class="sh"><div class="sh-title" id="stems-source-name">—</div><button data-i18n-aria="uiClearSource" class="btn xs" onclick="clearSeparatorSource()" aria-label="Clear source file"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
 
         <div style="margin-bottom:18px">
           <div class="card-lbl" style="margin-bottom:10px"><span id="stems-mode-lbl">Stems</span></div>
@@ -4053,8 +4053,8 @@ button:focus:not(:focus-visible){outline:none}
         <label class="direct-toggle" style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);margin-bottom:10px;cursor:pointer">
           <input type="checkbox" id="stems-split-lead" onchange="setSplitLead(this.checked)" style="margin-top:3px;flex-shrink:0">
           <div style="flex:1">
-            <div style="font-size:13px;font-weight:600;color:var(--white)" id="stems-split-lead-lbl">Split lead vocal from BV / samples <span style="font-weight:400;color:var(--hint);font-size:11px">— best effort</span></div>
-            <div style="font-size:11px;color:var(--hint);margin-top:2px" id="stems-split-lead-desc">Adds an extra pass that separates the vocals stem into "lead_vocal" (main performance) and "back_vocal" (harmonies + ad-libs + samples). Adds ~30-60s on CPU. Quality varies by track — perfect on clean pop/R&amp;B, less reliable on dense rap.</div>
+            <div style="font-size:13px;font-weight:600;color:var(--white)" id="stems-split-lead-lbl"><span data-i18n="uiSplitLead">Split lead vocal from BV / samples</span> <span data-i18n="uiBestEffort" style="font-weight:400;color:var(--hint);font-size:11px">— best effort</span></div>
+            <div data-i18n="uiSplitLeadDesc" style="font-size:11px;color:var(--hint);margin-top:2px" id="stems-split-lead-desc">Adds an extra pass that separates the vocals stem into "lead_vocal" (main performance) and "back_vocal" (harmonies + ad-libs + samples). Adds ~30-60s on CPU. Quality varies by track — perfect on clean pop/R&amp;B, less reliable on dense rap.</div>
           </div>
         </label>
 
@@ -4065,8 +4065,8 @@ button:focus:not(:focus-visible){outline:none}
         <label class="direct-toggle" style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);margin-bottom:10px;cursor:pointer">
           <input type="checkbox" id="stems-ensemble" onchange="setEnsemble(this.checked)" style="margin-top:3px;flex-shrink:0">
           <div style="flex:1">
-            <div style="font-size:13px;font-weight:600;color:var(--white)" id="stems-ensemble-lbl">Ensemble — better piano / guitar / other <span style="font-weight:400;color:var(--hint);font-size:11px">— quality-bonus</span></div>
-            <div style="font-size:11px;color:var(--hint);margin-top:2px" id="stems-ensemble-desc">Runs a second Stage 2 model and averages outputs on harmonic stems. Lifts SDR by 0.3-0.8 dB and reduces model-specific artifacts (kick bleed, attack smearing). Adds ~30% to Stage 2 runtime. Requires quality 'high' or 'ultra' — ignored on 'fast'.</div>
+            <div style="font-size:13px;font-weight:600;color:var(--white)" id="stems-ensemble-lbl"><span data-i18n="uiEnsemble">Ensemble — better piano / guitar / other</span> <span data-i18n="uiQualityBonus" style="font-weight:400;color:var(--hint);font-size:11px">— quality-bonus</span></div>
+            <div data-i18n="uiEnsembleDesc" style="font-size:11px;color:var(--hint);margin-top:2px" id="stems-ensemble-desc">Runs a second Stage 2 model and averages outputs on harmonic stems. Lifts SDR by 0.3-0.8 dB and reduces model-specific artifacts (kick bleed, attack smearing). Adds ~30% to Stage 2 runtime. Requires quality 'high' or 'ultra' — ignored on 'fast'.</div>
           </div>
         </label>
 
@@ -4078,8 +4078,8 @@ button:focus:not(:focus-visible){outline:none}
         <label class="direct-toggle" style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);margin-bottom:10px;cursor:pointer">
           <input type="checkbox" id="stems-vocal-ensemble" onchange="setVocalEnsemble(this.checked)" style="margin-top:3px;flex-shrink:0">
           <div style="flex:1">
-            <div style="font-size:13px;font-weight:600;color:var(--white)" id="stems-vocal-ensemble-lbl">Vocal ensemble — cleaner vocals <span style="font-weight:400;color:var(--hint);font-size:11px">— vocal-quality bonus</span></div>
-            <div style="font-size:11px;color:var(--hint);margin-top:2px" id="stems-vocal-ensemble-desc">Runs an additional vocal isolation model (different architecture) and averages outputs with the primary. Cancels each model's specific weaknesses (BS-Roformer sibilance leak, MDX-Net breath softness). Lifts vocal SDR by 0.3-0.6 dB. Cost: roughly doubles Stage 1 runtime.</div>
+            <div style="font-size:13px;font-weight:600;color:var(--white)" id="stems-vocal-ensemble-lbl"><span data-i18n="uiVocalEnsemble">Vocal ensemble — cleaner vocals</span> <span data-i18n="uiVocalBonus" style="font-weight:400;color:var(--hint);font-size:11px">— vocal-quality bonus</span></div>
+            <div data-i18n="uiVocalEnsembleDesc" style="font-size:11px;color:var(--hint);margin-top:2px" id="stems-vocal-ensemble-desc">Runs an additional vocal isolation model (different architecture) and averages outputs with the primary. Cancels each model's specific weaknesses (BS-Roformer sibilance leak, MDX-Net breath softness). Lifts vocal SDR by 0.3-0.6 dB. Cost: roughly doubles Stage 1 runtime.</div>
           </div>
         </label>
 
@@ -4089,8 +4089,8 @@ button:focus:not(:focus-visible){outline:none}
         <label class="direct-toggle" style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);margin-bottom:20px;cursor:pointer">
           <input type="checkbox" id="stems-dereverb" onchange="setDereverb(this.checked)" style="margin-top:3px;flex-shrink:0">
           <div style="flex:1">
-            <div style="font-size:13px;font-weight:600;color:var(--white)" id="stems-dereverb-lbl">De-reverb vocal <span style="font-weight:400;color:var(--hint);font-size:11px">— dry vocal for sampling</span></div>
-            <div style="font-size:11px;color:var(--hint);margin-top:2px" id="stems-dereverb-desc">Removes reverb tail and slap echo from the isolated vocal stem. Replaces the wet vocal with a dry version. Targets "lead_vocal" when the split toggle is on, otherwise the merged "vocals" stem. Adds ~20-40s on CPU.</div>
+            <div style="font-size:13px;font-weight:600;color:var(--white)" id="stems-dereverb-lbl"><span data-i18n="uiDereverb">De-reverb vocal</span> <span data-i18n="uiDryVocal" style="font-weight:400;color:var(--hint);font-size:11px">— dry vocal for sampling</span></div>
+            <div data-i18n="uiDereverbDesc" style="font-size:11px;color:var(--hint);margin-top:2px" id="stems-dereverb-desc">Removes reverb tail and slap echo from the isolated vocal stem. Replaces the wet vocal with a dry version. Targets "lead_vocal" when the split toggle is on, otherwise the merged "vocals" stem. Adds ~20-40s on CPU.</div>
           </div>
         </label>
 
@@ -4109,19 +4109,19 @@ button:focus:not(:focus-visible){outline:none}
                  stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="9 18 15 12 9 6"/>
             </svg>
-            <span class="quality-advanced-title">Quality Advanced</span>
-            <span class="quality-advanced-pill" id="quality-advanced-pill">Balanced</span>
+            <span data-i18n="uiQualityAdvanced" class="quality-advanced-title">Quality Advanced</span>
+            <span data-i18n="uiBalanced" class="quality-advanced-pill" id="quality-advanced-pill">Balanced</span>
           </button>
           <div class="quality-advanced-body hidden" id="quality-advanced-body">
             <!-- Preset picker -->
             <div class="qa-row">
-              <label class="qa-label">Fullness restoration</label>
+              <label data-i18n="uiFullness" class="qa-label">Fullness restoration</label>
               <select id="qa-preset"
                       class="qa-select"
                       onchange="setFullnessPreset(this.value)">
-                <option value="subtle">Subtle — barely-there enhancement</option>
-                <option value="balanced" selected>Balanced — default sweet spot</option>
-                <option value="aggressive">Aggressive — for very thin stems</option>
+                <option data-i18n="uiFullSubtle" value="subtle">Subtle — barely-there enhancement</option>
+                <option data-i18n="uiFullBalanced" value="balanced" selected>Balanced — default sweet spot</option>
+                <option data-i18n="uiFullAggressive" value="aggressive">Aggressive — for very thin stems</option>
               </select>
             </div>
 
@@ -4134,43 +4134,43 @@ button:focus:not(:focus-visible){outline:none}
                    stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="9 18 15 12 9 6"/>
               </svg>
-              <span>Per-pass controls (override preset)</span>
+              <span data-i18n="uiPerPass">Per-pass controls (override preset)</span>
             </button>
             <div class="qa-perpass hidden" id="qa-perpass">
               <!-- Sustain rebuild strength -->
               <div class="qa-slider-row">
                 <div class="qa-slider-lbl-row">
-                  <span class="qa-slider-name">Sustain rebuild</span>
+                  <span data-i18n="uiSustain" class="qa-slider-name">Sustain rebuild</span>
                   <span class="qa-slider-val" id="qa-sustain-val">1.0×</span>
                 </div>
                 <input type="range" min="0" max="2" step="0.05" value="1.0"
                        id="qa-sustain" class="qa-slider"
                        oninput="onFullnessSustainChange(this.value)"/>
-                <div class="qa-slider-desc">Rebuilds truncated note tails (piano, guitar, other). 0 = off, 1× = balanced, 2× = aggressive.</div>
+                <div data-i18n="uiSustainDesc" class="qa-slider-desc">Rebuilds truncated note tails (piano, guitar, other). 0 = off, 1× = balanced, 2× = aggressive.</div>
               </div>
               <!-- Ghost-ducking max lift -->
               <div class="qa-slider-row">
                 <div class="qa-slider-lbl-row">
-                  <span class="qa-slider-name">Ghost-ducking lift</span>
+                  <span data-i18n="uiDucking" class="qa-slider-name">Ghost-ducking lift</span>
                   <span class="qa-slider-val" id="qa-ducking-val">+4 dB</span>
                 </div>
                 <input type="range" min="0" max="8" step="0.5" value="4"
                        id="qa-ducking" class="qa-slider"
                        oninput="onFullnessDuckingChange(this.value)"/>
-                <div class="qa-slider-desc">Max boost for moments where a stem dipped behind the original mix. 0 dB = off, +4 dB = balanced, +8 dB = aggressive.</div>
+                <div data-i18n="uiDuckingDesc" class="qa-slider-desc">Max boost for moments where a stem dipped behind the original mix. 0 dB = off, +4 dB = balanced, +8 dB = aggressive.</div>
               </div>
               <!-- Transient consistency clamp -->
               <div class="qa-slider-row">
                 <div class="qa-slider-lbl-row">
-                  <span class="qa-slider-name">Transient consistency</span>
+                  <span data-i18n="uiTransient" class="qa-slider-name">Transient consistency</span>
                   <span class="qa-slider-val" id="qa-transient-val">±3 dB</span>
                 </div>
                 <input type="range" min="0" max="8" step="0.5" value="3"
                        id="qa-transient" class="qa-slider"
                        oninput="onFullnessTransientChange(this.value)"/>
-                <div class="qa-slider-desc">Equalizes attack levels across the track. 0 dB = off, ±3 dB = balanced, ±8 dB = aggressive.</div>
+                <div data-i18n="uiTransientDesc" class="qa-slider-desc">Equalizes attack levels across the track. 0 dB = off, ±3 dB = balanced, ±8 dB = aggressive.</div>
               </div>
-              <button type="button" class="qa-reset-btn" onclick="resetFullnessOverrides()">
+              <button data-i18n="uiResetOverrides" type="button" class="qa-reset-btn" onclick="resetFullnessOverrides()">
                 Reset overrides to preset
               </button>
             </div>
@@ -4192,14 +4192,14 @@ button:focus:not(:focus-visible){outline:none}
       </div>
 
       <div class="card hidden" id="stems-progress">
-        <div class="sh"><div class="sh-title" id="stems-prog-title">Separating…</div><span style="font-size:14px;color:var(--muted);font-variant-numeric:tabular-nums" id="stems-prog-pct">0%</span></div>
+        <div class="sh"><div data-i18n="uiSeparating" class="sh-title" id="stems-prog-title">Separating…</div><span style="font-size:14px;color:var(--muted);font-variant-numeric:tabular-nums" id="stems-prog-pct">0%</span></div>
         <div class="prog-track"><div class="prog-fill" id="stems-prog-fill" style="width:0%"></div></div>
         <div class="prog-lbl" id="stems-prog-msg">Preparing engine…</div>
         <div style="font-size:12px;color:var(--hint);margin-top:4px" id="stems-prog-detail"></div>
         <div class="stage-row">
           <div class="stage-pill" id="stage-pill-1">
             <span class="stage-num">1</span>
-            <span id="stage-pill-1-text">Vocal isolation</span>
+            <span data-i18n="uiVocalIsolation" id="stage-pill-1-text">Vocal isolation</span>
           </div>
           <div class="stage-pill" id="stage-pill-2">
             <span class="stage-num">2</span>
@@ -4219,9 +4219,9 @@ button:focus:not(:focus-visible){outline:none}
             </div>
           </div>
           <div style="display:flex;gap:6px">
-            <button class="btn xs pri" onclick="openMiniDAW()" id="btn-open-daw" title="Edit stems in timeline" aria-label="Edit stems in timeline"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="margin-right:4px;vertical-align:-2px"><rect x="3" y="6" width="18" height="3" rx="1"/><rect x="3" y="11" width="18" height="3" rx="1"/><rect x="3" y="16" width="18" height="3" rx="1"/></svg>Open Mini-DAW</button>
+            <button data-i18n-aria="uiEditStems" data-i18n-title="uiEditStems" class="btn xs pri" onclick="openMiniDAW()" id="btn-open-daw" title="Edit stems in timeline" aria-label="Edit stems in timeline"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="margin-right:4px;vertical-align:-2px"><rect x="3" y="6" width="18" height="3" rx="1"/><rect x="3" y="11" width="18" height="3" rx="1"/><rect x="3" y="16" width="18" height="3" rx="1"/></svg><span data-i18n="uiOpenDaw">Open Mini-DAW</span></button>
             <button class="btn xs" onclick="openStemFolder()" id="btn-open-stems"><span id="btn-open-stems-lbl">Open Folder</span></button>
-            <button class="btn xs" onclick="closeSeparatorResults()" aria-label="Close results"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            <button data-i18n-aria="uiCloseResults" class="btn xs" onclick="closeSeparatorResults()" aria-label="Close results"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
           </div>
         </div>
         <div id="stem-list"></div>
@@ -4236,20 +4236,20 @@ button:focus:not(:focus-visible){outline:none}
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
                 <path d="M3 12h4l3 8 4-16 3 8h4"/>
               </svg>
-              <span>Master</span>
-              <span class="master-hint">— rule-based, no AI</span>
+              <span data-i18n="uiMaster">Master</span>
+              <span data-i18n="uiRuleBased" class="master-hint">— rule-based, no AI</span>
             </div>
           </div>
           <div class="master-row">
             <select id="master-preset" class="master-preset-select" onchange="onMasterPresetChange()">
-              <option value="loudness_normalize">Loudness Normalize — hit −14 LUFS</option>
-              <option value="bright">Bright — adds air (+2 dB &gt; 6 kHz)</option>
-              <option value="warm">Warm — adds body (+2 dB &lt; 250 Hz)</option>
-              <option value="reference_match">Reference Match — match a track you like</option>
+              <option data-i18n="uiMasterLoud" value="loudness_normalize">Loudness Normalize — hit −14 LUFS</option>
+              <option data-i18n="uiMasterBright" value="bright">Bright — adds air (+2 dB &gt; 6 kHz)</option>
+              <option data-i18n="uiMasterWarm" value="warm">Warm — adds body (+2 dB &lt; 250 Hz)</option>
+              <option data-i18n="uiMasterRef" value="reference_match">Reference Match — match a track you like</option>
             </select>
             <button class="btn pri" id="btn-master" onclick="startMastering()">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="margin-right:5px;vertical-align:-1px"><polygon points="5 3 19 12 5 21" fill="currentColor"/></svg>
-              <span id="btn-master-lbl">Apply</span>
+              <span data-i18n="uiApply" id="btn-master-lbl">Apply</span>
             </button>
           </div>
 
@@ -4263,12 +4263,12 @@ button:focus:not(:focus-visible){outline:none}
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
                 <path d="M9 11h6m-3-3v6m9-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/>
               </svg>
-              <span id="master-ref-label">Drop a reference track or click to pick</span>
-              <button class="master-ref-clear hidden" id="master-ref-clear" onclick="event.stopPropagation();clearMasterReference()" title="Remove reference" aria-label="Remove reference">×</button>
+              <span data-i18n="uiDropRef" id="master-ref-label">Drop a reference track or click to pick</span>
+              <button data-i18n-aria="uiRemoveRef" data-i18n-title="uiRemoveRef" class="master-ref-clear hidden" id="master-ref-clear" onclick="event.stopPropagation();clearMasterReference()" title="Remove reference" aria-label="Remove reference">×</button>
             </div>
             <input type="file" id="master-ref-file" accept="audio/*" style="display:none" onchange="onMasterReferencePicked(event)">
             <div class="master-strength">
-              <label for="master-strength-slider" class="master-strength-lbl">Match strength</label>
+              <label data-i18n="uiMatchStrength" for="master-strength-slider" class="master-strength-lbl">Match strength</label>
               <input type="range" id="master-strength-slider" class="master-strength-slider"
                      min="0" max="1" step="0.05" value="0.5"
                      oninput="onMasterStrengthChange(this.value)">
@@ -4277,13 +4277,13 @@ button:focus:not(:focus-visible){outline:none}
           </div>
           <div class="master-progress hidden" id="master-progress">
             <div class="master-progress-track"><div class="master-progress-fill" id="master-prog-fill"></div></div>
-            <div class="master-progress-text" id="master-prog-text">Starting…</div>
+            <div data-i18n="uiStarting" class="master-progress-text" id="master-prog-text">Starting…</div>
           </div>
           <div class="master-result hidden" id="master-result">
             <div class="master-result-stats" id="master-result-stats"></div>
             <div class="master-result-actions">
-              <button class="btn xs" onclick="openMasteredFolder()">Open folder</button>
-              <button class="btn xs" onclick="playMastered()">Preview</button>
+              <button data-i18n="sepOpenFolder" class="btn xs" onclick="openMasteredFolder()">Open folder</button>
+              <button data-i18n="previewWord" class="btn xs" onclick="playMastered()">Preview</button>
             </div>
           </div>
         </div>
@@ -4300,34 +4300,34 @@ button:focus:not(:focus-visible){outline:none}
       <div class="card">
         <div class="drop" id="drop-trans" onclick="document.getElementById('file-trans').click()">
           <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="14" y2="13"/><line x1="8" y1="17" x2="11" y2="17"/></svg>
-          <h3>Drop a vocal or audio file</h3><p>Works best on vocals-only tracks</p>
+          <h3 data-i18n="uiTransDrop">Drop a vocal or audio file</h3><p data-i18n="uiTransDropSub">Works best on vocals-only tracks</p>
         </div>
         <input type="file" id="file-trans" accept="audio/*" style="display:none" onchange="startTranscribe(event)">
         <div class="row mt" style="gap:10px">
-          <select id="wmodel" style="flex:1;height:42px;font-size:13px;padding:0 12px"><option value="tiny">Tiny — fastest</option><option value="base" selected>Base — recommended</option><option value="small">Small</option><option value="medium">Medium — best</option></select>
-          <select id="wlang" style="flex:1;height:42px;font-size:13px;padding:0 12px"><option value="auto">Auto-detect</option><option value="bi">Bilingual (FR + EN)</option><option value="patois">Jamaican Patois (+ EN)</option><option value="ig">Igbo (+ EN)</option><option value="en">English</option><option value="fr">French</option><option value="es">Spanish</option><option value="es-en">Spanish (+ EN)</option><option value="pt">Portuguese</option><option value="pt-en">Portuguese (+ EN)</option><option value="yo">Yoruba</option><option value="yo-en">Yoruba (+ EN)</option><option value="sw">Swahili</option><option value="sw-en">Swahili (+ EN)</option><option value="ha">Hausa</option><option value="ha-en">Hausa (+ EN)</option></select>
+          <select id="wmodel" style="flex:1;height:42px;font-size:13px;padding:0 12px"><option data-i18n="uiModelTiny" value="tiny">Tiny — fastest</option><option data-i18n="uiModelBase" value="base" selected>Base — recommended</option><option data-i18n="uiModelSmall" value="small">Small</option><option data-i18n="uiModelMedium" value="medium">Medium — best</option></select>
+          <select id="wlang" style="flex:1;height:42px;font-size:13px;padding:0 12px"><option data-i18n="uiAutoDetect" value="auto">Auto-detect</option><option data-i18n="uiLangBi" value="bi">Bilingual (FR + EN)</option><option data-i18n="uiLangPatois" value="patois">Jamaican Patois (+ EN)</option><option data-i18n="uiLangIgbo" value="ig">Igbo (+ EN)</option><option data-i18n="uiLangEn" value="en">English</option><option data-i18n="uiLangFr" value="fr">French</option><option data-i18n="uiLangEs" value="es">Spanish</option><option data-i18n="uiLangEsEn" value="es-en">Spanish (+ EN)</option><option data-i18n="uiLangPt" value="pt">Portuguese</option><option data-i18n="uiLangPtEn" value="pt-en">Portuguese (+ EN)</option><option value="yo">Yoruba</option><option data-i18n="uiLangYoEn" value="yo-en">Yoruba (+ EN)</option><option value="sw">Swahili</option><option data-i18n="uiLangSwEn" value="sw-en">Swahili (+ EN)</option><option data-i18n="uiLangHa" value="ha">Hausa</option><option data-i18n="uiLangHaEn" value="ha-en">Hausa (+ EN)</option></select>
         </div>
         <button class="btn pri mt" id="btn-trans-start" onclick="clickTranscribeStart()" disabled style="width:100%;height:44px" data-i18n="transStartBtn">Start transcription</button>
       </div>
-      <div class="status" id="trans-status"><div class="dot" id="trans-dot"></div><span id="trans-txt">Drop an audio file above to begin</span><span id="trans-timer" class="trans-timer" style="display:none;margin-left:auto;font-variant-numeric:tabular-nums;color:var(--muted);font-size:12px"></span></div>
+      <div class="status" id="trans-status"><div class="dot" id="trans-dot"></div><span data-i18n="uiTransIdle" id="trans-txt">Drop an audio file above to begin</span><span id="trans-timer" class="trans-timer" style="display:none;margin-left:auto;font-variant-numeric:tabular-nums;color:var(--muted);font-size:12px"></span></div>
       <div class="card hidden" id="trans-card">
-        <div class="sh"><div class="sh-title">Transcript</div><div class="row" style="gap:7px"><button class="btn xs" onclick="copyTranscript()">Copy</button><button class="btn xs" onclick="saveTranscript()">Save .txt</button></div></div>
-        <textarea class="transcript-box" id="transcript-out" placeholder="Transcript appears here…"></textarea>
+        <div class="sh"><div data-i18n="uiTranscript" class="sh-title">Transcript</div><div class="row" style="gap:7px"><button data-i18n="transCopy" class="btn xs" onclick="copyTranscript()">Copy</button><button data-i18n="transSave" class="btn xs" onclick="saveTranscript()">Save .txt</button></div></div>
+        <textarea data-i18n-ph="uiTranscriptPh" class="transcript-box" id="transcript-out" placeholder="Transcript appears here…"></textarea>
       </div>
-      <div class="info-note mt">Runs locally &mdash; no audio or text leaves your machine.</div>
+      <div data-i18n="uiRunsLocally" class="info-note mt">Runs locally &mdash; no audio or text leaves your machine.</div>
     </div>
 
     <!-- TOOLS -->
     <div class="tab-pane" id="tab-slowverb">
-      <div class="ph"><div class="ph-title">Slow + Reverb</div><div class="ph-sub">Slow it down, speed it up, drown it in reverb - hear every change as you make it</div></div>
+      <div class="ph"><div class="ph-title">Slow + Reverb</div><div data-i18n="svSub" class="ph-sub">Slow it down, speed it up, drown it in reverb - hear every change as you make it</div></div>
 
       <div class="card">
-        <div class="card-lbl">Track</div>
+        <div data-i18n="uiTrack" class="card-lbl">Track</div>
         <div class="row mb" style="gap:8px;align-items:center">
           <button class="btn sm" onclick="svPickFromHistory()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 12h18M3 6h18M3 18h12"/></svg> <span id="sv-pick-lbl">Choose from library</span></button>
           <button class="btn sm" onclick="document.getElementById('sv-file').click()"><span id="sv-file-lbl">Open a file</span></button>
           <input type="file" id="sv-file" accept="audio/*,.wav,.mp3,.flac,.m4a,.aac,.ogg" style="display:none" onchange="svLoadFile(this.files[0])"/>
-          <div id="sv-track-name" class="sv-track-name">Nothing loaded</div>
+          <div data-i18n="uiNothingLoaded" id="sv-track-name" class="sv-track-name">Nothing loaded</div>
         </div>
 
         <div id="sv-empty" class="sv-empty">
@@ -4340,7 +4340,7 @@ button:focus:not(:focus-visible){outline:none}
           <div class="sv-transport">
             <button class="btn pri" id="sv-play" onclick="svTogglePlay()" disabled>
               <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="7,5 7,19 19,12"/></svg>
-              <span id="sv-play-lbl">Play</span>
+              <span data-i18n="svPlay" id="sv-play-lbl">Play</span>
             </button>
             <div class="sv-seek" id="sv-seek" onclick="svSeekClick(event)">
               <div class="sv-seek-fill" id="sv-seek-fill"></div>
@@ -4348,56 +4348,56 @@ button:focus:not(:focus-visible){outline:none}
             <div class="sv-time"><span id="sv-cur">0:00</span> / <span id="sv-dur">0:00</span></div>
           </div>
 
-          <div class="card-lbl" style="margin-top:16px">Presets</div>
+          <div data-i18n="uiPresets" class="card-lbl" style="margin-top:16px">Presets</div>
           <div class="sv-presets" id="sv-presets"></div>
 
           <div class="sv-grid">
             <div class="sv-ctl">
-              <div class="sv-ctl-head"><label for="sv-speed">Speed</label><span class="sv-val" id="sv-speed-val">100%</span></div>
+              <div class="sv-ctl-head"><label data-i18n="uiSpeed" for="sv-speed">Speed</label><span class="sv-val" id="sv-speed-val">100%</span></div>
               <input type="range" id="sv-speed" min="50" max="150" step="1" value="100" oninput="svSet('speed', this.value)"/>
-              <div class="sv-hint" id="sv-speed-hint">Slower drops the pitch too, the way a tape does</div>
+              <div data-i18n="svHintTape" class="sv-hint" id="sv-speed-hint">Slower drops the pitch too, the way a tape does</div>
             </div>
 
             <div class="sv-ctl">
-              <div class="sv-ctl-head"><label for="sv-reverb">Reverb</label><span class="sv-val" id="sv-reverb-val">0%</span></div>
+              <div class="sv-ctl-head"><label data-i18n="uiReverb" for="sv-reverb">Reverb</label><span class="sv-val" id="sv-reverb-val">0%</span></div>
               <input type="range" id="sv-reverb" min="0" max="100" step="1" value="0" oninput="svSet('reverb', this.value)"/>
-              <div class="sv-hint">How much of the room you hear</div>
+              <div data-i18n="uiReverbHint" class="sv-hint">How much of the room you hear</div>
             </div>
 
             <div class="sv-ctl">
-              <div class="sv-ctl-head"><label for="sv-room">Room size</label><span class="sv-val" id="sv-room-val">Medium</span></div>
+              <div class="sv-ctl-head"><label data-i18n="uiRoomSize" for="sv-room">Room size</label><span data-i18n="uiMedium" class="sv-val" id="sv-room-val">Medium</span></div>
               <input type="range" id="sv-room" min="1" max="5" step="1" value="3" oninput="svSet('room', this.value)"/>
-              <div class="sv-hint">Small booth through to a cathedral</div>
+              <div data-i18n="uiRoomHint" class="sv-hint">Small booth through to a cathedral</div>
             </div>
 
             <div class="sv-ctl">
-              <div class="sv-ctl-head"><label for="sv-bass">Bass</label><span class="sv-val" id="sv-bass-val">0 dB</span></div>
+              <div class="sv-ctl-head"><label data-i18n="uiBass" for="sv-bass">Bass</label><span class="sv-val" id="sv-bass-val">0 dB</span></div>
               <input type="range" id="sv-bass" min="-6" max="12" step="1" value="0" oninput="svSet('bass', this.value)"/>
-              <div class="sv-hint">Lifts everything under 120 Hz</div>
+              <div data-i18n="uiBassHint" class="sv-hint">Lifts everything under 120 Hz</div>
             </div>
 
             <div class="sv-ctl">
-              <div class="sv-ctl-head"><label for="sv-volume">Volume</label><span class="sv-val" id="sv-volume-val">85%</span></div>
+              <div class="sv-ctl-head"><label data-i18n="sepVolume" for="sv-volume">Volume</label><span class="sv-val" id="sv-volume-val">85%</span></div>
               <input type="range" id="sv-volume" min="0" max="100" step="1" value="85" oninput="svSet('volume', this.value)"/>
-              <div class="sv-hint" id="sv-volume-hint">Listening level only - the saved copy keeps the track's own level</div>
+              <div data-i18n="svVolumeHint" class="sv-hint" id="sv-volume-hint">Listening level only - the saved copy keeps the track's own level</div>
             </div>
           </div>
 
-          <label class="sv-check"><input type="checkbox" id="sv-keep-pitch" onchange="svSet('keepPitch', this.checked)"/> <span id="sv-keep-pitch-lbl">Keep the original pitch when changing speed</span></label>
+          <label class="sv-check"><input type="checkbox" id="sv-keep-pitch" onchange="svSet('keepPitch', this.checked)"/> <span data-i18n="uiKeepPitch" id="sv-keep-pitch-lbl">Keep the original pitch when changing speed</span></label>
 
-          <div class="card-lbl" style="margin-top:20px">Export format</div>
+          <div data-i18n="uiExportFormat" class="card-lbl" style="margin-top:20px">Export format</div>
           <div class="sv-formats" id="sv-formats">
-            <button class="sv-fmt on" data-fmt="wav24" onclick="svSetFormat('wav24')">WAV 24-bit<span>master</span></button>
-            <button class="sv-fmt" data-fmt="wav16" onclick="svSetFormat('wav16')">WAV 16-bit<span>CD / streaming</span></button>
-            <button class="sv-fmt" data-fmt="flac24" onclick="svSetFormat('flac24')">FLAC 24-bit<span>lossless, smaller</span></button>
-            <button class="sv-fmt" data-fmt="mp3" onclick="svSetFormat('mp3')">MP3 320<span>reference copy</span></button>
+            <button class="sv-fmt on" data-fmt="wav24" onclick="svSetFormat('wav24')">WAV 24-bit<span data-i18n="uiFmtMaster">master</span></button>
+            <button class="sv-fmt" data-fmt="wav16" onclick="svSetFormat('wav16')">WAV 16-bit<span data-i18n="uiFmtCd">CD / streaming</span></button>
+            <button class="sv-fmt" data-fmt="flac24" onclick="svSetFormat('flac24')">FLAC 24-bit<span data-i18n="uiFmtLossless">lossless, smaller</span></button>
+            <button class="sv-fmt" data-fmt="mp3" onclick="svSetFormat('mp3')">MP3 320<span data-i18n="uiFmtRef">reference copy</span></button>
           </div>
 
           <div class="sv-actions">
-            <button class="btn sm" onclick="svReset()"><span id="sv-reset-lbl">Reset</span></button>
+            <button class="btn sm" onclick="svReset()"><span data-i18n="reset" id="sv-reset-lbl">Reset</span></button>
             <button class="btn sm pri" id="sv-export" onclick="svExport()">
               <svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-              <span id="sv-export-lbl">Save a copy</span>
+              <span data-i18n="svExportLbl" id="sv-export-lbl">Save a copy</span>
             </button>
           </div>
           <div class="sv-export-status" id="sv-export-status"></div>
@@ -4432,19 +4432,19 @@ button:focus:not(:focus-visible){outline:none}
 
           <div id="rb-normal-transport">
           <div class="rb-transport">
-            <button class="rb-shuffle-btn" id="rb-shuffle-btn" onclick="rbNext()" title="Next random beat">
+            <button data-i18n-title="rbNextBeat" class="rb-shuffle-btn" id="rb-shuffle-btn" onclick="rbNext()" title="Next random beat">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
               <span id="rb-shuffle-lbl">Next random beat</span>
             </button>
-            <button class="rb-shuffle-btn" id="rb-picker-toggle-btn" onclick="rbTogglePicker()" title="Pick a specific beat" aria-expanded="false">
+            <button data-i18n-title="uiPickBeatTitle" class="rb-shuffle-btn" id="rb-picker-toggle-btn" onclick="rbTogglePicker()" title="Pick a specific beat" aria-expanded="false">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
               <span id="rb-picker-toggle-lbl">Pick a beat</span>
             </button>
-            <button class="rb-play-btn" id="rb-play-btn" onclick="rbTogglePlay()" aria-label="Play or pause">
+            <button data-i18n-aria="uiPlayOrPause" class="rb-play-btn" id="rb-play-btn" onclick="rbTogglePlay()" aria-label="Play or pause">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" id="rb-play-svg"><polygon points="7,5 7,19 19,12"/></svg>
             </button>
             <div class="rb-vol-wrap">
-              <button class="rb-vol-btn" id="rb-vol-btn" onclick="folderViewToggleMute()" title="Mute / Unmute" aria-label="Mute / Unmute">
+              <button data-i18n-aria="uiMute" data-i18n-title="uiMute" class="rb-vol-btn" id="rb-vol-btn" onclick="folderViewToggleMute()" title="Mute / Unmute" aria-label="Mute / Unmute">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" id="rb-vol-icon"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
               </button>
               <div class="rb-vol" id="rb-vol" onclick="rbVolumeClick(event)">
@@ -4467,9 +4467,9 @@ button:focus:not(:focus-visible){outline:none}
           <div class="rb-picker-panel hidden" id="rb-picker-panel">
             <div class="rb-picker-search-wrap">
               <svg class="ic rb-picker-search-ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-              <input type="search" id="rb-picker-search" placeholder="Search your beats…" oninput="rbPickerFilter()" aria-label="Search your beats"/>
+              <input data-i18n-aria="uiSearchBeatsAria" data-i18n-ph="uiSearchBeats" type="search" id="rb-picker-search" placeholder="Search your beats…" oninput="rbPickerFilter()" aria-label="Search your beats"/>
               <span class="rb-picker-count" id="rb-picker-count"></span>
-              <button type="button" class="rb-picker-close" onclick="rbTogglePicker()" aria-label="Close">&times;</button>
+              <button data-i18n-aria="closeWord" type="button" class="rb-picker-close" onclick="rbTogglePicker()" aria-label="Close">&times;</button>
             </div>
             <div class="rb-picker-list" id="rb-picker-list"></div>
           </div>
@@ -4496,7 +4496,7 @@ button:focus:not(:focus-visible){outline:none}
               <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" id="rb-record-ic"><circle cx="12" cy="12" r="7"/></svg>
               <span id="rb-record-lbl">Record topline</span>
             </button>
-            <button class="rb-autotune-gear" id="rb-autotune-gear" onclick="rbToggleAutotunePanel()" title="Autotune settings" aria-label="Autotune settings">
+            <button data-i18n-aria="uiAutotuneSettings" data-i18n-title="uiAutotuneSettings" class="rb-autotune-gear" id="rb-autotune-gear" onclick="rbToggleAutotunePanel()" title="Autotune settings" aria-label="Autotune settings">
               <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             </button>
           </div>
@@ -4504,7 +4504,7 @@ button:focus:not(:focus-visible){outline:none}
           <div class="rb-autotune-panel hidden" id="rb-autotune-panel">
             <div class="rb-at-head">
               <span id="rb-at-title">Recording</span>
-              <button class="rb-at-close" onclick="rbToggleAutotunePanel()" aria-label="Close">&times;</button>
+              <button data-i18n-aria="closeWord" class="rb-at-close" onclick="rbToggleAutotunePanel()" aria-label="Close">&times;</button>
             </div>
 
             <!-- Tab strip replaces the old stacked-card layout (Input card,
@@ -4526,7 +4526,7 @@ button:focus:not(:focus-visible){outline:none}
               </button>
               <button type="button" class="rb-at-tab" id="rb-at-tab-reverb" data-at-tab="reverb" onclick="rbAtSwitchTab('reverb')" role="tab" aria-selected="false">
                 <svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9M3 12a9 9 0 0 0 9 9M3 12h18M12 3a9 9 0 0 1 0 18"/></svg>
-                <span id="rb-at-group-reverb-lbl">Reverb</span>
+                <span data-i18n="uiReverb" id="rb-at-group-reverb-lbl">Reverb</span>
               </button>
             </div>
 
@@ -4543,7 +4543,7 @@ button:focus:not(:focus-visible){outline:none}
               <div class="rb-at-gain-grid">
                 <div class="rb-at-slider-row">
                   <div class="rb-at-slider-head"><span id="rb-at-ingain-lbl">Input Gain</span><span class="rb-at-val" id="rb-at-ingain-val">0 dB</span></div>
-                  <input type="range" id="rb-at-ingain" min="-24" max="24" value="0" step="1" oninput="rbAutotuneParamsChanged()" aria-label="Input gain"/>
+                  <input data-i18n-aria="rbAtInGain" type="range" id="rb-at-ingain" min="-24" max="24" value="0" step="1" oninput="rbAutotuneParamsChanged()" aria-label="Input gain"/>
                 </div>
                 <div class="rb-at-slider-row">
                   <!-- Output Gain lives here now, next to Input Gain, instead of
@@ -4555,7 +4555,7 @@ button:focus:not(:focus-visible){outline:none}
                        getElementById lookup with `if (el)`, so that's a
                        harmless no-op now, not a broken reference. -->
                   <div class="rb-at-slider-head"><span id="rb-at-outgain-lbl">Output Gain</span><span class="rb-at-val" id="rb-at-outgain-val">0 dB</span></div>
-                  <input type="range" id="rb-at-outgain" min="-24" max="24" value="0" step="1" oninput="rbAutotuneParamsChanged()" aria-label="Output gain"/>
+                  <input data-i18n-aria="rbAtOutGain" type="range" id="rb-at-outgain" min="-24" max="24" value="0" step="1" oninput="rbAutotuneParamsChanged()" aria-label="Output gain"/>
                 </div>
               </div>
             </div>
@@ -4569,7 +4569,7 @@ button:focus:not(:focus-visible){outline:none}
                 <label class="rb-at-toggle rb-at-span2"><input type="checkbox" id="rb-at-key-auto" checked onchange="rbKeyAutoToggleChanged()"/><span class="rb-switch" aria-hidden="true"></span><span id="rb-at-key-auto-lbl">Match beat automatically</span></label>
                 <div class="rb-at-hint rb-at-span2" id="rb-at-key-auto-hint">Detecting key…</div>
                 <div class="rb-at-row">
-                  <label id="rb-at-key-lbl">Key</label>
+                  <label data-i18n="uiKeyLbl" id="rb-at-key-lbl">Key</label>
                   <select id="rb-at-key" onchange="rbRenderAutotunePiano();rbAutotuneParamsChanged()"></select>
                 </div>
                 <div class="rb-at-row">
@@ -4590,7 +4590,7 @@ button:focus:not(:focus-visible){outline:none}
                     </div>
                     <span class="rb-at-readout-cents" id="rb-at-readout-cents"></span>
                   </div>
-                  <div class="rb-at-piano" id="rb-at-piano" role="group" aria-label="Scale notes - click to include or exclude a note from pitch correction"></div>
+                  <div data-i18n-aria="uiScaleNotesAria" class="rb-at-piano" id="rb-at-piano" role="group" aria-label="Scale notes - click to include or exclude a note from pitch correction"></div>
                 </div>
                 <div class="rb-at-slider-row">
                   <div class="rb-at-slider-head"><span id="rb-at-retune-lbl">Retune Speed</span><span class="rb-at-val" id="rb-at-retune-val">5 ms</span></div>
@@ -4628,19 +4628,19 @@ button:focus:not(:focus-visible){outline:none}
               <div class="rb-rv-params hidden" id="rb-rv-params">
                 <div class="rb-at-slider-row">
                   <div class="rb-at-slider-head"><span id="rb-rv-mix-lbl">Mix</span><span class="rb-at-val" id="rb-rv-mix-val">35%</span></div>
-                  <input type="range" id="rb-rv-mix" min="0" max="100" value="35" step="1" oninput="rbAutotuneParamsChanged()" aria-label="Reverb mix"/>
+                  <input data-i18n-aria="uiRvMixAria" type="range" id="rb-rv-mix" min="0" max="100" value="35" step="1" oninput="rbAutotuneParamsChanged()" aria-label="Reverb mix"/>
                 </div>
                 <div class="rb-at-slider-row">
                   <div class="rb-at-slider-head"><span id="rb-rv-decay-lbl">Decay</span><span class="rb-at-val" id="rb-rv-decay-val">50%</span></div>
-                  <input type="range" id="rb-rv-decay" min="0" max="100" value="50" step="1" oninput="rbAutotuneParamsChanged()" aria-label="Reverb decay"/>
+                  <input data-i18n-aria="uiRvDecayAria" type="range" id="rb-rv-decay" min="0" max="100" value="50" step="1" oninput="rbAutotuneParamsChanged()" aria-label="Reverb decay"/>
                 </div>
                 <div class="rb-at-slider-row">
                   <div class="rb-at-slider-head"><span id="rb-rv-damping-lbl">Damping</span><span class="rb-at-val" id="rb-rv-damping-val">50%</span></div>
-                  <input type="range" id="rb-rv-damping" min="0" max="100" value="50" step="1" oninput="rbAutotuneParamsChanged()" aria-label="Reverb damping"/>
+                  <input data-i18n-aria="uiRvDampAria" type="range" id="rb-rv-damping" min="0" max="100" value="50" step="1" oninput="rbAutotuneParamsChanged()" aria-label="Reverb damping"/>
                 </div>
                 <div class="rb-at-slider-row">
                   <div class="rb-at-slider-head"><span id="rb-rv-predelay-lbl">Pre-delay</span><span class="rb-at-val" id="rb-rv-predelay-val">20 ms</span></div>
-                  <input type="range" id="rb-rv-predelay" min="0" max="120" value="20" step="1" oninput="rbAutotuneParamsChanged()" aria-label="Reverb pre-delay"/>
+                  <input data-i18n-aria="uiRvPreAria" type="range" id="rb-rv-predelay" min="0" max="120" value="20" step="1" oninput="rbAutotuneParamsChanged()" aria-label="Reverb pre-delay"/>
                 </div>
               </div>
             </div>
@@ -4673,7 +4673,7 @@ button:focus:not(:focus-visible){outline:none}
                  first thing visible when review opens, in their own tinted
                  row instead of looking like just two more plain buttons. -->
             <div class="rb-review-stems" id="rb-review-stems">
-              <span class="rb-review-stems-lbl" id="rb-review-stems-lbl">Grab a stem</span>
+              <span class="rb-review-stems-lbl" id="rb-review-stems-lbl" data-i18n="rbGrabStem">Grab a stem</span>
               <button class="rb-stem-btn" id="rb-review-vocal-stem" onclick="rbDownloadVocalStem()">
                 <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
                 <span id="rb-review-vocal-stem-lbl">Vocal Stem</span>
@@ -4693,11 +4693,11 @@ button:focus:not(:focus-visible){outline:none}
                  for visual consistency across the whole page rather than
                  inventing a fourth look. -->
             <div class="rb-review-track-section">
-              <div class="rb-review-section-lbl"><span class="rb-review-icon-badge" aria-hidden="true"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></span>Vocal Track</div>
+              <div class="rb-review-section-lbl"><span class="rb-review-icon-badge" aria-hidden="true"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></span><span data-i18n="rbVocalTrack">Vocal Track</span></div>
               <div class="rb-review-zoom-row">
-                <button class="rb-zoom-btn" id="rb-review-zoom-out" onclick="rbReviewZoomOut()" aria-label="Zoom out">&minus;</button>
+                <button data-i18n-aria="uiZoomOut" class="rb-zoom-btn" id="rb-review-zoom-out" onclick="rbReviewZoomOut()" aria-label="Zoom out">&minus;</button>
                 <span class="rb-zoom-lvl" id="rb-review-zoom-lvl">1x</span>
-                <button class="rb-zoom-btn" id="rb-review-zoom-in" onclick="rbReviewZoomIn()" aria-label="Zoom in">+</button>
+                <button data-i18n-aria="uiZoomIn" class="rb-zoom-btn" id="rb-review-zoom-in" onclick="rbReviewZoomIn()" aria-label="Zoom in">+</button>
                 <button class="rb-zoom-fit" onclick="rbReviewZoomFit()" id="rb-review-zoom-fit-lbl">Fit</button>
                 <button class="rb-graph-toggle" id="rb-graph-toggle" onclick="rbToggleGraphMode()" aria-pressed="false">
                   <svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-6 4 4 5-8 4 5"/></svg>
@@ -4706,19 +4706,19 @@ button:focus:not(:focus-visible){outline:none}
               </div>
               <canvas class="rb-review-canvas" id="rb-review-canvas" onclick="void 0"></canvas>
               <div class="rb-review-pan-row hidden" id="rb-review-pan-row">
-                <input type="range" id="rb-review-pan" min="0" max="0" value="0" step="1"
+                <input data-i18n-aria="uiScrollTimeline" type="range" id="rb-review-pan" min="0" max="0" value="0" step="1"
                        oninput="rbReviewPanInput(this.value)" aria-label="Scroll timeline"/>
               </div>
               <div class="rb-graph-row hidden" id="rb-graph-row">
                 <span class="rb-graph-hint" id="rb-graph-hint">Drag the pitch curve to redraw it</span>
                 <div class="rb-graph-actions">
-                  <button class="rb-graph-btn" id="rb-graph-reset" onclick="rbGraphReset()"><span id="rb-graph-reset-lbl">Reset</span></button>
+                  <button class="rb-graph-btn" id="rb-graph-reset" onclick="rbGraphReset()"><span data-i18n="reset" id="rb-graph-reset-lbl">Reset</span></button>
                   <button class="rb-graph-btn rb-graph-apply" id="rb-graph-apply" onclick="rbGraphApplyEdits()"><span id="rb-graph-apply-lbl">Apply Pitch Edits</span></button>
                 </div>
               </div>
             </div>
-            <div class="rb-review-transport" role="group" aria-label="Playback transport">
-              <button class="rb-review-play-btn" id="rb-review-play-btn" onclick="rbReviewTogglePlay()" aria-label="Play or pause">
+            <div data-i18n-aria="uiTransport" class="rb-review-transport" role="group" aria-label="Playback transport">
+              <button data-i18n-aria="uiPlayOrPause" class="rb-review-play-btn" id="rb-review-play-btn" onclick="rbReviewTogglePlay()" aria-label="Play or pause">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" id="rb-review-play-svg"><polygon points="7,5 7,19 19,12"/></svg>
               </button>
               <span class="rb-review-time" id="rb-review-time">0:00 / 0:00</span>
@@ -4728,13 +4728,13 @@ button:focus:not(:focus-visible){outline:none}
               <div class="rb-review-section-lbl"><span class="rb-review-icon-badge" aria-hidden="true"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg></span>Mixer</div>
               <div class="rb-fader-row rb-fader-beat">
                 <span class="rb-fader-lbl" id="rb-review-beat-gain-lbl">Beat</span>
-                <input type="range" id="rb-review-beat-gain" min="0" max="150" value="100" step="1"
+                <input data-i18n-aria="uiBeatVol" type="range" id="rb-review-beat-gain" min="0" max="150" value="100" step="1"
                        oninput="rbReviewSetBeatGain(this.value/100)" aria-label="Beat volume"/>
                 <span class="rb-fader-val" id="rb-review-beat-gain-val">100%</span>
               </div>
               <div class="rb-fader-row rb-fader-vocal">
                 <span class="rb-fader-lbl" id="rb-review-vocal-gain-lbl">Vocal</span>
-                <input type="range" id="rb-review-vocal-gain" min="0" max="150" value="100" step="1"
+                <input data-i18n-aria="uiVocalVol" type="range" id="rb-review-vocal-gain" min="0" max="150" value="100" step="1"
                        oninput="rbReviewSetVocalGain(this.value/100)" aria-label="Vocal volume"/>
                 <span class="rb-fader-val" id="rb-review-vocal-gain-val">100%</span>
               </div>
@@ -4759,30 +4759,30 @@ button:focus:not(:focus-visible){outline:none}
     </div>
 
     <div class="tab-pane" id="tab-tools">
-      <div class="ph"><div class="ph-title">Tools</div><div class="ph-sub">Metronome, tap BPM, and scale reference</div></div>
+      <div class="ph"><div class="ph-title">Tools</div><div data-i18n="uiToolsSub" class="ph-sub">Metronome, tap BPM, and scale reference</div></div>
       <div class="tgrid">
         <div class="card">
-          <div class="card-lbl">Metronome</div>
+          <div data-i18n="metronome" class="card-lbl">Metronome</div>
           <div class="metro-num" id="metro-num">120</div>
           <div class="metro-beat" id="metro-beats"><div class="beat-dot"></div><div class="beat-dot"></div><div class="beat-dot"></div><div class="beat-dot"></div></div>
           <input type="range" id="metro-sl" min="40" max="220" value="120" step="1" style="width:100%;margin:8px 0" oninput="setMetroBpm(this.value)"/>
           <div class="row mt" style="gap:8px">
-            <button class="btn f1 pri" id="metro-btn" onclick="toggleMetro()">Start</button>
+            <button class="btn f1 pri" id="metro-btn" data-i18n="metStart" onclick="toggleMetro()">Start</button>
             <select id="metro-sig" style="height:46px;font-size:13px;padding:0 12px"><option value="4">4/4</option><option value="3">3/4</option><option value="2">2/4</option><option value="6">6/8</option></select>
           </div>
         </div>
         <div class="card">
-          <div class="card-lbl">Tap BPM</div>
+          <div data-i18n="tapBpm" class="card-lbl">Tap BPM</div>
           <button class="tap-btn" onclick="tapBpm()">TAP</button>
           <div class="tap-num" id="tap-num">—</div>
-          <div style="text-align:center;font-size:14px;color:var(--hint);margin-top:5px" id="tap-ct">tap at least 4 times</div>
-          <button class="btn sm" style="width:100%;margin-top:14px" onclick="resetTap()">Reset</button>
+          <div data-i18n="tapHint" style="text-align:center;font-size:14px;color:var(--hint);margin-top:5px" id="tap-ct">tap at least 4 times</div>
+          <button data-i18n="reset" class="btn sm" style="width:100%;margin-top:14px" onclick="resetTap()">Reset</button>
         </div>
         <div class="card" style="grid-column:1/-1">
-          <div class="card-lbl">Scale & Chord Reference</div>
+          <div data-i18n="scaleRef" class="card-lbl">Scale & Chord Reference</div>
           <div class="row mb" style="gap:10px">
             <select id="ref-key" onchange="renderRef()" style="height:42px;font-size:14px;padding:0 13px"><option>C</option><option>C#</option><option>D</option><option>D#</option><option>E</option><option>F</option><option>F#</option><option>G</option><option>G#</option><option>A</option><option>A#</option><option>B</option></select>
-            <select id="ref-mode" onchange="renderRef()" style="height:42px;font-size:14px;padding:0 13px"><option value="major">Major</option><option value="minor">Minor</option></select>
+            <select id="ref-mode" onchange="renderRef()" style="height:42px;font-size:14px;padding:0 13px"><option data-i18n="smartMajor" value="major">Major</option><option data-i18n="smartMinor" value="minor">Minor</option></select>
           </div>
           <div id="ref-out"></div>
         </div>
@@ -4791,52 +4791,77 @@ button:focus:not(:focus-visible){outline:none}
 
     <!-- CONVERT (Round 81) -->
     <div class="tab-pane" id="tab-convert">
-      <div class="ph"><div class="ph-title">Convert</div><div class="ph-sub">Convert audio files to MP3, WAV, FLAC, AIFF, M4A, OGG and more — in batches</div></div>
+      <div class="ph"><div data-i18n="convGo" class="ph-title">Convert</div><div data-i18n="convSub" class="ph-sub">Convert audio files to MP3, WAV, FLAC, AIFF, M4A, OGG and more — in batches</div></div>
       <div class="card" id="conv-drop" ondragover="convDragOver(event)" ondragleave="convDragLeave(event)" ondrop="convDrop(event)"
            style="border:1.5px dashed var(--border2, rgba(255,255,255,.18));text-align:center;padding:26px 16px;cursor:pointer" onclick="document.getElementById('conv-input').click()">
-        <div style="font-size:15px;font-weight:600">Drop audio or video files here</div>
-        <div style="font-size:13px;color:var(--hint);margin-top:6px">or click to choose files · MP3, WAV, FLAC, M4A, AAC, OGG, OPUS, AIFF, WMA · MP4, MOV, MKV, WEBM (the audio is extracted)</div>
+        <div data-i18n="convDropTitle" style="font-size:15px;font-weight:600">Drop audio or video files here</div>
+        <div data-i18n="convDropSub" style="font-size:13px;color:var(--hint);margin-top:6px">or click to choose files · MP3, WAV, FLAC, M4A, AAC, OGG, OPUS, AIFF, WMA · MP4, MOV, MKV, WEBM (the audio is extracted)</div>
         <input type="file" id="conv-input" multiple accept="audio/*,video/*,.flac,.opus,.ogg,.aiff,.aif,.wma,.m4a,.mp4,.mov,.mkv,.webm,.avi" style="display:none" onchange="convAddFromInput(this)"/>
       </div>
 
       <div class="card mt2">
-        <div class="card-lbl">Output</div>
+        <div data-i18n="convOutput" class="card-lbl">Output</div>
         <div class="row" style="gap:10px;flex-wrap:wrap;align-items:flex-end">
           <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">Format
             <select id="conv-format" onchange="convFormatChanged()" style="height:42px;font-size:14px;padding:0 12px;min-width:170px"></select>
           </label>
-          <label id="conv-quality-wrap" style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)"><span id="conv-quality-lbl">Bitrate</span>
+          <label id="conv-quality-wrap" style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)"><span data-i18n="convBitrate" id="conv-quality-lbl">Bitrate</span>
             <select id="conv-quality" style="height:42px;font-size:14px;padding:0 12px;min-width:120px"></select>
           </label>
-          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">Sample rate
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)"><span data-i18n="convSampleRate">Sample rate</span>
             <select id="conv-rate" style="height:42px;font-size:14px;padding:0 12px">
-              <option value="keep">Keep original</option><option value="44100">44.1 kHz</option><option value="48000">48 kHz</option><option value="88200">88.2 kHz</option><option value="96000">96 kHz</option>
+              <option data-i18n="convKeep" value="keep">Keep original</option><option value="44100">44.1 kHz</option><option value="48000">48 kHz</option><option value="88200">88.2 kHz</option><option value="96000">96 kHz</option>
             </select>
           </label>
-          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">Channels
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)"><span data-i18n="convChannels">Channels</span>
             <select id="conv-ch" style="height:42px;font-size:14px;padding:0 12px">
-              <option value="keep">Keep original</option><option value="2">Stereo</option><option value="1">Mono</option>
+              <option data-i18n="convKeep" value="keep">Keep original</option><option data-i18n="convStereo" value="2">Stereo</option><option value="1">Mono</option>
             </select>
           </label>
         </div>
+        <!-- Video: background picture (Round 82). Shown for "MP4 video" only. -->
+        <div id="conv-video" class="row mt" style="display:none;gap:14px;flex-wrap:wrap;align-items:flex-end">
+          <div id="conv-pic" onclick="document.getElementById('conv-pic-input').click()" ondragover="event.preventDefault()" ondrop="convPicDrop(event)"
+               role="button" tabindex="0" style="width:160px;height:90px;border:1.5px dashed var(--border2, rgba(255,255,255,.18));border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#000">
+            <img id="conv-pic-img" alt="" style="display:none;width:100%;height:100%;object-fit:contain"/>
+            <span id="conv-pic-empty" data-i18n="convPicChoose" style="font-size:12px;color:var(--hint);text-align:center;padding:6px">Choose a picture</span>
+          </div>
+          <input type="file" id="conv-pic-input" accept=".jpg,.jpeg,.png,.webp,.bmp,.gif,image/*" style="display:none" onchange="convPicFromInput(this)"/>
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)"><span data-i18n="convVidSize">Video size</span>
+            <select id="conv-vsize" onchange="convSavePrefs()" style="height:42px;font-size:14px;padding:0 12px">
+              <option value="1080p" data-i18n="convSize1080">1920×1080 (YouTube)</option>
+              <option value="720p" data-i18n="convSize720">1280×720 (smaller file)</option>
+              <option value="square" data-i18n="convSizeSquare">1080×1080 (square)</option>
+              <option value="vertical" data-i18n="convSizeVertical">1080×1920 (TikTok, Reels, Shorts)</option>
+            </select>
+          </label>
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)"><span data-i18n="convVidFit">Picture</span>
+            <select id="conv-fit" onchange="convSavePrefs()" style="height:42px;font-size:14px;padding:0 12px">
+              <option value="blur" data-i18n="convFitBlur">Whole picture, blurred background</option>
+              <option value="black" data-i18n="convFitBlack">Whole picture, black bars</option>
+              <option value="crop" data-i18n="convFitCrop">Fill the frame (edges cut)</option>
+            </select>
+          </label>
+          <div id="conv-pic-name" style="font-size:12px;color:var(--hint);flex-basis:100%;word-break:break-all"></div>
+        </div>
         <div class="row mt" style="gap:10px;align-items:center;flex-wrap:wrap">
-          <span style="font-size:13px;color:var(--muted)">Save to:</span>
-          <span id="conv-dest" style="font-size:13px;flex:1;min-width:200px;word-break:break-all">A “Converted” folder next to each original</span>
-          <button class="btn sm" onclick="convPickFolder()">Choose folder…</button>
-          <button class="btn sm" id="conv-dest-reset" onclick="convResetFolder()" style="display:none">Use “Converted” folders</button>
+          <span data-i18n="convSaveTo" style="font-size:13px;color:var(--muted)">Save to:</span>
+          <span data-i18n="convDestDefault" id="conv-dest" style="font-size:13px;flex:1;min-width:200px;word-break:break-all">A “Converted” folder next to each original</span>
+          <button data-i18n="convChooseFolder" class="btn sm" onclick="convPickFolder()">Choose folder…</button>
+          <button data-i18n="convUseConverted" class="btn sm" id="conv-dest-reset" onclick="convResetFolder()" style="display:none">Use “Converted” folders</button>
         </div>
         <div id="conv-note" style="font-size:12px;color:var(--hint);margin-top:8px"></div>
       </div>
 
       <div class="card mt2">
         <div class="row" style="justify-content:space-between;align-items:center;gap:10px">
-          <div class="card-lbl" style="margin:0">Files <span id="conv-count" style="color:var(--hint)"></span></div>
+          <div class="card-lbl" style="margin:0"><span data-i18n="convFiles">Files</span> <span id="conv-count" style="color:var(--hint)"></span></div>
           <div class="row" style="gap:8px">
-            <button class="btn sm" id="conv-clear" onclick="convClear()">Clear list</button>
-            <button class="btn pri" id="conv-go" onclick="convStart()" disabled>Convert</button>
+            <button data-i18n="convClearList" class="btn sm" id="conv-clear" onclick="convClear()">Clear list</button>
+            <button data-i18n="convGo" class="btn pri" id="conv-go" onclick="convStart()" disabled>Convert</button>
           </div>
         </div>
-        <div id="conv-list" style="margin-top:10px"><div style="font-size:13px;color:var(--hint)">No files added yet.</div></div>
+        <div id="conv-list" style="margin-top:10px"><div data-i18n="convNoFiles" style="font-size:13px;color:var(--hint)">No files added yet.</div></div>
       </div>
     </div>
 
@@ -4849,15 +4874,15 @@ button:focus:not(:focus-visible){outline:none}
         <div class="hist-search-wrap" style="flex:1;position:relative">
           <input type="search" id="hist-search" placeholder="Search tracks…" style="width:100%;height:42px;font-size:14px;padding:0 78px 0 14px" oninput="onHistSearchInput()"/>
           <span id="hist-search-count" style="position:absolute;right:36px;top:50%;transform:translateY(-50%);font-size:11px;color:var(--muted);pointer-events:none;font-variant-numeric:tabular-nums;display:none"></span>
-          <button type="button" id="hist-search-clear" onclick="clearHistSearch()" title="Clear search (Esc)" aria-label="Clear search" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);width:26px;height:26px;border:0;background:transparent;color:var(--muted);cursor:pointer;border-radius:4px;display:none;align-items:center;justify-content:center">
+          <button data-i18n-aria="uiClearSearch" data-i18n-title="uiClearSearchTitle" type="button" id="hist-search-clear" onclick="clearHistSearch()" title="Clear search (Esc)" aria-label="Clear search" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);width:26px;height:26px;border:0;background:transparent;color:var(--muted);cursor:pointer;border-radius:4px;display:none;align-items:center;justify-content:center">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
           </button>
         </div>
         <!-- Category filter — driven by stockpile folders. "All tracks" is
              the default; user can also pick Untagged, Favorites, or a
              specific folder. Built by populateHistoryFilterDropdown(). -->
-        <select id="hist-filter" class="hist-filter-sel" onchange="renderHistory()" title="Filter by folder">
-          <option value="all">All tracks</option>
+        <select data-i18n-title="uiFilterFolder" id="hist-filter" class="hist-filter-sel" onchange="renderHistory()" title="Filter by folder">
+          <option data-i18n="uiAllTracks" value="all">All tracks</option>
         </select>
         <button class="btn" id="hist-select-btn" onclick="toggleSelectMode()" style="height:42px;padding:0 18px;font-size:12px;white-space:nowrap">
           <span id="hist-select-lbl">Select</span>
@@ -4867,25 +4892,26 @@ button:focus:not(:focus-visible){outline:none}
       <!-- Batch Action Bar (hidden until select mode) -->
       <div id="hist-batch" class="hist-batch hidden">
         <div class="hb-left">
-          <label class="hb-check"><input type="checkbox" id="hist-check-all" onchange="toggleCheckAll(this.checked)"/> <span>Select All</span></label>
+          <label class="hb-check"><input type="checkbox" id="hist-check-all" onchange="toggleCheckAll(this.checked)"/> <span data-i18n="selectAll">Select All</span></label>
           <span class="hb-count" id="hist-sel-count">0 selected</span>
         </div>
         <div class="hb-right hidden" id="batch-move-actions">
-          <button class="btn sm" onclick="bulkTagSelected()" title="Apply a Stockpile tag to all selected tracks" aria-label="Apply a Stockpile tag to all selected tracks"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.6 13.4 13 21l-9-9V4h8l8.6 8.6a1.4 1.4 0 0 1 0 2z"/><circle cx="8" cy="8" r="1.5"/></svg> Tag…</button>
-          <button class="btn sm" onclick="bulkFavoriteSelected(true)" title="Add to Favorites" aria-label="Add to Favorites"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg> Favorite</button>
-          <button class="btn sm" onclick="bulkFavoriteSelected(false)" title="Remove from Favorites" aria-label="Remove from Favorites"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg> Unfavorite</button>
-          <button class="btn sm" onclick="bulkReanalyzeSelected()" title="Re-run BPM/key analysis on all selected" aria-label="Re-run BPM/key analysis on all selected"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg> Re-analyze</button>
-          <button class="btn sm" onclick="bulkSendToSeparator()" title="Queue selected tracks for stem separation" aria-label="Queue selected tracks for stem separation"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg> Separate</button>
-          <button class="btn sm" id="btn-stockpile" onclick="bulkMoveSelected('stockpile')" title="Move selected to Stockpile folder" aria-label="Move selected to Stockpile folder"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v13H3zM3 7l3-4h12l3 4M12 3v17"/></svg> To Stockpile</button>
-          <button class="btn sm" id="btn-moveto" onclick="bulkMoveSelected('pick')" title="Choose folder" aria-label="Choose folder"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> Move to…</button>
-          <button class="btn sm danger" onclick="bulkDeleteSelected()" title="Delete from history (files remain on disk)" aria-label="Delete from history"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> Delete</button>
+          <button data-i18n-aria="uiBatchTagTitle" data-i18n-title="uiBatchTagTitle" class="btn sm" onclick="bulkTagSelected()" title="Apply a Stockpile tag to all selected tracks" aria-label="Apply a Stockpile tag to all selected tracks"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.6 13.4 13 21l-9-9V4h8l8.6 8.6a1.4 1.4 0 0 1 0 2z"/><circle cx="8" cy="8" r="1.5"/></svg> <span data-i18n="uiBatchTag">Tag…</span></button>
+          <button data-i18n-aria="ctxFavorite" data-i18n-title="ctxFavorite" class="btn sm" onclick="bulkFavoriteSelected(true)" title="Add to Favorites" aria-label="Add to Favorites"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg> <span data-i18n="histFavorite">Favorite</span></button>
+          <button data-i18n-aria="ctxUnfavorite" data-i18n-title="ctxUnfavorite" class="btn sm" onclick="bulkFavoriteSelected(false)" title="Remove from Favorites" aria-label="Remove from Favorites"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg> <span data-i18n="uiUnfavorite">Unfavorite</span></button>
+          <button data-i18n-aria="uiReanalyzeTitle" data-i18n-title="uiReanalyzeTitle" class="btn sm" onclick="bulkReanalyzeSelected()" title="Re-run BPM/key analysis on all selected" aria-label="Re-run BPM/key analysis on all selected"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg> <span data-i18n="uiReanalyze">Re-analyze</span></button>
+          <button data-i18n-aria="uiBatchSepTitle" data-i18n-title="uiBatchSepTitle" class="btn sm" onclick="bulkSendToSeparator()" title="Queue selected tracks for stem separation" aria-label="Queue selected tracks for stem separation"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg> <span data-i18n="sepSendSelected">Separate</span></button>
+          <button data-i18n-aria="uiBatchConvTitle" data-i18n-title="uiBatchConvTitle" data-i18n="convGo" class="btn sm" onclick="bulkSendToConvert()" title="Convert selected tracks to another format" aria-label="Convert selected tracks to another format">Convert</button>
+          <button data-i18n-aria="uiBatchStockTitle" data-i18n-title="uiBatchStockTitle" class="btn sm" id="btn-stockpile" onclick="bulkMoveSelected('stockpile')" title="Move selected to Stockpile folder" aria-label="Move selected to Stockpile folder"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v13H3zM3 7l3-4h12l3 4M12 3v17"/></svg> To Stockpile</button>
+          <button data-i18n-aria="setupStockChoose" data-i18n-title="setupStockChoose" class="btn sm" id="btn-moveto" onclick="bulkMoveSelected('pick')" title="Choose folder" aria-label="Choose folder"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> Move to…</button>
+          <button data-i18n-aria="uiBatchDelAria" data-i18n-title="uiBatchDelTitle" class="btn sm danger" onclick="bulkDeleteSelected()" title="Delete from history (files remain on disk)" aria-label="Delete from history"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> <span data-i18n="deleteWord">Delete</span></button>
         </div>
       </div>
 
       <!-- Move Progress (only shows during active move) -->
       <div id="move-progress" class="move-progress hidden">
         <div class="move-info">
-          <span id="move-status">Moving…</span>
+          <span data-i18n="uiMoving" id="move-status">Moving…</span>
           <span id="move-count" class="move-count">0/0</span>
         </div>
         <div class="move-track"><div class="move-fill" id="move-fill"></div></div>
@@ -4895,7 +4921,7 @@ button:focus:not(:focus-visible){outline:none}
       <!-- Stockpile Folder Setting (only visible in select mode) -->
       <div id="hist-stockpile-row" class="stockpile-row hidden">
         <span class="stockpile-lbl"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v13H3zM3 7l3-4h12l3 4M12 3v17"/></svg> Stockpile:</span>
-        <span class="stockpile-path" id="stockpile-path" title="Click to change" onclick="pickStockpileFolder()">Not set — click to choose</span>
+        <span data-i18n-title="uiClickToChange" class="stockpile-path" id="stockpile-path" title="Click to change" onclick="pickStockpileFolder()">Not set — click to choose</span>
       </div>
 
       <div id="hist-list"><div class="hist-empty">No history yet</div></div>
@@ -4924,7 +4950,7 @@ button:focus:not(:focus-visible){outline:none}
         </div>
         <div class="sp-stat-card">
           <div class="sp-stat-num" id="sp-stat-untagged">0</div>
-          <div class="sp-stat-lbl" id="sp-stat-untagged-lbl">Untagged</div>
+          <div data-i18n="spUntaggedLbl" class="sp-stat-lbl" id="sp-stat-untagged-lbl">Untagged</div>
         </div>
       </div>
 
@@ -4936,7 +4962,7 @@ button:focus:not(:focus-visible){outline:none}
           <div class="sh-title" id="sp-root-title">Stockpile destination</div>
         </div>
         <div class="row">
-          <span class="stockpile-path" id="sp-root-path" style="flex:1" title="Click to change" onclick="pickStockpileFolder()">Not set — click to choose</span>
+          <span data-i18n-title="uiClickToChange" class="stockpile-path" id="sp-root-path" style="flex:1" title="Click to change" onclick="pickStockpileFolder()">Not set — click to choose</span>
         </div>
         <div class="sp-hint" id="sp-root-hint">Tagged tracks move into <code>{root}/{folder name}/</code> when committed.</div>
       </div>
@@ -4959,9 +4985,9 @@ button:focus:not(:focus-visible){outline:none}
       <!-- Untagged tracks section -->
       <div class="card">
         <div class="sh">
-          <div class="sh-title" id="sp-untagged-title">Untagged</div>
+          <div data-i18n="spUntaggedLbl" class="sh-title" id="sp-untagged-title">Untagged</div>
           <span class="sh-meta" id="sp-untagged-count">0 tracks</span>
-          <button class="btn xs" style="margin-left:auto" onclick="openAutoOrganize()" title="Suggest a folder for each untagged track based on artist, mood, BPM, and key similarity" aria-label="Suggest a folder for each untagged track based on artist, mood, BPM, and key similarity"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.3L4.8 10l5.3 1.9L12 17l1.9-5.3L19.2 10l-5.3-1.9zM5 3v4M3 5h4M19 17v4M17 19h4"/></svg> Auto-organize</button>
+          <button data-i18n-aria="uiAutoOrgTitle" data-i18n-title="uiAutoOrgTitle" class="btn xs" style="margin-left:auto" onclick="openAutoOrganize()" title="Suggest a folder for each untagged track based on artist, mood, BPM, and key similarity" aria-label="Suggest a folder for each untagged track based on artist, mood, BPM, and key similarity"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.3L4.8 10l5.3 1.9L12 17l1.9-5.3L19.2 10l-5.3-1.9zM5 3v4M3 5h4M19 17v4M17 19h4"/></svg> <span data-i18n="aoTitle">Auto-organize</span></button>
         </div>
         <div id="sp-untagged-list" class="sp-untagged-list">
           <div class="sp-empty" id="sp-untagged-empty" style="font-size:12px;color:var(--hint)">All tracks tagged.</div>
@@ -4983,8 +5009,8 @@ button:focus:not(:focus-visible){outline:none}
             <div class="sp-fv-meta" id="sp-fv-meta">—</div>
           </div>
           <div class="sp-fv-header-actions">
-            <button class="btn sm" onclick="openMatchPreviewFromView()" id="sp-fv-automatch" title="Auto-match more tracks" aria-label="Auto-match more tracks"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> <span id="sp-fv-automatch-lbl">Auto-match</span></button>
-            <button class="btn sm" onclick="editFolderFromView()" id="sp-fv-edit" title="Edit folder" aria-label="Edit folder"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button>
+            <button data-i18n-aria="spAutoMatchTooltip" data-i18n-title="spAutoMatchTooltip" class="btn sm" onclick="openMatchPreviewFromView()" id="sp-fv-automatch" title="Auto-match more tracks" aria-label="Auto-match more tracks"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> <span id="sp-fv-automatch-lbl">Auto-match</span></button>
+            <button data-i18n-aria="spEditFolder" data-i18n-title="spEditFolder" class="btn sm" onclick="editFolderFromView()" id="sp-fv-edit" title="Edit folder" aria-label="Edit folder"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button>
           </div>
         </div>
 
@@ -5015,7 +5041,7 @@ button:focus:not(:focus-visible){outline:none}
             <option value="title">Title A→Z</option>
             <option value="bpm">BPM ↑</option>
             <option value="bpm-desc">BPM ↓</option>
-            <option value="key">Key</option>
+            <option data-i18n="uiKeyLbl" value="key">Key</option>
           </select>
         </div>
 
@@ -5026,7 +5052,7 @@ button:focus:not(:focus-visible){outline:none}
             <span class="sh-meta" id="sp-fv-list-count">0</span>
           </div>
           <div id="sp-fv-track-list" class="sp-fv-track-list">
-            <div class="sp-empty" id="sp-fv-track-empty">No tracks yet</div>
+            <div data-i18n="uiNoTracksYet" class="sp-empty" id="sp-fv-track-empty">No tracks yet</div>
           </div>
         </div>
       </div><!-- /sp-folder-view -->
@@ -5037,11 +5063,11 @@ button:focus:not(:focus-visible){outline:none}
       <div class="modal-card">
         <div class="modal-title" id="sp-modal-title">New style folder</div>
         <label class="card-lbl" id="sp-modal-name-lbl">Folder name</label>
-        <input type="text" id="sp-modal-name" placeholder="e.g. Cali Trap" class="modal-input"/>
+        <input type="text" id="sp-modal-name" data-i18n-ph="spNamePh" placeholder="e.g. Cali Trap" class="modal-input"/>
         <label class="card-lbl" id="sp-modal-desc-lbl">Description (optional)</label>
-        <input type="text" id="sp-modal-desc" placeholder="e.g. West coast trap, melodic minor hooks, hard 808s" class="modal-input"/>
+        <input type="text" id="sp-modal-desc" data-i18n-ph="spDescPh" placeholder="e.g. West coast trap, melodic minor hooks, hard 808s" class="modal-input"/>
         <label class="card-lbl" id="sp-modal-seeds-lbl">Artist seeds — comma-separated</label>
-        <input type="text" id="sp-modal-seeds" placeholder="e.g. Mozzy, Luh Tyj, Sleepy Hallow" class="modal-input"/>
+        <input type="text" id="sp-modal-seeds" data-i18n-ph="spSeedsPh" placeholder="e.g. Mozzy, Luh Tyj, Sleepy Hallow" class="modal-input"/>
         <div class="sp-hint" id="sp-modal-seeds-hint">When a track filename mentions any of these, it'll be auto-suggested for this folder.</div>
         <div class="modal-actions">
           <button class="btn" onclick="closeCreateFolderDialog()" id="sp-modal-cancel">Cancel</button>
@@ -5065,8 +5091,8 @@ button:focus:not(:focus-visible){outline:none}
     <div class="setup-logo">
       <img src="../assets/hk-logo.png" alt="HK" onerror="this.style.opacity='0'"/>
     </div>
-    <div class="setup-title">Welcome to Freq.Phull</div>
-    <div class="setup-sub" id="setup-sub">Set up the AI engines to unlock stem separation and lyric transcription</div>
+    <div data-i18n="setupWelcome" class="setup-title">Welcome to Freq.Phull</div>
+    <div data-i18n="setupSub" class="setup-sub" id="setup-sub">Set up the AI engines to unlock stem separation and lyric transcription</div>
 
     <!-- Confirmation card (shown initially) -->
     <div id="setup-confirm">
@@ -5074,30 +5100,30 @@ button:focus:not(:focus-visible){outline:none}
         <div class="setup-info-row">
           <span class="setup-info-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v16M5 13l7 7 7-7"/></svg></span>
           <div>
-            <div class="setup-info-name">First-time download</div>
-            <div class="setup-info-detail" id="setup-size-line">~1.2GB total · runs once · all local, no cloud</div>
+            <div data-i18n="uiSetupFirstDl" class="setup-info-name">First-time download</div>
+            <div data-i18n="uiSetupSize" class="setup-info-detail" id="setup-size-line">~1.2GB total · runs once · all local, no cloud</div>
           </div>
         </div>
         <div class="setup-info-row">
           <span class="setup-info-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
           <div>
-            <div class="setup-info-name">Time</div>
-            <div class="setup-info-detail">5–15 minutes depending on connection</div>
+            <div data-i18n="uiSetupTime" class="setup-info-name">Time</div>
+            <div data-i18n="uiSetupTimeVal" class="setup-info-detail">5–15 minutes depending on connection</div>
           </div>
         </div>
         <div class="setup-info-row">
           <span class="setup-info-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v13H3zM3 7l3-4h12l3 4M12 3v17"/></svg></span>
           <div>
-            <div class="setup-info-name">What's installed</div>
+            <div data-i18n="uiSetupWhat" class="setup-info-name">What's installed</div>
             <div class="setup-info-detail">Python · PyTorch · audio-separator · Whisper · model weights</div>
           </div>
         </div>
       </div>
       <div class="setup-buttons">
-        <button class="btn pri" id="setup-start-btn" onclick="startEnginesSetup()" style="width:100%;height:50px;font-size:15px">Begin Setup</button>
-        <button class="btn xs" id="setup-skip-btn" onclick="skipEnginesSetup()" style="width:100%;margin-top:8px">Skip — I'll set up later</button>
+        <button data-i18n="setupBegin" class="btn pri" id="setup-start-btn" onclick="startEnginesSetup()" style="width:100%;height:50px;font-size:15px">Begin Setup</button>
+        <button data-i18n="uiSetupSkipLater" class="btn xs" id="setup-skip-btn" onclick="skipEnginesSetup()" style="width:100%;margin-top:8px">Skip — I'll set up later</button>
       </div>
-      <div class="setup-fineprint">You can re-run setup anytime from Settings → Engines.</div>
+      <div data-i18n="uiSetupRerun" class="setup-fineprint">You can re-run setup anytime from Settings → Engines.</div>
     </div>
 
     <!-- Progress card (shown during setup) -->
@@ -5108,7 +5134,7 @@ button:focus:not(:focus-visible){outline:none}
       <div class="setup-stages" id="setup-stages"></div>
       <div class="setup-overall">
         <div class="setup-overall-row">
-          <span class="setup-overall-label" id="setup-overall-label">Overall</span>
+          <span data-i18n="uiSetupOverall" class="setup-overall-label" id="setup-overall-label">Overall</span>
           <span id="setup-prog-pct" style="font-variant-numeric:tabular-nums;font-size:13px;color:var(--muted)">0%</span>
         </div>
         <div class="setup-prog-track"><div class="setup-prog-fill" id="setup-prog-fill" style="width:0%"></div></div>
@@ -5116,10 +5142,10 @@ button:focus:not(:focus-visible){outline:none}
       </div>
       <div class="setup-step" id="setup-step-msg" style="display:none"></div>
       <span id="setup-prog-detail" style="display:none"></span>
-      <div class="setup-fineprint" style="margin-top:18px">Downloading engines and AI models. Setup keeps running even if you close this dialog — you can reopen and rejoin from Settings.</div>
+      <div data-i18n="uiSetupProgressNote" class="setup-fineprint" style="margin-top:18px">Downloading engines and AI models. Setup keeps running even if you close this dialog — you can reopen and rejoin from Settings.</div>
       <div style="margin-top:14px">
-        <button class="btn xs" onclick="hideSetupModal()" style="width:100%">Hide window (setup keeps running)</button>
-        <button class="btn xs" onclick="cancelEnginesSetup()" style="width:100%;margin-top:6px;color:#e84040">Cancel setup</button>
+        <button data-i18n="setupHide" class="btn xs" onclick="hideSetupModal()" style="width:100%">Hide window (setup keeps running)</button>
+        <button data-i18n="setupCancel" class="btn xs" onclick="cancelEnginesSetup()" style="width:100%;margin-top:6px;color:#e84040">Cancel setup</button>
       </div>
     </div>
 
@@ -5131,21 +5157,21 @@ button:focus:not(:focus-visible){outline:none}
            setup log on non-zero exit and includes its tail in the error
            payload. Users can copy it for support without hunting in %TEMP%. -->
       <details id="setup-error-diag-wrap" class="setup-error-diag-wrap" style="margin-top:8px;display:none">
-        <summary style="cursor:pointer;font-size:12px;color:var(--muted);padding:6px 4px;user-select:none">Show diagnostic log (for support)</summary>
+        <summary data-i18n="uiSetupShowLog" style="cursor:pointer;font-size:12px;color:var(--muted);padding:6px 4px;user-select:none">Show diagnostic log (for support)</summary>
         <pre id="setup-error-diag" style="max-height:200px;overflow:auto;font-family:'Consolas','Cascadia Code',monospace;font-size:11px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;margin:6px 0 0;color:var(--off);white-space:pre-wrap;word-break:break-word"></pre>
-        <button class="btn xs" id="setup-error-diag-copy" onclick="copySetupDiag()" style="margin-top:6px">Copy to clipboard</button>
+        <button data-i18n="copyToClipboard" class="btn xs" id="setup-error-diag-copy" onclick="copySetupDiag()" style="margin-top:6px">Copy to clipboard</button>
       </details>
       <div class="setup-buttons">
-        <button class="btn pri" onclick="retryEnginesSetup()" style="width:100%;height:44px">Retry</button>
-        <button class="btn xs" onclick="skipEnginesSetup()" style="width:100%;margin-top:8px">Continue without engines</button>
+        <button data-i18n="setupRetry" class="btn pri" onclick="retryEnginesSetup()" style="width:100%;height:44px">Retry</button>
+        <button data-i18n="setupSkip" class="btn xs" onclick="skipEnginesSetup()" style="width:100%;margin-top:8px">Continue without engines</button>
       </div>
     </div>
 
     <!-- Success card -->
     <div id="setup-done" class="hidden">
       <div class="setup-done-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
-      <div class="setup-done-msg">All set</div>
-      <div class="setup-fineprint">Stem separator and transcription are ready to use.</div>
+      <div data-i18n="setupAllSet" class="setup-done-msg">All set</div>
+      <div data-i18n="uiSetupReady" class="setup-fineprint">Stem separator and transcription are ready to use.</div>
     </div>
   </div>
 </div>
@@ -5158,19 +5184,19 @@ button:focus:not(:focus-visible){outline:none}
     <div class="sp-fv-mini-sub" id="sp-fv-mini-sub"></div>
   </div>
   <div class="sp-fv-mini-transport">
-    <button id="sp-fv-mini-shuffle" class="sp-fv-mini-mode-btn" tabindex="-1" onmousedown="this.blur()" onclick="toggleShuffleMode();this.blur()" title="Shuffle" aria-label="Toggle shuffle">
+    <button data-i18n-aria="uiShuffle" data-i18n-title="uiShuffle" id="sp-fv-mini-shuffle" class="sp-fv-mini-mode-btn" tabindex="-1" onmousedown="this.blur()" onclick="toggleShuffleMode();this.blur()" title="Shuffle" aria-label="Toggle shuffle">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
     </button>
-    <button id="sp-fv-mini-prev" tabindex="-1" onmousedown="this.blur()" onclick="globalPlayerPrev();this.blur()" title="Previous track (←)" aria-label="Previous track">
+    <button data-i18n-aria="uiPrev" data-i18n-title="uiPrevTitle" id="sp-fv-mini-prev" tabindex="-1" onmousedown="this.blur()" onclick="globalPlayerPrev();this.blur()" title="Previous track (←)" aria-label="Previous track">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><polygon points="19,5 19,19 9,12"/><rect x="5" y="5" width="3" height="14"/></svg>
     </button>
-    <button class="sp-fv-play" tabindex="-1" onmousedown="this.blur()" onclick="folderViewTogglePlay();this.blur()" id="sp-fv-mini-toggle" title="Play / pause (Space)" aria-label="Play or pause">
+    <button data-i18n-title="uiPlayPauseTitle" data-i18n-aria="uiPlayOrPause" class="sp-fv-play" tabindex="-1" onmousedown="this.blur()" onclick="folderViewTogglePlay();this.blur()" id="sp-fv-mini-toggle" title="Play / pause (Space)" aria-label="Play or pause">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true" id="sp-fv-mini-toggle-svg"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>
     </button>
-    <button id="sp-fv-mini-next" tabindex="-1" onmousedown="this.blur()" onclick="globalPlayerNext();this.blur()" title="Next track (→)" aria-label="Next track">
+    <button data-i18n-aria="uiNext" data-i18n-title="uiNextTitle" id="sp-fv-mini-next" tabindex="-1" onmousedown="this.blur()" onclick="globalPlayerNext();this.blur()" title="Next track (→)" aria-label="Next track">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><polygon points="5,5 5,19 15,12"/><rect x="16" y="5" width="3" height="14"/></svg>
     </button>
-    <button id="sp-fv-mini-loop" class="sp-fv-mini-mode-btn" tabindex="-1" onmousedown="this.blur()" onclick="toggleLoopMode();this.blur()" title="Loop" aria-label="Loop">
+    <button data-i18n-aria="uiLoop" data-i18n-title="uiLoop" id="sp-fv-mini-loop" class="sp-fv-mini-mode-btn" tabindex="-1" onmousedown="this.blur()" onclick="toggleLoopMode();this.blur()" title="Loop" aria-label="Loop">
       <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" shape-rendering="geometricPrecision"><path d="M2 4h7V2l3 3-3 3V6H2z"/><path d="M12 10H5v2l-3-3 3-3v2h7z"/></svg>
     </button>
   </div>
@@ -5188,7 +5214,7 @@ button:focus:not(:focus-visible){outline:none}
        active track. When OFF (unlocked), the active track changes but
        the view stays put — for users who want to keep browsing while
        a queue plays in the background. -->
-  <button class="sp-fv-mini-extra-btn scroll-lock-btn" id="sp-fv-mini-scroll-lock" tabindex="-1" onmousedown="this.blur()" onclick="miniPlayerToggleScrollLock();this.blur()" title="Follow playing track in History" aria-label="Toggle scroll-follow" aria-pressed="true">
+  <button data-i18n-aria="uiScrollFollow" data-i18n-title="scrollLockTitleOn" class="sp-fv-mini-extra-btn scroll-lock-btn" id="sp-fv-mini-scroll-lock" tabindex="-1" onmousedown="this.blur()" onclick="miniPlayerToggleScrollLock();this.blur()" title="Follow playing track in History" aria-label="Toggle scroll-follow" aria-pressed="true">
     <!-- Default: locked anchor (icon swaps in JS when toggled) -->
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
       <circle cx="12" cy="5" r="3"/>
@@ -5196,14 +5222,14 @@ button:focus:not(:focus-visible){outline:none}
       <path d="M5 12H2a10 10 0 0 0 20 0h-3"/>
     </svg>
   </button>
-  <button class="sp-fv-mini-extra-btn" id="sp-fv-mini-fav" tabindex="-1" onmousedown="this.blur()" onclick="miniPlayerToggleFavorite();this.blur()" title="Favorite" aria-label="Toggle favorite">
+  <button data-i18n-aria="uiToggleFav" data-i18n-title="histFavorite" class="sp-fv-mini-extra-btn" id="sp-fv-mini-fav" tabindex="-1" onmousedown="this.blur()" onclick="miniPlayerToggleFavorite();this.blur()" title="Favorite" aria-label="Toggle favorite">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
   </button>
-  <button class="sp-fv-mini-extra-btn" id="sp-fv-mini-notepad-btn" tabindex="-1" onmousedown="this.blur()" onclick="toggleMiniNotepad();this.blur()" title="Notepad" aria-label="Notepad">
+  <button data-i18n-aria="uiNotepad" data-i18n-title="uiNotepad" class="sp-fv-mini-extra-btn" id="sp-fv-mini-notepad-btn" tabindex="-1" onmousedown="this.blur()" onclick="toggleMiniNotepad();this.blur()" title="Notepad" aria-label="Notepad">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
   </button>
   <div class="sp-fv-mini-volume-wrap">
-    <button class="sp-fv-mini-vol-btn" tabindex="-1" onmousedown="this.blur()" onclick="folderViewToggleMute();this.blur()" id="sp-fv-mini-vol-btn" title="Mute / Unmute" aria-label="Mute / Unmute">
+    <button data-i18n-aria="uiMute" data-i18n-title="uiMute" class="sp-fv-mini-vol-btn" tabindex="-1" onmousedown="this.blur()" onclick="folderViewToggleMute();this.blur()" id="sp-fv-mini-vol-btn" title="Mute / Unmute" aria-label="Mute / Unmute">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" id="sp-fv-mini-vol-icon"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
     </button>
     <div class="sp-fv-mini-volume" id="sp-fv-mini-volume" onclick="folderViewVolumeClick(event)">
@@ -5213,7 +5239,7 @@ button:focus:not(:focus-visible){outline:none}
       </div>
     </div>
   </div>
-  <button class="sp-fv-mini-close" tabindex="-1" onmousedown="this.blur()" onclick="stopGlobalPlay();this.blur()" title="Stop" aria-label="Stop">
+  <button data-i18n-aria="metStop" data-i18n-title="metStop" class="sp-fv-mini-close" tabindex="-1" onmousedown="this.blur()" onclick="stopGlobalPlay();this.blur()" title="Stop" aria-label="Stop">
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
   </button>
 
@@ -5222,14 +5248,14 @@ button:focus:not(:focus-visible){outline:none}
   <div class="sp-fv-mini-notepad hidden" id="sp-fv-mini-notepad">
     <div class="sp-fv-mini-notepad-head">
       <span class="sp-fv-mini-notepad-title" id="sp-fv-mini-notepad-title">Notes</span>
-      <button class="sp-fv-mini-notepad-close" onclick="toggleMiniNotepad()" title="Close" aria-label="Close">
+      <button data-i18n-title="closeWord" data-i18n-aria="closeWord" class="sp-fv-mini-notepad-close" onclick="toggleMiniNotepad()" title="Close" aria-label="Close">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
       </button>
     </div>
-    <textarea id="sp-fv-mini-notepad-text"
+    <textarea data-i18n-ph="uiNotepadPh" id="sp-fv-mini-notepad-text"
               placeholder="Jot something about this track…"
               onblur="saveMiniNotepad()"></textarea>
-    <div class="sp-fv-mini-notepad-foot" id="sp-fv-mini-notepad-foot">Saved automatically</div>
+    <div data-i18n="uiSavedAuto" class="sp-fv-mini-notepad-foot" id="sp-fv-mini-notepad-foot">Saved automatically</div>
   </div>
 </div>
 
@@ -5251,7 +5277,7 @@ button:focus:not(:focus-visible){outline:none}
     </svg>
   </div>
   <div class="update-banner-body">
-    <div class="update-banner-title" id="update-banner-title">Update available</div>
+    <div data-i18n="uiUpdateAvail" class="update-banner-title" id="update-banner-title">Update available</div>
     <div class="update-banner-sub" id="update-banner-sub">Version 0.0.0</div>
     <!-- Progress bar — hidden unless downloading -->
     <div class="update-banner-progress hidden" id="update-banner-progress">
@@ -5259,15 +5285,15 @@ button:focus:not(:focus-visible){outline:none}
     </div>
   </div>
   <div class="update-banner-actions">
-    <button class="update-banner-btn primary" id="update-banner-primary" onclick="onUpdateBannerPrimary()">Install</button>
-    <button class="update-banner-btn" id="update-banner-later" onclick="onUpdateBannerLater()">Later</button>
+    <button data-i18n="uiInstall" class="update-banner-btn primary" id="update-banner-primary" onclick="onUpdateBannerPrimary()">Install</button>
+    <button data-i18n="uiLater" class="update-banner-btn" id="update-banner-later" onclick="onUpdateBannerLater()">Later</button>
   </div>
 </div>
 
 <!-- v0.3.0: Back-to-top floating button. Appears when scrolled past
      ~400px inside #main; click smooth-scrolls back to top. Sits above
      the mini player so it never overlaps. Composite-only animation. -->
-<button id="back-to-top" class="back-to-top" aria-label="Back to top" title="Back to top" tabindex="0">
+<button data-i18n-aria="uiBackToTop" data-i18n-title="uiBackToTop" id="back-to-top" class="back-to-top" aria-label="Back to top" title="Back to top" tabindex="0">
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
        stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <polyline points="18 15 12 9 6 15"/>

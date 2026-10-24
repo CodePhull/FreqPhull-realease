@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, protocol, net, Tray, Menu, nativeImage, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, protocol, net, Tray, Menu, nativeImage, clipboard, session } = require('electron');
 
 // Inspect Element / DevTools are off in installed builds. Running from
 // source (npm start) keeps them; a packaged build can turn them back on for
@@ -7,6 +7,13 @@ const DEVTOOLS_ALLOWED = !app.isPackaged || process.env.FREQPHULL_DEVTOOLS === '
 const path  = require('path');
 const fs    = require('fs');
 const { fork } = require('child_process');
+
+// The local server only serves this app and the browser extension. Each
+// launch gets a random token; the server refuses requests without it
+// (unless they come from the extension), so a website open in a browser
+// can't read files or history through 127.0.0.1:47891. See LOCAL API
+// GUARD in server.js.
+const LOCAL_API_TOKEN = require('crypto').randomBytes(24).toString('hex');
 const { setupUpdater } = require('./updater.js');
 const sentry = require('./sentry-init.js');
 
@@ -56,6 +63,8 @@ if (readBootFlags().hardwareAcceleration === false) {
 const _sentry = sentry.init('main', app.getVersion(), {
   userOptOut: process.env.FREQPHULL_NO_CRASH_REPORT === '1',
 });
+// Settings → Privacy can switch reports off; same marker file as the server.
+try { sentry.setOptOutFile(path.join(app.getPath('userData'), 'crash-reporting-off')); } catch {}
 const report = (category, err, ctx) => sentry.reportSoftError('main', category, err, ctx);
 
 // Crash-restart counter; stops endless respawn of a broken backend.
@@ -97,6 +106,7 @@ function openUpdaterWindow(initialState) {
     },
   });
   updaterWindow.removeMenu();
+  lockWindowToApp(updaterWindow);
   // Absolute, like the main window above. A relative path resolves
   // against the working directory rather than the app, which is not the
   // same place once packaged.
@@ -331,6 +341,19 @@ app.whenReady().then(() => {
       return net.fetch('file:///' + p.replace(/\\/g, '/'));
     });
   } catch(e) { log('Protocol error: ' + e.message); }
+
+  // Before any window loads: every request the app's windows make to the
+  // local server carries the token (measured: fetch, POST, EventSource,
+  // <audio> and <img> all pass through this).
+  try {
+    session.defaultSession.webRequest.onBeforeSendHeaders(
+      // (written http:\/\/ - tools/xref.py strips from "//" to end of line)
+      { urls: ['http:\/\/127.0.0.1:47891/*', 'http:\/\/localhost:47891/*'] },
+      (details, cb) => {
+        details.requestHeaders['X-FreqPhull-Token'] = LOCAL_API_TOKEN;
+        cb({ requestHeaders: details.requestHeaders });
+      });
+  } catch (e) { log('local-api token hook failed: ' + e.message); }
 
   createTray();
   startBackend();
@@ -629,6 +652,17 @@ function updateTrayMenu() {
 }
 
 // ── Window ────────────────────────────────────────────────────────────────────
+function lockWindowToApp(win) {
+  const toBrowser = (url) => { if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {}); };
+  win.webContents.on('will-navigate', (e, url) => {
+    if (url === win.webContents.getURL()) return;   // reload of the same page
+    e.preventDefault();
+    log('blocked in-window navigation to ' + String(url).slice(0, 120));
+    toBrowser(url);
+  });
+  win.webContents.setWindowOpenHandler(({ url }) => { toBrowser(url); return { action: 'deny' }; });
+}
+
 function createWindow() {
   if (mainWindow) { mainWindow.show(); mainWindow.focus(); return; }
   log('Creating window...');
@@ -683,6 +717,14 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   }
   loadMainWindow();
+
+  // Keep this window on the app's own page. The preload gives the page
+  // window.api (open files, open folders, ...), so a website loaded here -
+  // through a stray link, a target=_blank, or HTML injected via a track
+  // title - would get the same powers. The app never navigates away from
+  // its own file, so anything else is refused; web links go to the
+  // user's real browser instead.
+  lockWindowToApp(mainWindow);
 
   // ─── BEGIN DIAGNOSTIC KEYS ───
   // Window-scoped, not globalShortcut. A global shortcut is registered with
@@ -799,6 +841,7 @@ function startBackend() {
         RESOURCES_PATH: resourcesPath,
         USER_DATA: app.getPath('userData'),
         PORT: '47891',
+        FREQPHULL_API_TOKEN: LOCAL_API_TOKEN,
         NODE_OPTIONS: '--max-old-space-size=128', // Cap memory at 128MB
       },
       stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
@@ -927,6 +970,52 @@ ipcMain.handle('pick-folder', async () => {
 ipcMain.handle('get-downloads-path', () => app.getPath('downloads'));
 
 // ── Drag-out with smooth ghost ───────────────────────────────────────────────
+// Round 82: these WAVs were never deleted - one full copy per track opened
+// (666 files, 19.7 GB in %TEMP%\freqphull-drag on the dev machine). Some
+// DAWs link a dropped file in place instead of copying it, so nothing recent
+// goes: files older than 3 days are removed, then the oldest beyond 3 GB,
+// and never one written in the last hour.
+const DRAG_TEMP_MAX_AGE_MS = 3 * 24 * 3600 * 1000;
+const DRAG_TEMP_MAX_BYTES = 3 * 1024 * 1024 * 1024;
+const DRAG_TEMP_GRACE_MS = 3600 * 1000;
+// ─── BEGIN DRAG TEMP PRUNE CORE ───
+// files: [{p, t (mtime ms), size}] -> the ones to delete.
+function dragTempToDelete(files, now, keepPath) {
+  const keep = (f) => (keepPath && f.p.toLowerCase() === keepPath.toLowerCase()) || now - f.t < DRAG_TEMP_GRACE_MS;
+  const out = [];
+  const rest = [];
+  for (const f of files) {
+    if (keep(f)) rest.push(f);
+    else if (now - f.t > DRAG_TEMP_MAX_AGE_MS) out.push(f);
+    else rest.push(f);
+  }
+  let total = rest.reduce((n, f) => n + f.size, 0);
+  for (const f of rest.slice().sort((a, b) => a.t - b.t)) {
+    if (total <= DRAG_TEMP_MAX_BYTES) break;
+    if (keep(f)) continue;
+    out.push(f);
+    total -= f.size;
+  }
+  return out;
+}
+// ─── END DRAG TEMP PRUNE CORE ───
+function pruneDragTemp(keepPath) {
+  const dir = path.join(app.getPath('temp'), 'freqphull-drag');
+  fs.promises.readdir(dir).then(async (names) => {
+    const files = [];
+    for (const n of names) {
+      const p = path.join(dir, n);
+      try { const st = await fs.promises.stat(p); if (st.isFile()) files.push({ p, t: st.mtimeMs, size: st.size }); } catch {}
+    }
+    let freed = 0, removed = 0;
+    for (const f of dragTempToDelete(files, Date.now(), keepPath)) {
+      try { await fs.promises.unlink(f.p); freed += f.size; removed++; } catch {}
+    }
+    if (removed) log('drag temp: removed ' + removed + ' old WAVs (' + Math.round(freed / 1048576) + ' MB)');
+  }).catch(() => {});
+}
+app.whenReady().then(() => setTimeout(() => pruneDragTemp(null), 15000));
+
 ipcMain.handle('write-temp-wav', async (_, wavData, filename) => {
   try {
     const tempDir = path.join(app.getPath('temp'), 'freqphull-drag');
@@ -934,6 +1023,7 @@ ipcMain.handle('write-temp-wav', async (_, wavData, filename) => {
     const safeName = (filename || 'audio').replace(/[^a-zA-Z0-9._-]/g, '_');
     const tempPath = path.join(tempDir, safeName.replace(/\.[^.]+$/, '') + '.wav');
     fs.writeFileSync(tempPath, Buffer.from(wavData));
+    pruneDragTemp(tempPath);
     return { ok: true, path: tempPath };
   } catch (e) {
     return { ok: false, error: e.message };

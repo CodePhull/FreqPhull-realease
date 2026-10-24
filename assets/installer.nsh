@@ -108,3 +108,29 @@ FunctionEnd
     !insertmacro FP_DARKEN_HEADER
   FunctionEnd
 !endif
+
+; ---- Close a running Freq.Phull first (Round 82) ---------------------
+; Installing over a running copy failed with "Failed to uninstall old
+; application files. Please try running the installer again.: 2": the app
+; keeps running in the tray after its window is closed, so its files were
+; still in use when the old version was removed. Ask it to close, give it
+; a moment, then end whatever is left (the backend and engine processes
+; included). The setup file is "Freq.Phull-Setup-<version>.exe", so the
+; exact image name below never matches the installer itself. The library
+; is saved write-then-rename, so ending the app mid-save can't damage it.
+!macro FP_CLOSE_RUNNING_APP
+  nsExec::Exec 'taskkill /IM "Freq.Phull.exe" /T'
+  Pop $R9
+  Sleep 1500
+  nsExec::Exec 'taskkill /F /IM "Freq.Phull.exe" /T'
+  Pop $R9
+  Sleep 800
+!macroend
+
+!macro customInit
+  !insertmacro FP_CLOSE_RUNNING_APP
+!macroend
+
+!macro customUnInit
+  !insertmacro FP_CLOSE_RUNNING_APP
+!macroend

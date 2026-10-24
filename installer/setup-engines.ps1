@@ -1,7 +1,8 @@
 param(
     [switch] $Repair,          # targeted repair: skip provisioning, reinstall -Packages
     [string] $Packages = "",   # comma-separated pip package list for -Repair
-    [string] $PythonExe = ""   # -Repair only: the EXACT interpreter the app verifies with (Round 80)
+    [string] $PythonExe = "",  # -Repair only: the EXACT interpreter the app verifies with (Round 80)
+    [switch] $PipUser          # -Repair only: the broken copies load from the per-user folder (Round 82)
 )
 # Freq.Phull engines setup.
 # Installs Python, audio packages, and Whisper/Demucs models.
@@ -648,7 +649,13 @@ if ($Repair) {
     }
     EmitStatus "repairing" 20 "Repairing engine packages..." ($pkgList -join ", ")
     Log "REPAIR MODE: force-reinstalling: $($pkgList -join ', ')"
-    $okRepair = Invoke-PipInstall -Packages $pkgList -Label "repair" -ExtraArgs @("--force-reinstall", "--no-cache-dir")
+    # Round 82: all packages go to pip in ONE call (so a numpy ABI repair
+    # resolves numpy, scipy and scikit-learn together). -PipUser: the copies
+    # that actually load are in the per-user folder, which comes before the
+    # interpreter's own on sys.path - reinstalling elsewhere changes nothing.
+    $repairArgs = @("--force-reinstall", "--no-cache-dir")
+    if ($PipUser) { $repairArgs += "--user"; Log "Repair targets the per-user site-packages (--user)" }
+    $okRepair = Invoke-PipInstall -Packages $pkgList -Label "repair" -ExtraArgs $repairArgs
     if (-not $okRepair) {
         EmitError "Repair failed for: $($pkgList -join ', ')" "Run the full engine setup from Settings, or check the log for the pip error."
     }

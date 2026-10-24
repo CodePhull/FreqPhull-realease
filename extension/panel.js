@@ -1,5 +1,30 @@
 const $=id=>document.getElementById(id);
 const API='http://127.0.0.1:47891';
+
+// ── Error reporting (v4.6.0) ──────────────────────────────────────────────────
+// Crashes in this panel and every red status message are sent to the local
+// Freq.Phull app, which reports them to Sentry with the app's own privacy
+// scrubbing (no URLs, video ids, IPs or user names). Nothing goes anywhere
+// else, and nothing is sent when the app isn't running. Each distinct message
+// once per panel session, at most 20.
+const _extSent=new Set();
+function reportExt(kind,message,extra){
+  try{
+    const msg=String(message||'').slice(0,300);
+    if(!msg||_extSent.has(kind+msg)||_extSent.size>=20)return;
+    _extSent.add(kind+msg);
+    fetch(API+'/client-error',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(Object.assign({kind,message:msg,extVersion:chrome.runtime.getManifest().version,source:'panel'},extra||{}))}).catch(()=>{});
+  }catch(e){}
+}
+window.addEventListener('error',e=>{
+  if(e&&e.target&&e.target!==window&&e.target.tagName)return;   // failed images etc.
+  reportExt('ext-crash',(e&&e.message)||'unknown error',{stack:e&&e.error&&e.error.stack?String(e.error.stack).slice(0,4000):null,line:e&&e.lineno,column:e&&e.colno});
+});
+window.addEventListener('unhandledrejection',e=>{
+  const r=e&&e.reason;
+  reportExt('ext-crash',(r&&r.message)||String(r||'unknown rejection'),{stack:r&&r.stack?String(r.stack).slice(0,4000):null});
+});
 let ax=null,ab=null,sn=null,gn=null,pl=false,sT=0,pO=0,rI=null,pV=0;
 let cK=null,cM=null,cB=null,hist=[];
 let mOn=false,mC=null,mB=0,mI=null,mBpm=120,taps=[];
@@ -838,7 +863,7 @@ function renderExtUpdateBanner(tag, url, msg){
   b.innerHTML = '<span class="ext-update-text">A new version of the extension is available' +
     (msg ? ' &mdash; <em>' + msg.replace(/[<&]/g, c => c==='<' ? '&lt;' : '&amp;') + '</em>' : '') +
     '</span>' +
-    '<a href="#" class="ext-update-view" data-url="' + (url || '') + '">View ' + tagShort + '</a>' +
+    '<a href="#" class="ext-update-view" data-url="' + escapeHtml(url || '') + '">View ' + escapeHtml(tagShort) + '</a>' +
     '<button class="ext-update-dismiss" title="Dismiss until next change">&times;</button>';
   b.querySelector('.ext-update-view').addEventListener('click', (e) => {
     e.preventDefault();
@@ -860,7 +885,7 @@ function showNotification(msg, type, onClick){
     el.id='notif';el.className='notif';
     document.body.appendChild(el);
   }
-  el.innerHTML='<div class="notif-dot '+(type||'info')+'"></div><span class="notif-msg">'+msg+'</span><div class="notif-timer"></div>';
+  el.innerHTML='<div class="notif-dot '+escapeHtml(type||'info')+'"></div><span class="notif-msg">'+escapeHtml(msg)+'</span><div class="notif-timer"></div>';
   el.className='notif show '+(type||'info');
   el.onclick=()=>{
     el.className='notif';
@@ -873,7 +898,7 @@ function showNotification(msg, type, onClick){
   notifTimer=setTimeout(()=>{el.className='notif';},6000);
 }
 
-function st(msg,type){$('sbar').classList.remove('hide');$('smsg').textContent=msg;$('sdot').className='sd '+(type||'');}
+function st(msg,type){if(type==='err')reportExt('ext-notice',msg);$('sbar').classList.remove('hide');$('smsg').textContent=msg;$('sdot').className='sd '+(type||'');}
 
 // ══════════════════════════════════════════════════════════════
 // FILE DROP
@@ -1255,16 +1280,17 @@ function renderHist(){const q=($('hsrch')?.value||'').toLowerCase(),l=$('hlist')
 const prevSeen = _lastSeenHistId;
 const maxId = rows.reduce((m,h)=>Math.max(m, h.id||0), 0);
 l.innerHTML=rows.map((h,i)=>{
-  const thumb=h.thumbnail?'<img class="hr-thumb" src="'+h.thumbnail+'" alt="" onerror="fphThumbFallback(this)"/>':'<div class="hr-thumb hr-nothumb"></div>';
+  // Titles, channels and thumbnail URLs come from YouTube; escaped (v4.6.0).
+const thumb=h.thumbnail?'<img class="hr-thumb" src="'+escapeHtml(h.thumbnail)+'" alt="" onerror="fphThumbFallback(this)"/>':'<div class="hr-thumb hr-nothumb"></div>';
   const bpm=h.bpm?Math.round(h.bpm):'';
-  const key=h.key_note?(h.key_note+' '+(h.key_mode||'')):'';
+  const key=h.key_note?escapeHtml(h.key_note+' '+(h.key_mode||'')):'';
   const dur=h.duration?Math.round(h.duration)+'s':'';
   const fmt=h.format?h.format.toUpperCase():'';
   const date=(h.created_at||'').slice(0,16);
   // Mark rows newer than what we'd seen before as pulse targets — but
   // only when this isn't the first-ever render (prevSeen>0).
   const isNew = prevSeen > 0 && (h.id||0) > prevSeen;
-  return '<div class="hr'+(isNew?' row-pulse':'')+'" data-idx="'+i+'">'+thumb+'<div class="i"><b>'+(h.title||'?')+'</b><small>'+[h.channel,date,dur].filter(Boolean).join(' · ')+'</small></div><div class="bg">'+(bpm?'<span>'+bpm+'</span>':'')+(key?'<span>'+key+'</span>':'')+(fmt?'<span>'+fmt+'</span>':'')+'</div></div>';
+  return '<div class="hr'+(isNew?' row-pulse':'')+'" data-idx="'+i+'">'+thumb+'<div class="i"><b>'+escapeHtml(h.title||'?')+'</b><small>'+escapeHtml([h.channel,date,dur].filter(Boolean).join(' · '))+'</small></div><div class="bg">'+(bpm?'<span>'+bpm+'</span>':'')+(key?'<span>'+key+'</span>':'')+(fmt?'<span>'+fmt+'</span>':'')+'</div></div>';
 }).join('');
 // Update the baseline so the next render only pulses things newer still.
 _lastSeenHistId = maxId;

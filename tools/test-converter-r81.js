@@ -35,6 +35,9 @@ function check(name, cond, detail) {
   else { fails++; console.log('  FAIL ' + name + (detail ? '  (' + detail + ')' : '')); }
 }
 const argStr = (o) => C.buildConvertArgs(o).join(' ');
+// The audio formats. Round 82 added MP4 video (a picture under the audio),
+// which takes different arguments and has its own test (test-convert-video-r82.js).
+const AUDIO_FORMATS = Object.keys(C.CONVERT_FORMATS).filter((f) => !C.CONVERT_FORMATS[f].video);
 
 // ── 1. Headless ──
 let threw = false; try { C.normalizeConvertOptions({ format: 'exe' }); } catch { threw = true; }
@@ -44,7 +47,7 @@ check('opus is forced to 48 kHz', C.normalizeConvertOptions({ format: 'opus', sa
 check('mp3 320 uses libmp3lame at 320k', /-c:a libmp3lame -b:a 320k/.test(argStr({ format: 'mp3', bitrate: '320' })));
 check('wav 24-bit uses pcm_s24le', /-c:a pcm_s24le/.test(argStr({ format: 'wav', bitDepth: '24' })));
 check('wav 32f uses pcm_f32le', /-c:a pcm_f32le/.test(argStr({ format: 'wav', bitDepth: '32f' })));
-check('every format maps only the first audio stream', Object.keys(C.CONVERT_FORMATS).every(f => argStr({ format: f }).startsWith('-map 0:a:0 -vn')));
+check('every format maps only the first audio stream', AUDIO_FORMATS.every(f => argStr({ format: f }).startsWith('-map 0:a:0 -vn')));
 check('"keep" adds no -ar / -ac', !/-ar |-ac /.test(argStr({ format: 'flac' })));
 check('sample rate and mono are applied', /-ar 48000 .*-ac 1/.test(argStr({ format: 'wav', sampleRate: '48000', channels: '1' })));
 check('default output dir is a Converted folder next to the file',
@@ -79,7 +82,7 @@ if (!fs.existsSync(ff) || !fs.existsSync(fp)) {
     const vp = probe(video);
     check('test MP4 video was built with a video and an audio stream', vp && vp.streams.some(s => s.codec_type === 'video') && vp.streams.some(s => s.codec_type === 'audio'));
     for (const input of [plain, cover, video]) {
-      for (const fmt of Object.keys(C.CONVERT_FORMATS)) {
+      for (const fmt of AUDIO_FORMATS) {
         const out = path.join(dir, path.basename(input, path.extname(input)) + '_' + fmt + C.CONVERT_FORMATS[fmt].ext);
         const r = run(ff, ['-hide_banner', '-y', '-i', input, ...C.buildConvertArgs({ format: fmt }), out]);
         const p = r.status === 0 ? probe(out) : null;

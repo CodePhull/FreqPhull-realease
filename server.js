@@ -3,7 +3,92 @@ const cors      = require('cors');
 const path      = require('path');
 const fs        = require('fs');
 const os        = require('os');
-const { spawn } = require('child_process');
+const _childProcess = require('child_process');
+
+// ── Python fault reporting (Round 81) ────────────────────────────────────
+// Every engine script (analyze, stems, mastering, transcribe, tags,
+// fingerprint, setup checks) runs as a Python child process. Only three of
+// the ~10 call sites reported a crash, so a traceback from stems or
+// mastering was shown as a one-line error at best and then lost. Every
+// child is started through this spawn(); when the command is a Python
+// interpreter, its stderr is watched and a failure is reported as
+// python.<script> with the exception type, message and traceback tail.
+//   - non-zero exit                      -> reported
+//   - exit 0 but a traceback was printed -> reported (a handled error that
+//                                           still means something broke)
+//   - killed by the app (cancel, timeout) -> not reported
+//   - interpreter missing / can't start  -> python.spawn-failed
+// ─── BEGIN PYTHON FAULT CORE ───
+function isPythonCommand(cmd) {
+  const base = String(cmd || '').split(/[\\/]/).pop().toLowerCase();
+  return /^(python[0-9.]*w?|pyw?)(\.exe)?$/.test(base);
+}
+// Which script ran: the first .py argument, with the app's temp-copy
+// prefixes and random suffixes removed (freqphull_analyze_ab12.py -> analyze).
+function pythonScriptName(args) {
+  const py = (args || []).map(String).find((a) => /\.pyw?$/i.test(a));
+  if (!py) return (args || []).includes('-c') ? 'inline' : 'unknown';
+  return py.split(/[\\/]/).pop().replace(/\.pyw?$/i, '')
+    .replace(/^freqphull_/, '').replace(/_[0-9a-f]{4,}$/i, '').replace(/_\d+$/, '') || 'unknown';
+}
+// The exception a traceback ends with, e.g. "ModuleNotFoundError: No module
+// named 'x'". Falls back to the last non-empty stderr line.
+function pythonFault(stderr) {
+  const text = String(stderr || '');
+  const hasTraceback = /Traceback \(most recent call last\)/.test(text);
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  let line = null;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/^([A-Za-z_][\w.]*(Error|Exception|Exit|Interrupt|Warning|Fault))(:|$)/.test(lines[i])) { line = lines[i]; break; }
+  }
+  if (!line) line = lines.length ? lines[lines.length - 1] : '';
+  const m = line.match(/^([A-Za-z_][\w.]*)(?::|$)/);
+  const type = hasTraceback && m ? m[1].split('.').pop() : null;
+  return { hasTraceback, type, line: line.slice(0, 300) };
+}
+// ─── END PYTHON FAULT CORE ───
+
+function watchPythonProcess(proc, args) {
+  const script = pythonScriptName(args);
+  let tail = '';
+  let killedByApp = false;
+  const origKill = proc.kill.bind(proc);
+  proc.kill = (...a) => { killedByApp = true; return origKill(...a); };
+  if (proc.stderr) proc.stderr.on('data', (d) => { tail = (tail + d).slice(-6000); });
+  let spawnFailed = false;
+  proc.on('error', (e) => {
+    spawnFailed = true;   // 'close' still fires after this; one report is enough
+    report('python.spawn-failed', e, { script, _group: script + ' ' + (e && e.code || '') });
+  });
+  proc.on('close', (code, signal) => {
+    if (killedByApp || signal || spawnFailed) return;
+    const f = pythonFault(tail);
+    if (code === 0 && !f.hasTraceback) return;
+    const msg = f.line || ('exited with code ' + code);
+    report('python.' + script, new Error(script + '.py: ' + msg), {
+      _group: f.type || String(msg).replace(/\d+/g, 'N').slice(0, 60),
+      exitCode: code,
+      handled: code === 0,
+      stderrTail: tail.slice(-3000) || '(empty)',
+    });
+  });
+}
+
+function spawn(cmd, args, opts) {
+  let py = false;
+  try { py = isPythonCommand(cmd); } catch {}
+  // Round 82: Python on Windows writes stdout/stderr in the console code page
+  // (cp1252), and Node reads UTF-8 - a real log showed the stems folder name
+  // "... [86BPM A#m] — Stems" as "... [86BPM A#m] � Stems". UTF-8 both ways.
+  if (py) {
+    opts = Object.assign({}, opts);
+    opts.env = Object.assign({}, opts.env || process.env);
+    if (!opts.env.PYTHONIOENCODING) opts.env.PYTHONIOENCODING = 'utf-8';
+  }
+  const proc = _childProcess.spawn(cmd, args, opts);
+  try { if (py) watchPythonProcess(proc, args); } catch {}
+  return proc;
+}
 const multer    = require('multer');
 
 const PORT = process.env.PORT || 47891;
@@ -22,7 +107,12 @@ let setupRunning = false;
 const _sentryClient = sentry.init('node', _serverVersion, {
   userOptOut: process.env.FREQPHULL_NO_CRASH_REPORT === '1',
 });
-const report = (category, err, ctx) => sentry.reportSoftError('node', category, err, ctx);
+// Every report is also written to the app log, so a log shows what was
+// sent (or would have been, on a build without a DSN).
+const report = (category, err, ctx) => {
+  try { slog('[report' + (sentry.isOptedOut() ? ', not sent - switched off in Settings' : '') + '] ' + category + ': ' + sentry.scrubString(String((err && err.message) || err)).slice(0, 200)); } catch {}
+  sentry.reportSoftError('node', category, err, ctx);
+};
 // Whatever state matters when reading a report later. Registered once,
 // evaluated at the moment an event is captured, so it reflects the app
 // as it was rather than as it started.
@@ -245,6 +335,20 @@ function attemptEngineRepair(brokenPackages, origin) {
     } else {
       slog('self-heal: no verified interpreter path available - repair will discover its own');
     }
+    // Round 82: when the broken modules load from the per-user folder
+    // (%APPDATA%\Python\...), that copy wins on sys.path; repair it there.
+    try {
+      const v0 = _lastVerifyResult || {};
+      const brokenMods = [];
+      for (const res of Object.values(v0.tiers || {})) {
+        for (const [mod, m] of Object.entries(res.modules || {})) if (!m.ok) brokenMods.push(mod);
+      }
+      if ((v0.user_site_modules || []).some((m) => brokenMods.includes(m))) {
+        repairArgs.push('-PipUser');
+        slog('self-heal: broken modules load from the per-user folder - repairing with --user');
+      }
+      if (v0.numpy_abi_mismatch) slog('self-heal: numpy binary mismatch - reinstalling numpy, scipy and scikit-learn together');
+    } catch {}
     const p = spawn('powershell', repairArgs, { windowsHide: true });
     let sawError = null;
     p.stdout.on('data', d => {
@@ -313,6 +417,19 @@ function attemptEngineRepair(brokenPackages, origin) {
                 }
               }
               return out.join(' | ').slice(0, 600);
+            } catch (e) { return '(unavailable)'; }
+          })(),
+          // Round 82: what is actually loaded, so a repeat names its cause.
+          numpy_version: v.numpy_version || null,
+          numpy_abi_mismatch: !!v.numpy_abi_mismatch,
+          user_site_modules: (v.user_site_modules || []).join(',') || '(none)',
+          module_files: (() => {
+            try {
+              const out = [];
+              for (const res of Object.values(v.tiers || {})) {
+                for (const [mod, m] of Object.entries(res.modules || {})) if (m.file) out.push(mod + '=' + m.file);
+              }
+              return out.join(' | ').slice(0, 800);
             } catch (e) { return '(unavailable)'; }
           })(),
           origin,
@@ -433,6 +550,8 @@ function getYtdlpVersion() {
 // Track the most recent test event ID for the diagnostic UI.
 let _lastTestEventId = null;
 const DATA = process.env.USER_DATA || path.join(os.homedir(), '.freqphull');
+// Settings → Privacy → "Send error reports" (same marker file main.js uses).
+sentry.setOptOutFile(path.join(DATA, 'crash-reporting-off'));
 
 // ── Server-side log ───────────────────────────────────────────────────────────
 const logDir  = path.join(DATA, 'logs');
@@ -550,8 +669,154 @@ try {
 }
 
 const app = express();
-app.use(cors());
+
+// ── Local API guard (Round 81) ───────────────────────────────────────────
+// This server is only for the Freq.Phull window and the Freq.Phull browser
+// extension. Until now it answered every caller with
+// "Access-Control-Allow-Origin: *", so any website open in any browser on
+// the same PC could read a file off the disk through GET /file, read the
+// whole history, and start downloads or deletes - measured: a request
+// carrying a website's Origin got a private file back, with the header
+// telling the browser to hand it over.
+//
+// Who is let in (measured on Electron 28 before writing this):
+//   - the app's own windows: their pages are file://, which send NO Origin
+//     and Sec-Fetch-Site: cross-site - indistinguishable from a website's
+//     <img>. So main.js gives each launch a random token and adds it as
+//     X-FreqPhull-Token to every request the app makes (fetch, POST,
+//     EventSource, <audio>, <img> all carry it).
+//   - the extension: its POSTs carry Origin: chrome-extension://... (set
+//     by the browser; a web page cannot fake it). Its GETs, EventSource and
+//     <audio> carry NO Origin but Sec-Fetch-Site: none, because it has host
+//     permission for this address (measured with an extension loaded in
+//     Electron 28 / Chromium 120). A web page can never produce "none".
+//   - local tools with no browser headers at all (curl, the app's own
+//     main process, the test scripts).
+// Everything else is refused: any other Origin (including "null" from
+// sandboxed frames), any cross-site request without one (<img>, <audio>,
+// forms), and a Host that isn't this machine's loopback (DNS rebinding).
+// One read-only exception: a top-level navigation/download of GET /file,
+// which is how the extension's drag-out download is fetched; the browser
+// saves it to the user's own Downloads and the page that caused it gets
+// nothing back.
+// ─── BEGIN LOCAL API GUARD CORE ───
+const EXTENSION_ORIGIN_RE = /^(chrome|moz|safari-web)-extension:\/\/[a-z0-9-]+$/i;
+// h: request headers (Node lowercases the names).
+function localApiDecision(h, method, reqPath, expectedToken, port) {
+  const host = String(h.host || '').toLowerCase();
+  if (host !== '127.0.0.1:' + port && host !== 'localhost:' + port) return { allow: false, reason: 'host ' + host };
+  if (expectedToken && h['x-freqphull-token'] === expectedToken) return { allow: true, reason: 'app' };
+  const origin = h.origin;
+  if (origin) {
+    return EXTENSION_ORIGIN_RE.test(origin) ? { allow: true, reason: 'extension' } : { allow: false, reason: 'origin ' + origin };
+  }
+  const site = h['sec-fetch-site'];
+  if (site === 'cross-site' || site === 'same-site') {
+    if (method === 'GET' && reqPath === '/file' && h['sec-fetch-mode'] === 'navigate') return { allow: true, reason: 'file download' };
+    return { allow: false, reason: site + ' ' + (h['sec-fetch-dest'] || '?') };
+  }
+  return { allow: true, reason: 'local' };
+}
+// ─── END LOCAL API GUARD CORE ───
+
+const LOCAL_API_TOKEN = process.env.FREQPHULL_API_TOKEN || '';
+if (!LOCAL_API_TOKEN) slog('local-api: no app token set (running outside the app) - only the extension and local tools can connect');
+let _blockedLogged = 0;
+app.use((req, res, next) => {
+  const d = localApiDecision(req.headers, req.method, req.path, LOCAL_API_TOKEN, PORT);
+  if (d.allow) return next();
+  // Logged, not reported: any website could trigger these on purpose.
+  if (_blockedLogged < 50) { _blockedLogged++; slog('local-api: blocked ' + req.method + ' ' + req.path + ' (' + d.reason + ')'); }
+  res.status(403).json({ error: 'Forbidden' });
+});
+// CORS headers only for the extension. The app's windows don't need them
+// (webSecurity is off there), and nobody else may read responses.
+app.use(cors({ origin: (origin, cb) => cb(null, !!origin && EXTENSION_ORIGIN_RE.test(origin)) }));
 app.use(express.json());
+
+// ── Error reporting hook (Round 81) ──────────────────────────────────────
+// Only a handful of failures used to reach Sentry; everything else (most
+// yt-dlp errors, stems, mastering, the converter, anything the Chrome
+// extension asked for) was shown to the user and forgotten. Rather than
+// add a report() call at ~140 error sites, every response is watched here:
+//   - a 5xx response                       -> server.http
+//   - an SSE "event: error" frame           -> server.sse
+//   - an NDJSON {"type":"error"} line       -> server.stream
+// Grouped per route + message so one broken thing is one Sentry issue.
+// A route that already sent a richer report sets res.locals.sentryReported.
+// ─── BEGIN ERROR REPORT CORE ───
+// Route as a stable name: numbers and long hex ids collapse so
+// /history/123/analysis and /history/456/analysis are one issue.
+function errorRouteKey(method, routePath) {
+  return String(method || 'GET').toUpperCase() + ' ' +
+    String(routePath || '/').replace(/\/[0-9a-f]{16,}(?=\/|$)/gi, '/:id').replace(/\/\d+(?=\/|$)/g, '/:n');
+}
+// Error messages carried by one chunk written to a streaming response.
+function errorsInChunk(chunk) {
+  const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : (typeof chunk === 'string' ? chunk : '');
+  const out = [];
+  if (!text || !/error/.test(text)) return out;
+  // SSE: "event: error\ndata: {...}\n\n"
+  const sseRe = /(?:^|\n)event: *error\r?\ndata: *([^\n]*)/g;
+  let m;
+  while ((m = sseRe.exec(text))) {
+    let msg = m[1];
+    try { const d = JSON.parse(m[1]); msg = (d && (d.message || d.error)) || m[1]; } catch {}
+    out.push({ kind: 'sse', message: String(msg) });
+  }
+  // NDJSON: one JSON object per line with type "error".
+  for (const line of text.split('\n')) {
+    // \x7b is "{" - written as an escape so the gauntlet's brace counter
+    // (PASS 20) doesn't see an unmatched brace on this line.
+    if (!/^\s*\x7b.*"type"\s*:\s*"error"/.test(line)) continue;
+    try { const d = JSON.parse(line); out.push({ kind: 'stream', message: String(d.message || d.error || 'error') }); } catch {}
+  }
+  return out;
+}
+// Error message of a finished (non-streaming) 5xx response body.
+function errorFromBody(body) {
+  if (body == null) return '(no body)';
+  let b = body;
+  if (Buffer.isBuffer(b)) b = b.toString('utf8');
+  if (typeof b === 'string') {
+    try { b = JSON.parse(b); } catch { return b.slice(0, 300); }
+  }
+  if (b && typeof b === 'object') return String(b.error || b.message || JSON.stringify(b).slice(0, 300));
+  return String(b);
+}
+// Not bugs: the user (or the window closing) stopped the work.
+function isCancelMessage(msg) {
+  return /\bcancel(l)?ed\b|aborted by (the )?(user|client)/i.test(String(msg || ''));
+}
+// ─── END ERROR REPORT CORE ───
+
+function reportRouteError(req, res, kind, message, extra) {
+  if (res.locals.sentryReported || isCancelMessage(message)) return;
+  const route = errorRouteKey(req.method, req.route ? (req.baseUrl || '') + req.route.path : req.path);
+  const source = /^chrome-extension:/i.test(req.headers.origin || '') ? 'extension' : 'app';
+  // Category per route: the 10-an-hour cap is per category, so one noisy
+  // route can't use up the budget of every other one.
+  report('server.' + kind + ' ' + route, new Error(String(message).slice(0, 300)), Object.assign({
+    _group: route + ' ' + String(message).replace(/\d+/g, 'N').slice(0, 60),
+    route, source,
+  }, extra || {}));
+}
+
+app.use((req, res, next) => {
+  const origWrite = res.write, origSend = res.send;
+  res.write = function (chunk, ...rest) {
+    try { for (const e of errorsInChunk(chunk)) reportRouteError(req, res, e.kind, e.message); } catch {}
+    return origWrite.call(this, chunk, ...rest);
+  };
+  // res.json() goes through res.send(), so this sees both.
+  res.send = function (body) {
+    try {
+      if (res.statusCode >= 500) reportRouteError(req, res, 'http', errorFromBody(body), { status: res.statusCode });
+    } catch {}
+    return origSend.call(this, body);
+  };
+  next();
+});
 
 const upload = multer({ dest: os.tmpdir(), limits: { fileSize: 300 * 1024 * 1024 } });
 
@@ -751,6 +1016,19 @@ async function initDB() {
       db.run(`ALTER TABLE history ADD COLUMN audio_hash TEXT`);
       slog('DB migration: added history.audio_hash');
     } catch (e) { /* already exists */ }
+    // Round 82: where the producer sells this beat, found in the YouTube
+    // description (see BUY LINK CORE). NULL = not looked up yet,
+    // '' = looked up, no purchase link in the description.
+    try {
+      db.run(`ALTER TABLE history ADD COLUMN buy_url TEXT`);
+      slog('DB migration: added history.buy_url');
+    } catch (e) { /* already exists */ }
+    // ...and the producer's other links from the same description, as JSON
+    // ({ socials, email }) for "About the beatmaker". NULL = not looked up.
+    try {
+      db.run(`ALTER TABLE history ADD COLUMN producer_links TEXT`);
+      slog('DB migration: added history.producer_links');
+    } catch (e) { /* already exists */ }
     // ─── BEGIN DB INDEXES ───
     // Round 70 (reported: "app feels slow and sluggy"): this schema had
     // NO indexes at all - every lookup was a full table scan. Harmless
@@ -805,12 +1083,23 @@ let _dbSaveTimer = null;
 let _dbSavePending = false;
 const DB_SAVE_DEBOUNCE_MS = 500;
 
+let _libRestoring = false;   // a restore is swapping the library file - nothing may write it
 function _flushDB() {
-  if (!db) return;
+  if (!db || _libRestoring) return;
   _dbSavePending = false;
   if (_dbSaveTimer) { clearTimeout(_dbSaveTimer); _dbSaveTimer = null; }
-  try { fs.writeFileSync(DB_PATH, Buffer.from(db.export())); }
-  catch (e) { slog('DB save error: ' + e.message); }
+  // Round 82: write-then-rename, so a process killed mid-save (installer
+  // closing the app, Task Manager, power cut) leaves the previous library
+  // intact instead of a half-written file.
+  const tmp = DB_PATH + '.tmp';
+  try {
+    fs.writeFileSync(tmp, Buffer.from(db.export()));
+    fs.renameSync(tmp, DB_PATH);
+    scheduleLibraryBackup();
+  } catch (e) {
+    slog('DB save error: ' + e.message);
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
+  }
 }
 
 function saveDB() {
@@ -865,6 +1154,15 @@ const SPAWN_ENOENT_RE = /\bspawn\b[\s\S]*\b(?:ENOENT|EPERM|EACCES|UNKNOWN)\b/;
 
 // ── Binary resolution ─────────────────────────────────────────────────────────
 function bin(name) {
+  // Round 82: an updated yt-dlp lives in <userData>in (see YTDLP UPDATE).
+  if (name === 'yt-dlp') {
+    const u = userYtdlpPath();
+    if (u) return u;
+  }
+  return binBundled(name);
+}
+
+function binBundled(name) {
   const exe = process.platform === 'win32' ? '.exe' : '';
   // In a packaged Electron app:
   //   __dirname  = <install>\resources\app.asar     (asar virtual path)
@@ -1030,6 +1328,29 @@ function maybeAutoRename(historyId, { bpm, key_note, key_mode }) {
   }
 }
 
+// Round 82, from a real 0.7.42 log: every track opened in the Analyzer was
+// fully re-analysed every time ("analysis-cache MISS ... (file changed on
+// disk)", ~10 s of Python each). The analysis is cached against the file's
+// mtime, and writing the BPM/key tags right after the analysis changes that
+// mtime. Tags don't change the audio, so a cache that was valid just before
+// the tag write is moved to the new mtime.
+// ─── BEGIN TAG WRITE CACHE CORE ───
+// The analysis_mtime to store after a tag write, or null to leave it.
+// 2000 ms is the same tolerance the cache lookup uses.
+function analysisMtimeAfterTagWrite(cachedMtime, mtimeBefore, mtimeAfter) {
+  if (cachedMtime == null || mtimeBefore == null || mtimeAfter == null) return null;
+  if (Math.abs(cachedMtime - mtimeBefore) > 2000) return null;   // cache was already stale: leave it
+  return mtimeAfter;
+}
+// ─── END TAG WRITE CACHE CORE ───
+function keepAnalysisCacheAfterTagWrite(historyId, filePath, mtimeBefore) {
+  try {
+    const row = dbAll('SELECT analysis_mtime FROM history WHERE id=?', [historyId])[0];
+    const next = analysisMtimeAfterTagWrite(row && row.analysis_mtime, mtimeBefore, fs.statSync(filePath).mtimeMs);
+    if (next != null) dbRun('UPDATE history SET analysis_mtime=? WHERE id=?', [next, historyId]);
+  } catch {}
+}
+
 function writeTagsToFile(historyId, { bpm, key_note, key_mode }) {
   try {
     // Look up the file path from the DB. We don't trust the client to send
@@ -1063,6 +1384,8 @@ function writeTagsToFile(historyId, { bpm, key_note, key_mode }) {
     // but log the outcome so issues are observable in the server log.
     // Pass the JSON command as a single argv to dodge shell quoting issues
     // with non-ASCII paths.
+    let mtimeBefore = null;
+    try { mtimeBefore = fs.statSync(filePath).mtimeMs; } catch {}
     const proc = spawn(pythonCmd, [...getPythonArgs(), scriptPath, cmdJson], { windowsHide: true });
     let stdout = '', stderr = '';
     proc.stdout.on('data', d => { stdout += d; });
@@ -1078,6 +1401,7 @@ function writeTagsToFile(historyId, { bpm, key_note, key_mode }) {
         const result = JSON.parse((stdout || '').trim().split('\n').pop() || '{}');
         if (result.ok) {
           slog('writeTagsToFile: stamped ' + result.fmt + ' bpm=' + result.bpm + ' key=' + result.key + ' (id=' + historyId + ')');
+          keepAnalysisCacheAfterTagWrite(historyId, filePath, mtimeBefore);
         } else {
           slog('writeTagsToFile: helper reported failure: ' + (result.error || 'unknown'));
         }
@@ -1694,8 +2018,9 @@ app.get('/events', (req, res) => {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     'Connection': 'keep-alive',
-    // Allow the extension origin to subscribe too
-    'Access-Control-Allow-Origin': '*',
+    // Only the extension gets a CORS header (see LOCAL API GUARD); the
+    // app's windows don't need one.
+    ...(EXTENSION_ORIGIN_RE.test(req.headers.origin || '') ? { 'Access-Control-Allow-Origin': req.headers.origin, 'Vary': 'Origin' } : {}),
   });
   // Initial comment to open the stream + flush headers immediately
   res.write(': connected\n\n');
@@ -2032,6 +2357,25 @@ app.get('/info', async (req, res) => {
     // spawn ... ENOENT" which they can't act on.
     let userMsg = e.message || 'yt-dlp failed';
     let userHint = null;
+    // Reported here because it's answered as 400, which the reporting hook
+    // treats as a caller mistake - but a failed lookup is yt-dlp failing.
+    {
+      const raw = String(e.message || '');
+      const c = SPAWN_ENOENT_RE.test(raw) ? null : classifyYtdlpError(raw);
+      report('ytdlp.info.' + (!c ? 'binary-missing'
+        : c.isSigBroken ? 'signature-broken'
+        : c.is403 ? 'forbidden'
+        : c.isBotCheck ? 'bot-check'
+        : c.isAuthWall ? 'auth-wall'
+        : c.isFatal ? 'video-unavailable'
+        : 'other'),
+        new Error(c ? c.msg : 'yt-dlp.exe is missing or blocked'), {
+          _group: c && !(c.isFatal || c.isSigBroken || c.is403 || c.isAuthWall) ? raw.replace(/\d+/g, 'N').slice(0, 60) : null,
+          ytdlpVersion: getYtdlpVersion(),
+          source: /^chrome-extension:/i.test(req.headers.origin || '') ? 'extension' : 'app',
+          stderrTail: raw.slice(-500),
+        });
+    }
     if (SPAWN_ENOENT_RE.test(userMsg)) {
       userMsg = 'yt-dlp.exe is missing or blocked. ' +
                 'This is usually caused by Windows Defender / antivirus quarantining the bundled binary on first run. ' +
@@ -2344,20 +2688,27 @@ app.get('/download', async (req, res) => {
       const { msg, hint } = classified;
       cleanupStaging();
       releaseDownload(false);
+      // Every failed download is reported (Round 81; it used to be only
+      // 403 / signature / sign-in). The category says which kind, so the
+      // ones that are the video's fault (private, removed, geo) can be
+      // told apart from the ones that are ours at a glance.
+      report('ytdlp.' + (isSigBroken ? 'signature-broken'
+        : is403 ? 'forbidden'
+        : classified.isBotCheck ? 'bot-check'
+        : classified.isAuthWall ? 'auth-wall'
+        : isFatal ? 'video-unavailable'
+        : 'other'),
+        new Error(msg), {
+          _group: isFatal || isSigBroken || is403 || classified.isAuthWall ? null : String(msg).replace(/\d+/g, 'N').slice(0, 60),
+          retryAttempted,
+          ytdlpVersion: getYtdlpVersion(),
+          format: fmt,
+          source: /^chrome-extension:/i.test(req.headers.origin || '') ? 'extension' : 'app',
+          urlKind: /[?&]list=/.test(url) ? 'video-in-playlist' : 'video',
+          stderrTail: stderr.trim().slice(-500) || '(empty)',
+        });
+      res.locals.sentryReported = true;
       sse('error', { message: msg, hint, code: 'download_failed', raw: stderr.trim().slice(-500) });
-      // Only report categories that suggest action: signature breaks
-      // are interesting (means yt-dlp needs an update), 403s after
-      // retry are interesting. Geo/age/private aren't actionable.
-      if (is403 || isSigBroken || classified.isAuthWall) {
-        report('ytdlp.' + (isSigBroken ? 'signature-broken' : classified.isAuthWall && !is403 ? 'auth-wall' : 'forbidden'),
-          new Error(msg), {
-            retryAttempted,
-            ytdlpVersion: getYtdlpVersion(),
-            format: fmt,
-            urlKind: /[?&]list=/.test(url) ? 'video-in-playlist' : 'video',
-            stderrTail: stderr.trim().slice(-500) || '(empty)',
-          });
-      }
       return res.end();
     }
 
@@ -2424,8 +2775,14 @@ app.get('/download', async (req, res) => {
 
     let historyId = null;
     if (db) {
-      historyId = dbRun(`INSERT INTO history (title,channel,youtube_url,file_path,format,duration,thumbnail) VALUES (?,?,?,?,?,?,?)`,
-        [meta.title||filename, meta.channel||meta.uploader||'', url, fullPath, fmt, meta.duration||null, meta.thumbnail||'']);
+      // buy_url: the producer's purchase link from the description, if any
+      // ('' = none found; only when the metadata actually loaded).
+      const hasDesc = meta && typeof meta.description === 'string';
+      const pl = hasDesc ? findProducerLinks(meta.description, meta.channel || meta.uploader) : null;
+      historyId = dbRun(`INSERT INTO history (title,channel,youtube_url,file_path,format,duration,thumbnail,buy_url,producer_links) VALUES (?,?,?,?,?,?,?,?,?)`,
+        [meta.title||filename, meta.channel||meta.uploader||'', url, fullPath, fmt, meta.duration||null, meta.thumbnail||'',
+         pl ? (pl.buy || '') : null,
+         pl ? JSON.stringify({ v: PRODUCER_LINKS_VERSION, socials: pl.socials, email: pl.email }) : null]);
       slog('Saved to history, id=' + historyId);
       // Kick off a background fingerprint job. Doesn't block the download
       // response - the fingerprint is a nice-to-have used only by the
@@ -2604,10 +2961,221 @@ app.post('/history/:id/user-notes', (req, res) => {
 // Duplicate detection reads audio_hash straight from the DB server-side
 // (/history/duplicates, the library doctor) and /history/:id/full still
 // returns every column, so nothing loses access to it.
+// ── Buy this beat (Round 82) ─────────────────────────────────────────────
+// Producers usually put a purchase link in the YouTube description
+// (BeatStars, Airbit, Traktrain, their own site...). Finding it lets the
+// right-click menu send people to buy the beat and credit the producer.
+// ─── BEGIN BUY LINK CORE ───
+// Known beat stores: any link to these is a purchase link.
+const BEAT_STORE_HOSTS = ['beatstars.com', 'bsta.rs', 'airbit.com', 'air.bi', 'traktrain.com', 'soundee.com', 'beatbrokerz.com',
+  'beatstars.page', 'infinity.beatstars.com', 'payhip.com', 'gumroad.com', 'sellfy.com', 'beatsbrokerz.com', 'soundclick.com'];
+// Never a purchase link, whatever the line says.
+const NOT_A_STORE_HOSTS = ['youtube.com', 'youtu.be', 'instagram.com', 'tiktok.com', 'twitter.com', 'x.com', 'facebook.com',
+  'fb.com', 'snapchat.com', 'discord.gg', 'discord.com', 'spotify.com', 'apple.com', 'twitch.tv', 'threads.net', 'google.com',
+  'goo.gl', 'paypal.me', 'cash.app', 'patreon.com', 'wa.me', 'whatsapp.com', 'soundcloud.com'];
+// A line that offers the beat for sale (English and French).
+const BUY_WORDS_RE = /\b(buy|purchase|purchas|lease|leasing|licen[cs]e|exclusive|instant download|beat store|store|shop|acheter|achat|achète|licence|boutique)\b|💰|💲|\$\s?\d/i;
+
+function hostOf(url) {
+  try { return new URL(url).hostname.toLowerCase().replace(/^www\./, ''); } catch { return ''; }
+}
+function hostIn(host, list) { return list.some((h) => host === h || host.endsWith('.' + h)); }
+// Every http(s) link in a text, with trailing punctuation trimmed.
+function linksIn(text) {
+  const out = [];
+  // Zero-width characters end a link too (one was measured right after a
+  // BeatStars link, inside the hostname otherwise).
+  const re = /\bhttps?:\/\/[^\s<>"'`)\]​-‍⁠﻿]+|\bwww\.[a-z0-9-]+\.[^\s<>"'`)\]​-‍⁠﻿]+/gi;
+  let m;
+  while ((m = re.exec(text))) {
+    let u = m[0].replace(/[.,;:!?…]+$/, '');
+    if (/^www\./i.test(u)) u = 'https:\/\/' + u;
+    if (hostOf(u)) out.push(u);
+  }
+  return out;
+}
+// Link shorteners: could point anywhere, so never trusted as a store or site.
+const SHORTENER_HOSTS = ['bit.ly', 'pin.it', 'tinyurl.com', 'ow.ly', 't.co', 'goo.gl', 'rb.gy', 'shorturl.at', 'cutt.ly', 'is.gd'];
+// "Zdan Beats" -> ['zdan']: the distinctive part of a channel name, to
+// recognise the producer's own site (zdanbeats.com) without a "buy" word.
+function channelKeys(channel) {
+  return String(channel || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !/^(beats?|prod|music|records?|official|type|instru|studio)$/.test(w));
+}
+
+// The best purchase link in a YouTube description, or null.
+//   1. a beat-store link on a line that offers the beat for sale
+//   2. any beat-store link
+//   3. another site's link on such a line (a producer's own store)
+//   4. a site named after the channel (zdanbeats.com for "Zdan Beats")
+function findBuyLink(description, channel) {
+  const text = String(description || '');
+  if (!text) return null;
+  const keys = channelKeys(channel);
+  const candidates = [];
+  for (const line of text.split(/\r?\n/)) {
+    const offers = BUY_WORDS_RE.test(line);
+    for (const url of linksIn(line)) {
+      const host = hostOf(url);
+      if (!/^https?:$/i.test(new URL(url).protocol)) continue;
+      if (hostIn(host, NOT_A_STORE_HOSTS) || hostIn(host, SHORTENER_HOSTS)) continue;
+      const store = hostIn(host, BEAT_STORE_HOSTS);
+      const named = keys.some((k) => host.split('.').slice(0, -1).join('.').includes(k));
+      const rank = store && offers ? 1 : store ? 2 : offers ? 3 : named ? 4 : 0;
+      if (rank) candidates.push({ url, host, rank });
+    }
+  }
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => a.rank - b.rank);   // stable: first in the description wins a tie
+  return { url: candidates[0].url, host: candidates[0].host };
+}
+
+// The producer's other links in the description, for "About the beatmaker".
+// Only profile-style links count (an Instagram post or a YouTube video is
+// not "where to find this producer").
+const SOCIAL_KINDS = [
+  { kind: 'Instagram', hosts: ['instagram.com'], skip: /^\/(p|reel|reels|explore|stories|tv)\//i },
+  { kind: 'TikTok', hosts: ['tiktok.com'], skip: /^\/(video|tag|music)\//i },
+  { kind: 'X', hosts: ['twitter.com', 'x.com'], skip: /\/status\//i },
+  { kind: 'YouTube', hosts: ['youtube.com'], only: /^\/(@|channel\/|c\/|user\/)/i },
+  { kind: 'SoundCloud', hosts: ['soundcloud.com'] },
+  { kind: 'Spotify', hosts: ['open.spotify.com', 'spotify.com'], only: /^\/(intl-[a-z]+\/)?artist\//i },
+  { kind: 'Snapchat', hosts: ['snapchat.com'] },
+  { kind: 'Facebook', hosts: ['facebook.com', 'fb.com'] },
+  { kind: 'Twitch', hosts: ['twitch.tv'] },
+  { kind: 'Discord', hosts: ['discord.gg', 'discord.com'] },
+  { kind: 'WhatsApp', hosts: ['wa.me', 'whatsapp.com'] },
+  { kind: 'Links', hosts: ['linktr.ee', 'beacons.ai', 'bio.link', 'linkin.bio', 'solo.to'] },
+  { kind: 'BeatStars', hosts: ['beatstars.com'], only: /^\/[^/]+\/?$/ },   // a store's front page, not a beat
+];
+// The profile name in a link: /@name or /name for most sites, the id for
+// Spotify (/artist/<id>), the part after channel|c|user for old YouTube.
+function profileHandle(kind, pathname) {
+  const seg = pathname.split('/').filter(Boolean).map((s) => { try { return decodeURIComponent(s); } catch { return s; } });
+  if (!seg.length) return '';
+  if (kind === 'Spotify') return seg[seg.length - 1];
+  if (kind === 'YouTube') { const at = seg.find((s) => s.startsWith('@')); return at || seg[1] || ''; }
+  if (kind === 'Snapchat' && seg[0] === 'add') return seg[1] || '';
+  return seg[0];
+}
+const HANDLE_KINDS = { instagram: 'Instagram', insta: 'Instagram', ig: 'Instagram', tiktok: 'TikTok', 'tik tok': 'TikTok',
+  twitter: 'X', x: 'X', snapchat: 'Snapchat', snap: 'Snapchat', soundcloud: 'SoundCloud', twitch: 'Twitch' };
+const HANDLE_URLS = {
+  Instagram: (h) => 'https:\/\/www.instagram.com/' + h + '/',
+  TikTok: (h) => 'https:\/\/www.tiktok.com/@' + h,
+  X: (h) => 'https:\/\/x.com/' + h,
+  Snapchat: (h) => 'https:\/\/www.snapchat.com/add/' + h,
+  SoundCloud: (h) => 'https:\/\/soundcloud.com/' + h,
+  Twitch: (h) => 'https:\/\/www.twitch.tv/' + h,
+};
+// Bump when findProducerLinks finds more: tracks looked up by an older
+// version are looked up again once.
+const PRODUCER_LINKS_VERSION = 2;
+function findProducerLinks(description, channel) {
+  const text = String(description || '');
+  const buy = findBuyLink(text, channel);
+  const socials = [];
+  const seen = new Set();
+  for (const url of linksIn(text)) {
+    let u;
+    try { u = new URL(url); } catch { continue; }
+    if (!/^https?:$/i.test(u.protocol)) continue;
+    const host = hostOf(url);
+    if (hostIn(host, SHORTENER_HOSTS)) continue;
+    let k = SOCIAL_KINDS.find((s) => hostIn(host, s.hosts));
+    let handle;
+    if (k && k.kind === 'BeatStars' && host !== 'beatstars.com') {
+      // A store on its own subdomain (prodregi.beatstars.com): the front page
+      // is the store; a page inside it is a beat.
+      const sub = host.slice(0, -'.beatstars.com'.length);
+      if (/^(www|main|infinity|help|blog)$/.test(sub) || u.pathname.replace(/\/+$/, '') !== '') continue;
+      handle = sub;
+    } else if (k) {
+      if (k.skip && k.skip.test(u.pathname)) continue;
+      if (k.only && !k.only.test(u.pathname)) continue;
+      handle = profileHandle(k.kind, u.pathname).slice(0, 60);
+      if (!handle) continue;                      // a site's front page, not a profile
+    } else {
+      // Anything else that isn't a store, a video or the buy link itself:
+      // the producer's own website.
+      if (hostIn(host, NOT_A_STORE_HOSTS) || hostIn(host, BEAT_STORE_HOSTS)) continue;
+      if (buy && hostOf(buy.url) === host) continue;
+      k = { kind: 'Website' };
+      handle = host;
+    }
+    const key = k.kind + ':' + handle.toLowerCase().replace(/^@/, '');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    socials.push({ kind: k.kind, url, handle });
+    if (socials.length >= 12) break;
+  }
+  // Handles written without a link ("Instagram: @imregii", "IG - imregii",
+  // "Snap: name"), turned into the profile link. Needs the platform's name
+  // followed by ':' / '-' / '@', so "Drake x Tory" or "Instagram post" is
+  // never read as a handle, and a link or an e-mail after the label isn't either.
+  const handleRe = /(?:^|[^a-z0-9])(instagram|insta|ig|tiktok|tik tok|twitter|x|snapchat|snap|soundcloud|twitch)\s*(?:[:\-–—=>]+\s*@?|@)\s*(?!https?:|www\.)([A-Za-z0-9._]{2,30})(?![A-Za-z0-9._@])/gi;
+  let hm;
+  while ((hm = handleRe.exec(text)) && socials.length < 12) {
+    const kind = HANDLE_KINDS[hm[1].toLowerCase()];
+    // "x" is also "featuring" ("prod by amour x @skripinho", measured):
+    // only "X:" counts as the site.
+    if (hm[1].toLowerCase() === 'x' && !/^x\s*:/i.test(hm[0].replace(/^[^a-z]*/i, ''))) continue;
+    const h = hm[2].replace(/\.+$/, '');
+    if (!kind || h.length < 2 || /^\d+$/.test(h)) continue;
+    const key = kind + ':' + h.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    socials.push({ kind, url: HANDLE_URLS[kind](h), handle: kind === 'TikTok' ? '@' + h : h });
+  }
+  // A business e-mail is often the only contact. Shown for copying only.
+  const em = text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
+  return { buy: buy ? buy.url : null, socials, email: em ? em[0] : null };
+}
+// ─── END BUY LINK CORE ───
+
+// The producer behind one track: purchase link, social links, contact.
+// Stored at download; for older tracks looked up once from YouTube and
+// remembered (buy_url '' / producer_links set = looked up, nothing found).
+app.get('/history/:id/producer', async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const row = id ? dbAll('SELECT id, title, channel, youtube_url, buy_url, producer_links FROM history WHERE id=?', [id])[0] : null;
+  if (!row) return res.status(404).json({ error: 'Track not found' });
+  const reply = (buy, links, cached) => res.json({
+    title: row.title || '', channel: row.channel || '', youtubeUrl: row.youtube_url || null,
+    buy: buy || null, buyHost: buy ? hostOf(buy) : null,
+    socials: (links && links.socials) || [], email: (links && links.email) || null, cached,
+  });
+  let links = null;
+  if (row.producer_links !== null && row.producer_links !== undefined) {
+    try { links = JSON.parse(row.producer_links); } catch {}
+    // Looked up by an older, less thorough version: look up again (once).
+    const stale = !links || (links.v || 1) < PRODUCER_LINKS_VERSION;
+    if (!stale || !row.youtube_url) return reply(row.buy_url, links, true);
+  }
+  if (!row.youtube_url) return reply(row.buy_url, null, true);
+  try {
+    const meta = JSON.parse(await run(bin('yt-dlp'), ['--dump-json', '--no-playlist', '--no-warnings', '--skip-download', row.youtube_url], 60000));
+    const pl = findProducerLinks(meta.description || '', meta.channel || meta.uploader || row.channel);
+    dbRun('UPDATE history SET buy_url=?, producer_links=? WHERE id=?',
+      [pl.buy || '', JSON.stringify({ v: PRODUCER_LINKS_VERSION, socials: pl.socials, email: pl.email }), id]);
+    if (!row.channel && (meta.channel || meta.uploader)) {
+      dbRun('UPDATE history SET channel=? WHERE id=?', [meta.channel || meta.uploader, id]);
+      row.channel = meta.channel || meta.uploader;
+    }
+    broadcastEvent('history-changed', { reason: 'producer-links', historyId: id });
+    reply(pl.buy, pl, false);
+  } catch (e) {
+    // Not remembered: a network or YouTube error shouldn't mark the track
+    // as having no links forever. An older lookup is still shown.
+    if (links) return reply(row.buy_url, links, true);
+    res.status(502).json({ error: 'Could not read the video description: ' + String(e.message || e).slice(0, 200) });
+  }
+});
+
 const HISTORY_LIST_COLUMNS =
   'id, title, channel, youtube_url, file_path, format, duration, ' +
   'bpm, key_note, key_mode, thumbnail, notes, user_notes, created_at, ' +
-  'is_favorite, stockpile_committed';
+  'is_favorite, stockpile_committed, buy_url';
 
 app.get('/history', (req, res) => {
   const rawLimit = req.query && req.query.limit;
@@ -3072,7 +3640,15 @@ app.post('/history/bulk-move', (req, res) => {
 
 // Strip diacritics, lowercase, replace separators with spaces, drop common
 // filler ("type beat", "official", "music video", file extensions etc).
-function normalizeForMatch(s) {
+//
+// Round 82: this used to be called normalizeForMatch - the same name as the
+// history-repair normalizer further down. Two top-level function
+// declarations with one name: the later one silently replaces the first
+// everywhere, so artist matching ran the repair version, which turns every
+// non a-z character into a space ("Drakéo" -> "drak o"). Measured on 12
+// artist/title pairs: 12/12 matched with this normalizer, 10/12 with the
+// one that was actually running (failed: seed "Drakéo", title "Zoé ...").
+function normalizeArtistText(s) {
   if (!s) return '';
   let n = String(s).toLowerCase();
   // Strip diacritics (Drakéo → Drakeo)
@@ -3187,11 +3763,11 @@ function matchSeed(haystackNorm, hayWords, seedNorm) {
 // Top-level: given a haystack string and a list of seeds, return the best
 // match info. { matched: bool, seed: string|null, confidence: 0..1 }
 function findArtistMatch(rawHaystack, seeds) {
-  const haystackNorm = normalizeForMatch(rawHaystack);
+  const haystackNorm = normalizeArtistText(rawHaystack);
   const hayWords = haystackNorm.split(' ').filter(Boolean);
   let best = { matched: false, seed: null, confidence: 0 };
   for (const rawSeed of seeds) {
-    const seedNorm = normalizeForMatch(rawSeed);
+    const seedNorm = normalizeArtistText(rawSeed);
     if (!seedNorm) continue;
     const c = matchSeed(haystackNorm, hayWords, seedNorm);
     if (c > best.confidence) {
@@ -4168,6 +4744,141 @@ function requestDeferredSave() {
 // Flush on exit so an in-flight batch isn't lost on Ctrl-C / app quit.
 process.on('beforeExit', () => { if (_deferredSaveTimer) { clearTimeout(_deferredSaveTimer); try { saveDB(); } catch {} } });
 
+// ─── BEGIN LIBRARY BACKUP CORE ───
+// Round 82 ("lets say apps uninstall and reinstalls ... make sure it can
+// detect stockpile folder to be able to come back to a good state and not
+// from scratch"). The library (history, BPM/key, notes, favorites, folders,
+// producer links) lives only in AppData. The uninstaller keeps AppData, but
+// a new PC, a Windows reset or a deleted AppData folder lost all of it while
+// the audio sat untouched in the Stockpile folder. Now a copy of the library
+// is kept in <Stockpile>\.freqphull\, found again on a fresh install, and
+// restored; a Stockpile folder without one is rebuilt from its folders.
+const LIB_BACKUP_DIR = '.freqphull';
+const LIB_BACKUP_DB = 'library.db';
+const LIB_BACKUP_INFO = 'library-info.json';
+const LIB_BACKUP_EVERY_MS = 2 * 60 * 1000;    // a copy of a few MB at most
+// Never searched for a backup: system folders, app data, dependency trees.
+const LIB_SCAN_SKIP = /^(\$recycle\.bin|system volume information|windows|program files|program files \(x86\)|programdata|appdata|node_modules|recovery|perflogs|msocache|config\.msi|windowsapps)$/i;
+
+// The path with the old Stockpile root swapped for the new one (drive letter
+// changed, folder moved), or null when it isn't under the old root.
+// Case-insensitive, like Windows paths.
+function rebasePath(p, oldRoot, newRoot) {
+  if (!p || !oldRoot || !newRoot) return null;
+  const o = String(oldRoot).replace(/[\\/]+$/, ''), n = String(newRoot).replace(/[\\/]+$/, '');
+  if (p.length <= o.length + 1) return null;
+  if (p.slice(0, o.length).toLowerCase() !== o.toLowerCase() || !/[\\/]/.test(p[o.length])) return null;
+  return n + p.slice(o.length);
+}
+
+// What a Stockpile folder holds: each subfolder is a Stockpile folder and
+// the audio inside it (and one level below) is filed there; audio in the
+// root itself is a track without a folder. listDir(dir) -> [{name, isDir}].
+function planRebuild(root, listDir, joinPath, audioExts) {
+  const isAudio = (n) => audioExts.has((n.match(/\.[^.\\/]+$/) || [''])[0].toLowerCase());
+  const plan = { folders: [], loose: [] };
+  for (const e of listDir(root)) {
+    if (e.name.startsWith('.')) continue;
+    const full = joinPath(root, e.name);
+    if (!e.isDir) { if (isAudio(e.name)) plan.loose.push(full); continue; }
+    const files = [];
+    for (const f of listDir(full)) {
+      if (f.name.startsWith('.')) continue;
+      const ff = joinPath(full, f.name);
+      if (!f.isDir) { if (isAudio(f.name)) files.push(ff); continue; }
+      for (const g of listDir(ff)) if (!g.isDir && !g.name.startsWith('.') && isAudio(g.name)) files.push(joinPath(ff, g.name));
+    }
+    if (files.length) plan.folders.push({ name: e.name, files });
+  }
+  return plan;
+}
+// ─── END LIBRARY BACKUP CORE ───
+
+let _libBackupTimer = null;
+let _libBackupLast = 0;
+function scheduleLibraryBackup() {
+  if (_libBackupTimer) return;
+  const wait = Math.max(5000, _libBackupLast + LIB_BACKUP_EVERY_MS - Date.now());
+  _libBackupTimer = setTimeout(() => { _libBackupTimer = null; writeLibraryBackup(); }, wait);
+  if (_libBackupTimer.unref) _libBackupTimer.unref();
+}
+function writeLibraryBackup() {
+  try {
+    const root = getPref('stockpile_root') || '';
+    if (!root || !db || _libRestoring || !fs.existsSync(DB_PATH)) return;
+    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return;
+    const tracks = (dbAll('SELECT COUNT(*) AS n FROM history')[0] || {}).n || 0;
+    if (!tracks) return;   // an empty library never replaces a backup
+    const dir = path.join(root, LIB_BACKUP_DIR);
+    const fresh = !fs.existsSync(dir);
+    fs.mkdirSync(dir, { recursive: true });
+    const dest = path.join(dir, LIB_BACKUP_DB);
+    // A much smaller library replacing the backup (a fresh install that
+    // downloaded a few tracks before restoring): keep the big one aside
+    // instead of losing it.
+    try {
+      const prev = JSON.parse(fs.readFileSync(path.join(dir, LIB_BACKUP_INFO), 'utf8'));
+      if (prev && prev.tracks > tracks * 2 && prev.tracks - tracks > 20 && fs.existsSync(dest)) {
+        fs.renameSync(dest, path.join(dir, 'library-' + String(prev.written_at || Date.now()).slice(0, 10) + '-' + prev.tracks + '-tracks.db'));
+        slog('library backup: kept the previous ' + prev.tracks + '-track backup aside');
+      }
+    } catch {}
+    const tmp = dest + '.tmp';
+    fs.copyFileSync(DB_PATH, tmp);
+    fs.renameSync(tmp, dest);
+    const folders = (dbAll('SELECT COUNT(*) AS n FROM stockpile_folders')[0] || {}).n || 0;
+    fs.writeFileSync(path.join(dir, LIB_BACKUP_INFO), JSON.stringify({
+      app: 'Freq.Phull', version: _serverVersion, written_at: new Date().toISOString(), root, tracks, folders,
+    }, null, 1));
+    if (fresh) {
+      fs.writeFileSync(path.join(dir, 'README.txt'),
+        'Freq.Phull library backup.\r\n\r\nA copy of your Freq.Phull library (history, BPM/key, notes, favorites,\r\n' +
+        'Stockpile folders). If Freq.Phull is reinstalled or moved to a new PC, it finds\r\n' +
+        'this folder and offers to restore your library from it. Safe to keep.\r\n');
+      try { require('child_process').execFile('attrib', ['+h', dir], { windowsHide: true }, () => {}); } catch {}
+    }
+    _libBackupLast = Date.now();
+  } catch (e) { slog('library backup failed: ' + e.message); }
+}
+
+// Every library backup on this PC: the user's usual folders first, then
+// each drive, a few levels deep, within a time budget.
+function findLibraryBackups(budgetMs) {
+  const deadline = Date.now() + (budgetMs || 4000);
+  const found = new Map();
+  const seen = new Set();
+  const home = os.homedir();
+  const starts = ['Music', 'Desktop', 'Documents', 'Downloads', 'OneDrive', ''].map((s) => [path.join(home, s), 3]);
+  const drives = [];
+  for (let c = 67; c <= 90; c++) drives.push(String.fromCharCode(c) + ':\\');
+  // Other drives before C: - a Stockpile is usually on the big data drive.
+  for (const d of drives.slice(1).concat(drives[0])) { try { if (fs.existsSync(d)) starts.push([d, 3]); } catch {} }
+  const visit = (dir, depth) => {
+    if (Date.now() > deadline) return;
+    const key = dir.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    try {
+      const infoPath = path.join(dir, LIB_BACKUP_DIR, LIB_BACKUP_INFO);
+      if (fs.existsSync(infoPath) && fs.existsSync(path.join(dir, LIB_BACKUP_DIR, LIB_BACKUP_DB))) {
+        const j = JSON.parse(fs.readFileSync(infoPath, 'utf8'));
+        found.set(key, { root: dir, tracks: j.tracks | 0, folders: j.folders | 0, written_at: j.written_at || null, version: j.version || null });
+      }
+    } catch {}
+    if (depth <= 0) return;
+    let ents;
+    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      if (!e.isDirectory() || e.name.startsWith('.') || LIB_SCAN_SKIP.test(e.name)) continue;
+      visit(path.join(dir, e.name), depth - 1);
+      if (Date.now() > deadline) return;
+    }
+  };
+  for (const [d, depth] of starts) visit(d, depth);
+  return [...found.values()].sort((a, b) => String(b.written_at).localeCompare(String(a.written_at)));
+}
+function libraryTrackCount() { return (dbAll('SELECT COUNT(*) AS n FROM history')[0] || {}).n || 0; }
+
 app.get('/prefs', (req, res) => {
   const out = {};
   for (const r of dbAll('SELECT key, value FROM prefs')) out[r.key] = r.value;
@@ -4238,6 +4949,17 @@ function writeExtInstallPath(dest) {
   } catch (e) { slog('could not remember extension path: ' + e.message); }
 }
 
+// ─── BEGIN EXT VERSION CORE ───
+// true when dotted version a is newer than b ("4.10.0" > "4.9.2").
+function extVersionNewer(a, b) {
+  const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0), pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0);
+  }
+  return false;
+}
+// ─── END EXT VERSION CORE ───
+
 // Copy bundled -> dest, replacing the contents but keeping the folder
 // itself (same path = same Chrome extension ID = no re-install).
 function syncExtensionTo(dest, bundled) {
@@ -4263,7 +4985,11 @@ setTimeout(() => {
     const installed = readExtInstallPath();
     if (!bundled || !installed) return;
     const bv = extensionVersionAt(bundled), iv = extensionVersionAt(installed);
-    if (!bv || !iv || bv === iv) return;
+    // Round 82: only ever upgrade. It synced on ANY difference, so an older
+    // build replaced a newer extension (seen in a real log: an install of
+    // 0.7.41 run after 0.7.42 did "auto-synced 4.6.0 -> 4.5.0", and 0.7.42
+    // put 4.6.0 back on its next start - flip-flopping every switch).
+    if (!bv || !iv || !extVersionNewer(bv, iv)) return;
     syncExtensionTo(installed, bundled);
     slog('extension auto-synced ' + iv + ' -> ' + bv + ' at ' + installed);
     broadcastEvent('extension-updated', { from: iv, to: bv, path: installed });
@@ -4283,7 +5009,7 @@ app.get('/extension/status', (_, res) => {
     installed: !!installed,
     installed_path: installed,
     installed_version: installedVersion,
-    update_available: !!(bundledVersion && installedVersion && bundledVersion !== installedVersion),
+    update_available: !!(bundledVersion && installedVersion && extVersionNewer(bundledVersion, installedVersion)),
   });
 });
 
@@ -4425,6 +5151,40 @@ app.post('/engines/repair', async (req, res) => {
   res.json(r);
 });
 
+// "Report a problem" (Round 82, Settings). With few testers, waiting for a
+// crash to explain a problem is slow; this lets someone describe it in
+// their own words and, if they tick the box, attach the end of the app
+// log. Both go through the same scrubbing as every other report (no
+// computer name, user name, IP, links or e-mail), and each report is its
+// own Sentry issue so the new-issue alert e-mails it.
+app.post('/report-problem', (req, res) => {
+  const b = req.body || {};
+  const text = String(b.message || '').trim().slice(0, 2000);
+  if (text.length < 3) return res.status(400).json({ error: 'Please describe the problem.' });
+  if (!_sentryClient) return res.json({ ok: false, reason: 'reporting-off', error: 'Reporting is not available in this build.' });
+  if (sentry.isOptedOut()) return res.json({ ok: false, reason: 'opted-out', error: 'Error reports are switched off.' });
+  let logTail = null;
+  if (b.includeLog) {
+    try {
+      // The log is written in batches; without this the newest lines -
+      // the ones about the problem being reported - weren't in the file yet.
+      _flushLog();
+      const raw = fs.readFileSync(logPath, 'utf8');
+      logTail = raw.split(/\r?\n/).slice(-300).join('\n').slice(-12000);
+    } catch (e) { logTail = '(log unavailable: ' + e.message + ')'; }
+  }
+  const id = require('crypto').randomBytes(4).toString('hex');
+  report('user.report', new Error('User report: ' + text.slice(0, 120)), {
+    _group: 'report-' + id,
+    report_id: id,
+    message: text,
+    tab: String(b.tab || '').slice(0, 30) || '(unknown)',
+    log_tail: logTail || '(not included)',
+  });
+  slog('user report ' + id + ' sent' + (logTail ? ' with log' : ''));
+  res.json({ ok: true, id });
+});
+
 // Crashes in the window itself had nowhere to go: the renderer is a
 // browser context with no Sentry of its own, so an exception in the UI
 // left no trace anywhere. It posts them here instead, along with the
@@ -4438,8 +5198,16 @@ app.post('/client-error', (req, res) => {
     if (Array.isArray(b.trail)) {
       for (const line of b.trail.slice(-40)) sentry.addTrail('node', '[ui] ' + String(line).slice(0, 200));
     }
-    report('renderer.' + (b.kind === 'rejection' ? 'unhandled-rejection' : 'crash'), err, {
+    // kind: crash | rejection (window faults), notice (a red error toast
+    // the user saw), ext-crash | ext-notice (the Chrome extension).
+    const KINDS = {
+      crash: 'renderer.crash', rejection: 'renderer.unhandled-rejection',
+      notice: 'renderer.error-shown',
+      'ext-crash': 'extension.crash', 'ext-notice': 'extension.error-shown',
+    };
+    report(KINDS[b.kind] || 'renderer.crash', err, {
       _group: String(b.message || '').replace(/[0-9]+/g, 'N').slice(0, 70),
+      extensionVersion: b.extVersion ? String(b.extVersion).slice(0, 20) : undefined,
       source: b.source || '(unknown)',
       line: b.line ?? null,
       column: b.column ?? null,
@@ -4844,6 +5612,137 @@ app.post('/prefs', (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Library backup in the Stockpile folder (see LIBRARY BACKUP CORE) ──
+// Searching the drives is only done when the library is empty (a fresh
+// install), so a normal launch never pays for it.
+app.get('/library/backups', (req, res) => {
+  const tracks = libraryTrackCount();
+  if (tracks > 0 && req.query.force !== '1') return res.json({ libraryTracks: tracks, backups: [] });
+  res.json({ libraryTracks: tracks, backups: findLibraryBackups(4000) });
+});
+
+// What a folder the user picked holds: a backup, or style folders with audio.
+app.get('/library/inspect', (req, res) => {
+  const root = String(req.query.root || '');
+  if (!root || !fs.existsSync(root)) return res.status(404).json({ error: 'Folder not found' });
+  let backup = null;
+  try {
+    if (fs.existsSync(path.join(root, LIB_BACKUP_DIR, LIB_BACKUP_DB))) {
+      backup = JSON.parse(fs.readFileSync(path.join(root, LIB_BACKUP_DIR, LIB_BACKUP_INFO), 'utf8'));
+    }
+  } catch { backup = { tracks: 0 }; }
+  let plan = { folders: [], loose: [] };
+  try { plan = planRebuild(root, listDirEntries, path.join, AUDIO_EXTS); } catch {}
+  res.json({
+    libraryTracks: libraryTrackCount(), backup,
+    folders: plan.folders.length, files: plan.folders.reduce((n, f) => n + f.files.length, 0) + plan.loose.length,
+  });
+});
+function listDirEntries(dir) {
+  try { return fs.readdirSync(dir, { withFileTypes: true }).map((e) => ({ name: e.name, isDir: e.isDirectory() })); }
+  catch { return []; }
+}
+
+// Replace the library with the backup in <root>\.freqphull. The current
+// library file is kept next to it first (.before-restore.<time>.bak).
+app.post('/library/restore', async (req, res) => {
+  const root = String((req.body && req.body.root) || '');
+  const src = path.join(root, LIB_BACKUP_DIR, LIB_BACKUP_DB);
+  if (!root || !fs.existsSync(src)) return res.status(404).json({ error: 'No Freq.Phull library backup in that folder.' });
+  let rdb;
+  try {
+    const SQL = await require('sql.js')();
+    rdb = new SQL.Database(fs.readFileSync(src));
+    rdb.exec('SELECT COUNT(*) FROM history');
+  } catch (e) {
+    return res.status(422).json({ error: 'The backup could not be read: ' + e.message });
+  }
+  try {
+    let oldRoot = null;
+    try { oldRoot = JSON.parse(fs.readFileSync(path.join(root, LIB_BACKUP_DIR, LIB_BACKUP_INFO), 'utf8')).root || null; } catch {}
+    if (!oldRoot) { try { oldRoot = rdb.exec("SELECT value FROM prefs WHERE key='stockpile_root'")[0].values[0][0]; } catch {} }
+    let rebased = 0;
+    if (oldRoot && oldRoot.toLowerCase().replace(/[\\/]+$/, '') !== root.toLowerCase().replace(/[\\/]+$/, '')) {
+      const rows = rdb.exec('SELECT id, file_path FROM history');
+      const st = rdb.prepare('UPDATE history SET file_path=? WHERE id=?');
+      for (const [id, fp] of (rows[0] ? rows[0].values : [])) {
+        const np = rebasePath(fp, oldRoot, root);
+        if (np) { st.run([np, id]); rebased++; }
+      }
+      st.free();
+    }
+    rdb.run("INSERT INTO prefs (key, value) VALUES ('stockpile_root', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [root]);
+    const bytes = Buffer.from(rdb.export());
+    rdb.close();
+
+    _libRestoring = true;
+    if (_dbSaveTimer) { clearTimeout(_dbSaveTimer); _dbSaveTimer = null; }
+    _dbSavePending = false;
+    if (fs.existsSync(DB_PATH)) fs.copyFileSync(DB_PATH, DB_PATH + '.before-restore.' + Date.now() + '.bak');
+    fs.writeFileSync(DB_PATH + '.tmp', bytes);
+    fs.renameSync(DB_PATH + '.tmp', DB_PATH);
+    db = null;
+    _libRestoring = false;
+    await initDB();   // same open + migrations as a normal launch
+    if (!db) throw new Error('the restored library did not open');
+    const rows = dbAll('SELECT file_path FROM history');
+    const missing = rows.filter((r) => !r.file_path || !fs.existsSync(r.file_path)).length;
+    const folders = (dbAll('SELECT COUNT(*) AS n FROM stockpile_folders')[0] || {}).n || 0;
+    slog('library restore: ' + rows.length + ' tracks, ' + folders + ' folders from ' + root + (rebased ? ', ' + rebased + ' paths moved from ' + oldRoot : '') + ', ' + missing + ' files missing');
+    restartStockpileWatcher();
+    broadcastEvent('history-changed', { reason: 'library-restored' });
+    res.json({ ok: true, tracks: rows.length, folders, rebased, missing });
+  } catch (e) {
+    _libRestoring = false;
+    report('library.restore', e, { rootDepth: root.split(/[\\/]/).length });
+    res.status(500).json({ error: 'Restore failed: ' + e.message });
+  }
+});
+
+// No backup (made before this version): rebuild from the folders - each
+// subfolder becomes a Stockpile folder with its tracks. Adds, never removes;
+// tracks already in the library are left alone. BPM/key are re-analysed in
+// the background.
+app.post('/library/rebuild', (req, res) => {
+  const root = String((req.body && req.body.root) || '');
+  if (!root || !fs.existsSync(root) || !db) return res.status(404).json({ error: 'Folder not found' });
+  try {
+    const plan = planRebuild(root, listDirEntries, path.join, AUDIO_EXTS);
+    const known = new Set(dbAll('SELECT file_path FROM history').map((r) => String(r.file_path || '').toLowerCase()));
+    const stamp = (f) => { try { return new Date(fs.statSync(f).mtimeMs).toISOString().slice(0, 19).replace('T', ' '); } catch { return null; } };
+    const addTrack = (f, committed) => {
+      if (known.has(f.toLowerCase())) return null;
+      known.add(f.toLowerCase());
+      const base = path.basename(f);
+      const id = dbRun('INSERT INTO history (title, channel, file_path, format, created_at, stockpile_committed) VALUES (?,?,?,?,COALESCE(?, strftime(\'%Y-%m-%d %H:%M:%S\',\'now\')),?)',
+        [base.replace(/\.[^.]+$/, ''), '', f, path.extname(base).slice(1).toLowerCase(), stamp(f), committed ? 1 : 0]);
+      return id;
+    };
+    let tracks = 0, folders = 0;
+    for (const fo of plan.folders) {
+      let row = dbAll('SELECT id FROM stockpile_folders WHERE name=?', [fo.name])[0];
+      if (!row) { dbRun('INSERT INTO stockpile_folders (name) VALUES (?)', [fo.name]); row = dbAll('SELECT id FROM stockpile_folders WHERE name=?', [fo.name])[0]; folders++; }
+      for (const f of fo.files) {
+        const id = addTrack(f, true);
+        if (!id) continue;
+        tracks++;
+        dbRun(`INSERT OR IGNORE INTO stockpile_tags (history_id, folder_id, is_primary, source, confidence) VALUES (?, ?, 1, 'rebuild', 1)`, [id, row.id]);
+      }
+    }
+    for (const f of plan.loose) if (addTrack(f, false)) tracks++;
+    setPref('stockpile_root', root);
+    saveDB();
+    restartStockpileWatcher();
+    slog('library rebuild: ' + tracks + ' tracks, ' + folders + ' new folders from ' + root);
+    broadcastEvent('history-changed', { reason: 'library-rebuilt' });
+    setTimeout(() => { try { sweepUnanalysedTracks('rebuild'); } catch {} }, 3000);
+    res.json({ ok: true, tracks, folders });
+  } catch (e) {
+    report('library.rebuild', e, {});
+    res.status(500).json({ error: 'Rebuild failed: ' + e.message });
+  }
+});
+
 
 
 // ── Auto-match core (shared by the HTTP endpoint, the watch-folder
@@ -4863,7 +5762,7 @@ function autoFileIntoStockpile(historyId) {
   const wantSend = getPref('auto_send') === '1' && !!root;
   const r = autoMatchTrack(historyId, { commit: wantSend, stockpileRoot: root });
   if (r && r.committed && r.committed.moved) {
-    slog('auto-file: track ' + historyId + ' -> ' + (r.committed.folder_name || '?'));
+    slog('auto-file: track ' + historyId + ' -> ' + (r.committed.folder_name || 'Stockpile root (no folder matched)'));
     broadcastEvent('stockpile-autofiled', {
       historyId,
       folder: r.committed.folder_name || null,
@@ -5522,7 +6421,7 @@ async function adoptWatchedFile(full) {
       commit: autoSend && !!root, stockpileRoot: root, source: 'watch-folder',
     });
     if (r.committed && r.committed.moved) {
-      slog('watch-folder: auto-sent "' + title + '" → ' + (r.committed.folder_name || '?'));
+      slog('watch-folder: auto-sent "' + title + '" → ' + (r.committed.folder_name || 'Stockpile root (no folder matched)'));
     }
   }
   broadcastEvent('history-changed', { reason: 'watch-folder' });
@@ -5539,16 +6438,54 @@ setTimeout(restartStockpileWatcher, 4000);
 // ══════════════════════════════════════════════════════════════════════
 // YouTube breaks yt-dlp every few weeks; until now that meant downloads
 // died until the user manually swapped the binary. This checks GitHub's
-// latest release against the installed version on boot + every 24h, and
-// swaps the binary in place (download → .new → atomic rename, old kept
-// as .bak for rollback). Only runs when the resolved binary lives in a
-// writable app dir - a system-wide PATH install is the user's to manage.
+// latest release against the installed version on boot + every 24h.
+//
+// Round 82: updates go to <userData>\bin, never over the bundled copy.
+// Writing into resources\bin meant every app update (and every restart of
+// the portable build, which re-extracts to Temp) put the old bundled
+// version back. bin('yt-dlp') prefers the user copy unless the bundled one
+// is newer (an app update that ships a newer yt-dlp wins). Every download
+// is checked against the SHA-256 that yt-dlp publishes with the release.
 let ytdlpUpdateState = { checking: false, installed: null, latest: null, lastCheck: null, lastResult: null };
 
-function ytdlpInstalledVersion() {
+// ─── BEGIN YTDLP UPDATE CORE ───
+// yt-dlp versions are dates: 2026.08.19, 2026.08.19.1 (nightly-style).
+function compareYtdlpVersions(a, b) {
+  const pa = String(a || '').split('.').map((x) => parseInt(x, 10) || 0);
+  const pb = String(b || '').split('.').map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d > 0 ? 1 : -1;
+  }
+  return 0;
+}
+// The hash for `fileName` in a checksum file. Handles yt-dlp's
+// "<hash>  <name>" lines and Deno's PowerShell-style "Hash : <HASH>".
+function checksumFor(text, fileName) {
+  const lines = String(text || '').split(/\r?\n/);
+  for (const l of lines) {
+    const m = l.match(/^([a-f0-9]{64})\s+\*?(.+)$/i);
+    if (m && m[2].trim() === fileName) return m[1].toLowerCase();
+  }
+  const ps = String(text || '').match(/Hash\s*:\s*([a-f0-9]{64})/i);
+  return ps ? ps[1].toLowerCase() : null;
+}
+// ─── END YTDLP UPDATE CORE ───
+
+const USER_BIN = path.join(DATA, 'bin');
+const USER_YTDLP = path.join(USER_BIN, process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp');
+const USER_YTDLP_VERSION = USER_YTDLP + '.version';
+// Set at boot once the bundled copy's version is known: false when the
+// bundled yt-dlp is at least as new as the user copy.
+let _userYtdlpPreferred = true;
+function userYtdlpPath() {
+  try { return _userYtdlpPreferred && fs.existsSync(USER_YTDLP) ? USER_YTDLP : null; } catch { return null; }
+}
+
+function ytdlpVersionOf(exePath) {
   return new Promise((resolve) => {
     try {
-      const p = spawn(bin('yt-dlp'), ['--version'], { windowsHide: true });
+      const p = spawn(exePath, ['--version'], { windowsHide: true });
       let out = '';
       p.stdout.on('data', d => out += d);
       p.on('close', () => resolve(out.trim() || null));
@@ -5557,11 +6494,31 @@ function ytdlpInstalledVersion() {
     } catch { resolve(null); }
   });
 }
+function ytdlpInstalledVersion() { return ytdlpVersionOf(bin('yt-dlp')); }
+
+async function sha256File(p) {
+  return new Promise((resolve, reject) => {
+    const h = require('crypto').createHash('sha256');
+    fs.createReadStream(p).on('data', (d) => h.update(d)).on('end', () => resolve(h.digest('hex'))).on('error', reject);
+  });
+}
 
 async function checkAndUpdateYtdlp(force) {
   if (ytdlpUpdateState.checking) return ytdlpUpdateState;
   ytdlpUpdateState.checking = true;
   try {
+    // Which copy should run: the user copy, unless the bundled one is newer.
+    const bundled = binBundled('yt-dlp');
+    const bundledVer = bundled && fs.existsSync(bundled) ? await ytdlpVersionOf(bundled) : null;
+    let userVer = null;
+    try { userVer = fs.existsSync(USER_YTDLP) ? fs.readFileSync(USER_YTDLP_VERSION, 'utf8').trim() : null; } catch {}
+    if (userVer && bundledVer && compareYtdlpVersions(bundledVer, userVer) >= 0) {
+      _userYtdlpPreferred = false;
+      slog('ytdlp-update: bundled ' + bundledVer + ' is not older than the updated copy ' + userVer + ' - using the bundled one');
+    } else {
+      _userYtdlpPreferred = true;
+    }
+    _ytdlpVersion = null;
     const installed = await ytdlpInstalledVersion();
     ytdlpUpdateState.installed = installed;
     const rel = await fetch('https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest', {
@@ -5571,56 +6528,144 @@ async function checkAndUpdateYtdlp(force) {
     ytdlpUpdateState.latest = latest;
     ytdlpUpdateState.lastCheck = new Date().toISOString();
     if (!latest) { ytdlpUpdateState.lastResult = 'check-failed'; return ytdlpUpdateState; }
-    if (installed && installed === latest && !force) {
+    // (force = "check now" from Settings; an up-to-date copy is never re-downloaded)
+    if (installed && compareYtdlpVersions(installed, latest) >= 0) {
       ytdlpUpdateState.lastResult = 'up-to-date';
-      return ytdlpUpdateState;
-    }
-    // Where does the live binary resolve to? Only self-update binaries
-    // inside our own folders.
-    const live = bin('yt-dlp');
-    const exe = process.platform === 'win32' ? '.exe' : '';
-    const isOurs = live && (live.includes(path.join('resources', 'bin')) || live.includes(path.join(__dirname, 'bin')) || /[\\/]bin[\\/]yt-dlp/.test(live));
-    if (!isOurs || !fs.existsSync(live)) {
-      ytdlpUpdateState.lastResult = installed ? 'system-install' : 'no-binary';
-      slog('ytdlp-update: binary not app-managed (' + live + ') — skipping self-update');
       return ytdlpUpdateState;
     }
     const assetName = process.platform === 'win32' ? 'yt-dlp.exe'
                     : process.platform === 'darwin' ? 'yt-dlp_macos' : 'yt-dlp';
     const asset = (rel.assets || []).find(a => a.name === assetName);
-    if (!asset) { ytdlpUpdateState.lastResult = 'asset-missing'; return ytdlpUpdateState; }
+    const sums = (rel.assets || []).find(a => a.name === 'SHA2-256SUMS');
+    if (!asset || !sums) { ytdlpUpdateState.lastResult = 'asset-missing'; return ytdlpUpdateState; }
+    const expected = checksumFor(await fetch(sums.browser_download_url, { headers: { 'User-Agent': 'freqphull-updater' } }).then(r => r.text()), assetName);
+    if (!expected) throw new Error('no published checksum for ' + assetName);
     slog('ytdlp-update: downloading ' + latest + ' (' + assetName + ', ' + Math.round(asset.size / 1048576) + ' MB)');
     const buf = Buffer.from(await fetch(asset.browser_download_url, {
       headers: { 'User-Agent': 'freqphull-updater' },
     }).then(r => r.arrayBuffer()));
     if (buf.length < 1000000) throw new Error('download too small (' + buf.length + ' bytes)');
-    const tmp = live + '.new';
+    const got = require('crypto').createHash('sha256').update(buf).digest('hex');
+    if (got !== expected) throw new Error('checksum mismatch - download discarded');
+    fs.mkdirSync(USER_BIN, { recursive: true });
+    const tmp = USER_YTDLP + '.new';
     fs.writeFileSync(tmp, buf);
     if (process.platform !== 'win32') fs.chmodSync(tmp, 0o755);
-    try { fs.renameSync(live, live + '.bak'); } catch {}
-    fs.renameSync(tmp, live);
+    try { if (fs.existsSync(USER_YTDLP)) fs.renameSync(USER_YTDLP, USER_YTDLP + '.bak'); } catch {}
+    fs.renameSync(tmp, USER_YTDLP);
+    fs.writeFileSync(USER_YTDLP_VERSION, latest);
+    _userYtdlpPreferred = true;
+    _ytdlpVersion = null;
     ytdlpUpdateState.lastResult = 'updated';
     ytdlpUpdateState.installed = latest;
-    slog('ytdlp-update: updated ' + (installed || '?') + ' → ' + latest);
+    slog('ytdlp-update: updated ' + (installed || '?') + ' → ' + latest + ' (' + USER_YTDLP + ', checksum ok)');
   } catch (e) {
     ytdlpUpdateState.lastResult = 'error: ' + e.message;
     slog('ytdlp-update failed: ' + e.message);
+    report('ytdlp.update-failed', e, { installed: ytdlpUpdateState.installed, latest: ytdlpUpdateState.latest });
   } finally {
     ytdlpUpdateState.checking = false;
   }
   return ytdlpUpdateState;
 }
 
+// ── JavaScript runtime for yt-dlp (Round 82) ─────────────────────────────
+// Current yt-dlp solves YouTube's JS challenges with an external runtime
+// and finds Deno on PATH. Without one it warns "No supported JavaScript
+// runtime could be found ... some formats may be missing" (measured with
+// the bundled 2026.08.19, which is also the latest release) - the state
+// behind Sentry ELECTRON-8, a 403 on the media download after the retry.
+// Deno isn't bundled (~45 MB zipped); it is fetched once into
+// <userData>\bin\deno, checked against the SHA-256 Deno publishes, and put
+// on PATH for every child process. A Deno already on PATH is used as is.
+const DENO_DIR = path.join(USER_BIN, 'deno');
+let jsRuntimeState = { status: 'unknown', source: null, version: null, error: null };
+let _denoBusy = false;
+
+function denoOnPath() {
+  try {
+    const r = require('child_process').spawnSync('where', ['deno'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+    const first = r.status === 0 ? String(r.stdout || '').split(/\r?\n/).find(Boolean) : null;
+    return first && !first.startsWith(DENO_DIR) ? first.trim() : null;
+  } catch { return null; }
+}
+function denoVersion(exePath) {
+  try {
+    const r = require('child_process').spawnSync(exePath, ['--version'], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+    const m = r.status === 0 && String(r.stdout || '').match(/deno\s+([\d.]+)/i);
+    return m ? m[1] : null;
+  } catch { return null; }
+}
+function addDenoToPath() {
+  const parts = String(process.env.PATH || '').split(path.delimiter);
+  if (!parts.includes(DENO_DIR)) process.env.PATH = DENO_DIR + path.delimiter + process.env.PATH;
+}
+
+async function ensureDeno() {
+  if (process.platform !== 'win32' || _denoBusy) return jsRuntimeState;
+  _denoBusy = true;
+  try {
+    const sys = denoOnPath();
+    if (sys) {
+      jsRuntimeState = { status: 'ok', source: 'system', version: denoVersion(sys), error: null };
+      return jsRuntimeState;
+    }
+    const local = path.join(DENO_DIR, 'deno.exe');
+    if (fs.existsSync(local) && denoVersion(local)) {
+      addDenoToPath();
+      jsRuntimeState = { status: 'ok', source: 'app', version: denoVersion(local), error: null };
+      return jsRuntimeState;
+    }
+    jsRuntimeState = { status: 'downloading', source: 'app', version: null, error: null };
+    // (written https:\/\/ - tools/xref.py strips from "//" to end of line)
+    const base = 'https:\/\/github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip';
+    const ua = { headers: { 'User-Agent': 'freqphull-updater' } };
+    const expected = checksumFor(await fetch(base + '.sha256sum', ua).then(r => r.text()), 'deno-x86_64-pc-windows-msvc.zip');
+    if (!expected) throw new Error('no published checksum');
+    const buf = Buffer.from(await fetch(base, ua).then(r => r.arrayBuffer()));
+    if (buf.length < 10 * 1048576) throw new Error('download too small (' + buf.length + ' bytes)');
+    const got = require('crypto').createHash('sha256').update(buf).digest('hex');
+    if (got !== expected) throw new Error('checksum mismatch - download discarded');
+    fs.mkdirSync(DENO_DIR, { recursive: true });
+    const zip = path.join(os.tmpdir(), 'freqphull_deno_' + process.pid + '.zip');
+    fs.writeFileSync(zip, buf);
+    try {
+      // Windows 10+ ships bsdtar, which reads zip files.
+      const r = require('child_process').spawnSync('tar', ['-xf', zip, '-C', DENO_DIR], { windowsHide: true, timeout: 120000 });
+      if (r.status !== 0 || !fs.existsSync(local)) {
+        const ps = require('child_process').spawnSync('powershell', ['-NoProfile', '-Command',
+          'Expand-Archive -LiteralPath $env:FP_ZIP -DestinationPath $env:FP_DIR -Force'],
+          { windowsHide: true, timeout: 120000, env: { ...process.env, FP_ZIP: zip, FP_DIR: DENO_DIR } });
+        if (ps.status !== 0 || !fs.existsSync(local)) throw new Error('could not unpack deno.zip');
+      }
+    } finally { try { fs.unlinkSync(zip); } catch {} }
+    const ver = denoVersion(local);
+    if (!ver) throw new Error('deno.exe does not run');
+    addDenoToPath();
+    jsRuntimeState = { status: 'ok', source: 'app', version: ver, error: null };
+    slog('js-runtime: Deno ' + ver + ' installed for yt-dlp (' + DENO_DIR + ', checksum ok)');
+  } catch (e) {
+    jsRuntimeState = { status: 'missing', source: null, version: null, error: e.message };
+    slog('js-runtime: could not set up Deno for yt-dlp: ' + e.message + ' - YouTube downloads may hit 403s');
+    report('ytdlp.js-runtime-failed', e, {});
+  } finally {
+    _denoBusy = false;
+  }
+  return jsRuntimeState;
+}
+
 app.get('/ytdlp/status', async (req, res) => {
   if (!ytdlpUpdateState.installed) ytdlpUpdateState.installed = await ytdlpInstalledVersion();
-  res.json(ytdlpUpdateState);
+  res.json(Object.assign({}, ytdlpUpdateState, { jsRuntime: jsRuntimeState }));
 });
 app.post('/ytdlp/update', async (req, res) => {
   const st = await checkAndUpdateYtdlp(true);
-  res.json(st);
+  if (jsRuntimeState.status !== 'ok') await ensureDeno();
+  res.json(Object.assign({}, st, { jsRuntime: jsRuntimeState }));
 });
 // Boot check (delayed so startup stays snappy) + daily re-check.
 setTimeout(() => checkAndUpdateYtdlp(false), 15000);
+setTimeout(() => { ensureDeno(); }, 20000);
 setInterval(() => checkAndUpdateYtdlp(false), 24 * 3600 * 1000);
 
 // ══════════════════════════════════════════════════════════════════════
@@ -6368,7 +7413,7 @@ app.get('/analyze', async (req, res) => {
 
   // Run Python with captured stderr for proper error reporting
   slog('Running: python ' + scriptTmp + ' ' + wavTmp);
-  const { spawn } = require('child_process');
+  // (spawn is the module-level one, so Python faults here are reported too)
   const pythonCmd = getPythonCmd();
   // Beat-switch deep mode: lowers the section-detection threshold so the
   // best candidate boundary is surfaced even on subtler switches. Forced
@@ -6526,6 +7571,7 @@ const CONVERT_FORMATS = {
   alac: { ext: '.m4a',  label: 'ALAC (Apple Lossless)', lossy: false, bitDepths: ['16', '24'] },
   m4a:  { ext: '.m4a',  label: 'M4A (AAC)',    lossy: true,  bitrates: ['320', '256', '192', '128'] },
   mp4:  { ext: '.mp4',  label: 'MP4 (AAC audio)', lossy: true, bitrates: ['320', '256', '192', '128'] },
+  mp4video: { ext: '.mp4', label: 'MP4 video (picture + audio)', lossy: true, video: true, bitrates: ['320', '256', '192', '128'] },
   ogg:  { ext: '.ogg',  label: 'OGG (Vorbis)', lossy: true,  bitrates: ['320', '256', '192', '128'] },
   opus: { ext: '.opus', label: 'Opus',         lossy: true,  bitrates: ['256', '192', '128', '96'] },
 };
@@ -6549,7 +7595,54 @@ function normalizeConvertOptions(o) {
   // forced to 48000 rather than failing mid-batch.
   if (format === 'opus') out.sampleRate = '48000';
   out.channels = CONVERT_CHANNELS.includes(String(o.channels)) ? String(o.channels) : 'keep';
+  if (f.video) {
+    const img = typeof o.image === 'string' ? o.image.trim() : '';
+    if (!img) throw new Error('Choose a picture for the video.');
+    if (!VIDEO_IMAGE_EXT_RE.test(img)) throw new Error('The picture must be a JPG, PNG, WEBP, BMP or GIF file.');
+    out.image = img;
+    out.videoSize = VIDEO_SIZES[o.videoSize] ? o.videoSize : '1080p';
+    out.fit = VIDEO_FITS.includes(o.fit) ? o.fit : 'blur';
+  }
   return out;
+}
+
+// Round 82 ("convert audio files to mp4 with any background picture the user
+// uploads"). The picture is turned into one finished frame first, then that
+// frame is looped under the audio. Measured on a 3-min track at 1080p/30fps
+// with the bundled ffmpeg: running the blur filter on every frame took 54 s,
+// the pre-rendered frame 11.6 s (veryfast; ultrafast 9.8 s but +14% size).
+const VIDEO_SIZES = { '1080p': [1920, 1080], '720p': [1280, 720], square: [1080, 1080], vertical: [1080, 1920] };
+const VIDEO_FITS = ['blur', 'black', 'crop'];
+const VIDEO_IMAGE_EXT_RE = /\.(jpe?g|png|webp|bmp|gif)$/i;
+const VIDEO_FPS = 30;   // still picture: x264 makes repeated frames nearly free; 30 plays everywhere
+// ffmpeg filter that turns the picture into the w x h frame:
+//   blur  - whole picture, centred, on a blurred and darkened copy of itself
+//   black - whole picture, centred, black bars
+//   crop  - picture fills the frame, edges cut off
+function videoFrameFilter(w, h, fit) {
+  const fill = 'scale=' + w + ':' + h + ':force_original_aspect_ratio=increase,crop=' + w + ':' + h;
+  const fitIn = 'scale=' + w + ':' + h + ':force_original_aspect_ratio=decrease';
+  if (fit === 'crop') return '[0:v]' + fill + ',setsar=1[v]';
+  if (fit === 'black') return '[0:v]' + fitIn + ',pad=' + w + ':' + h + ':(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[v]';
+  return '[0:v]split=2[bg][fg];[bg]' + fill + ',boxblur=20:2,eq=brightness=-0.15[bgb];[fg]' + fitIn +
+    '[fgs];[bgb][fgs]overlay=(W-w)/2:(H-h)/2,setsar=1[v]';
+}
+// ffmpeg arguments after "-hide_banner -y" for one track: the looped frame
+// (input 0) under the audio (input 1). The length is set from the audio:
+// measured, -shortest alone overran it (181.3 s at 30 fps, 204 s at 2 fps,
+// for 180 s of audio); -t gave exactly 180.0 s. durationSec null = unknown,
+// then -shortest is the fallback.
+function buildVideoArgs(opts, framePath, audioPath, durationSec) {
+  const o = normalizeConvertOptions(opts);
+  const a = ['-loop', '1', '-framerate', String(VIDEO_FPS), '-i', framePath, '-i', audioPath,
+    '-map', '0:v', '-map', '1:a:0'];
+  if (durationSec > 0) a.push('-t', durationSec.toFixed(3)); else a.push('-shortest');
+  a.push('-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'stillimage', '-crf', '23', '-pix_fmt', 'yuv420p', '-r', String(VIDEO_FPS),
+    '-c:a', 'aac', '-b:a', o.bitrate + 'k');
+  if (o.sampleRate !== 'keep') a.push('-ar', o.sampleRate);
+  if (o.channels !== 'keep') a.push('-ac', o.channels);
+  a.push('-map_metadata', '1', '-movflags', '+faststart');
+  return a;
 }
 
 // ffmpeg arguments between "-i <input>" and "<output>".
@@ -6652,6 +7745,30 @@ app.post('/convert', async (req, res) => {
   });
 
   const ffmpeg = bin('ffmpeg');
+  const isVideo = !!CONVERT_FORMATS[opts.format].video;
+  // Video: the picture becomes one finished frame, once for the whole batch.
+  let framePath = null;
+  if (isVideo) {
+    let imgSafe = null;
+    try {
+      if (!fs.existsSync(opts.image)) throw new Error('The picture was not found: ' + path.basename(opts.image));
+      imgSafe = asciiSafeFfmpegPath(opts.image);
+      framePath = path.join(os.tmpdir(), 'freqphull_frame_' + Date.now() + '.png');
+      const [w, h] = VIDEO_SIZES[opts.videoSize];
+      await run(ffmpeg, ['-hide_banner', '-y', '-i', imgSafe.ffmpegPath, '-filter_complex', videoFrameFilter(w, h, opts.fit),
+        '-map', '[v]', '-frames:v', '1', framePath], 60000);
+      if (!fs.existsSync(framePath)) throw new Error('ffmpeg made no frame');
+    } catch (e) {
+      const msg = /not found/.test(e.message) ? e.message : 'Could not read the picture (' + String(e.message || e).split('\n').pop().slice(0, 160) + ')';
+      slog('convert: picture failed: ' + e.message);
+      send({ type: 'error', i: 0, message: msg });
+      send({ type: 'end', ok: 0, failed: files.length, cancelled: false });
+      if (framePath) { try { fs.unlinkSync(framePath); } catch {} }
+      return res.end();
+    } finally {
+      if (imgSafe && imgSafe.tempCopy) { try { fs.unlinkSync(imgSafe.tempCopy); } catch {} }
+    }
+  }
   let ok = 0, failed = 0;
   for (let i = 0; i < files.length && !cancelled; i++) {
     const input = files[i];
@@ -6668,10 +7785,23 @@ app.post('/convert', async (req, res) => {
       // is written to Temp and moved to its real, possibly non-ASCII, name.
       safe = asciiSafeFfmpegPath(input);
       tmpOut = path.join(os.tmpdir(), 'freqphull_conv_' + Date.now() + '_' + i + CONVERT_FORMATS[opts.format].ext);
+      let knownDuration = null, args;
+      if (isVideo) {
+        try {
+          const out = await run(bin('ffprobe'), ['-v', 'error', '-select_streams', 'a:0', '-show_entries', 'format=duration', '-of', 'csv=p=0', safe.ffmpegPath], 30000);
+          const d = parseFloat(String(out).trim());
+          if (d > 0) knownDuration = d;
+        } catch {}
+        args = ['-hide_banner', '-y', ...buildVideoArgs(opts, framePath, safe.ffmpegPath, knownDuration), tmpOut];
+      } else {
+        args = ['-hide_banner', '-y', '-i', safe.ffmpegPath, ...ffArgs, tmpOut];
+      }
       await new Promise((resolve, reject) => {
-        const p = spawn(ffmpeg, ['-hide_banner', '-y', '-i', safe.ffmpegPath, ...ffArgs, tmpOut], { windowsHide: true });
+        const p = spawn(ffmpeg, args, { windowsHide: true });
         current = p;
-        let duration = null, errTail = '', lastPct = -1;
+        // Video: the looped picture prints its own (tiny) duration first, so
+        // the audio's is used.
+        let duration = knownDuration, errTail = '', lastPct = -1;
         p.stderr.on('data', d => {
           const s = d.toString();
           errTail = (errTail + s).slice(-2000);
@@ -6712,6 +7842,7 @@ app.post('/convert', async (req, res) => {
       if (tmpOut) { try { fs.unlinkSync(tmpOut); } catch {} }
     }
   }
+  if (framePath) { try { fs.unlinkSync(framePath); } catch {} }
   slog('convert: finished ok=' + ok + ' failed=' + failed + (cancelled ? ' (cancelled)' : ''));
   send({ type: 'end', ok, failed, cancelled });
   res.end();
@@ -7009,6 +8140,47 @@ function walkAudio(rootDir, maxDepth = 3) {
 let _repairScanCache = null;   // { key, at, result }
 const REPAIR_SCAN_TTL_MS = 20000;
 
+// ─── BEGIN REPAIR MATCH GUARD ───
+// Round 82: the silent repair that runs ~3 s after every launch relinked
+// missing tracks to the wrong files. Measured with a seeded library whose
+// files didn't exist: "Beat 5", "Beat 8" and "Beat 9" were ALL relinked to
+// one unrelated file in Downloads ("FREE_Josman_x_Hamza_Type_Beat_-_Freeze
+// _vocal.wav"). "Beat 5" tokenizes to just {beat} (single characters are
+// dropped), so its coverage against any file containing "beat" is 100%,
+// scoring 0.73 - over the 0.70 auto-apply line. And nothing stopped many
+// rows from claiming the same file.
+// Now, automatically applied only when:
+//   - the file isn't wanted by any other row in this pass, and isn't
+//     already the file of another track;
+//   - a fuzzy match shares at least 2 distinctive words (not generic ones
+//     like beat/type/free/official, not plain numbers).
+// Everything else goes to the review list for the user to confirm.
+const GENERIC_MATCH_WORDS = new Set(['beat', 'beats', 'type', 'free', 'prod', 'produced', 'instrumental', 'instru',
+  'official', 'audio', 'video', 'music', 'song', 'remix', 'mix', 'version', 'feat', 'ft', 'the', 'and', 'with', 'by',
+  'mp3', 'wav', 'flac', 'm4a', 'new', 'hard', 'vocal', 'vocals', 'stem', 'stems', 'bpm', 'key', 'major', 'minor', 'x']);
+function strongSharedTokens(queryTokens, fileName) {
+  const ft = tokenize(fileName);
+  let n = 0;
+  for (const t of queryTokens) if (ft.has(t) && !GENERIC_MATCH_WORDS.has(t) && !/^\d+$/.test(t)) n++;
+  return n;
+}
+function decideRepairs(proposals, inUsePaths) {
+  const key = (p) => path.resolve(p.bestMatch.file.path).toLowerCase();
+  const claims = new Map();
+  for (const p of proposals) claims.set(key(p), (claims.get(key(p)) || 0) + 1);
+  const apply = [], review = [];
+  for (const p of proposals) {
+    const k = key(p);
+    let reason = null;
+    if (claims.get(k) > 1) reason = 'several tracks match the same file';
+    else if (inUsePaths.has(k)) reason = 'file already belongs to another track';
+    else if (p.bestMatch.stage === 'fuzzy' && (p.bestMatch.strong || 0) < 2) reason = 'only generic words match';
+    if (reason) review.push(Object.assign({}, p, { reason })); else apply.push(p);
+  }
+  return { apply, review };
+}
+// ─── END REPAIR MATCH GUARD ───
+
 app.post('/repair-history', (req, res) => {
   const stockpile = (req.body.stockpile || '').trim();
   const reviewMode = !!req.body.review; // if true, return candidates instead of auto-applying
@@ -7067,6 +8239,7 @@ app.post('/repair-history', (req, res) => {
   // ── Per-row matching ──
   let repaired = 0, broken = 0, ok = 0;
   const reviewItems = [];
+  const proposals = [];   // auto-apply candidates, checked as a set after the loop
 
   for (const row of allRows) {
     if (fs.existsSync(row.file_path)) { ok++; continue; }
@@ -7116,7 +8289,7 @@ app.post('/repair-history', (req, res) => {
           const fnameScore = tokenCoverage(oldName, f.name);
           const score = Math.max(titleScore, fnameScore * 0.92);
           if (score >= REVIEW_THRESHOLD) {
-            scored.push({ file: f, score, stage: 'fuzzy' });
+            scored.push({ file: f, score, stage: 'fuzzy', strong: strongSharedTokens(queryTokens, f.name) });
           }
         }
         // Sort by score desc, then prefer newer mtime as tiebreak
@@ -7136,15 +8309,9 @@ app.post('/repair-history', (req, res) => {
 
     if (bestMatch) {
       if (!reviewMode && bestMatch.score >= AUTO_APPLY_THRESHOLD) {
-        // Auto-apply
-        try {
-          dbRun('UPDATE history SET file_path=? WHERE id=?', [bestMatch.file.path, row.id]);
-          slog('repair[' + bestMatch.stage + ' ' + bestMatch.score.toFixed(2) + ']: ' +
-               row.id + ' → ' + bestMatch.file.path);
-          repaired++;
-        } catch (e) {
-          slog('repair update failed for id=' + row.id + ': ' + e.message);
-        }
+        // Round 82: decided after the loop, once every row's pick is known
+        // (see REPAIR MATCH GUARD).
+        proposals.push({ row, oldName, bestMatch, candidates });
       } else if (bestMatch.score >= REVIEW_THRESHOLD) {
         // Below auto-apply threshold OR we're in review mode → surface for user to pick
         reviewItems.push({
@@ -7170,6 +8337,30 @@ app.post('/repair-history', (req, res) => {
         });
       }
     }
+  }
+
+  // Round 82: only now, with every row's pick known, is anything changed.
+  // A file wanted by two rows, a file another row already uses, or a fuzzy
+  // match on generic words alone goes to review instead (see the guard).
+  const inUse = new Set(allRows.filter((r) => r.file_path && fs.existsSync(r.file_path)).map((r) => path.resolve(r.file_path).toLowerCase()));
+  const decided = decideRepairs(proposals, inUse);
+  for (const p of decided.apply) {
+    try {
+      dbRun('UPDATE history SET file_path=? WHERE id=?', [p.bestMatch.file.path, p.row.id]);
+      slog('repair[' + p.bestMatch.stage + ' ' + p.bestMatch.score.toFixed(2) + ']: ' + p.row.id + ' → ' + p.bestMatch.file.path);
+      repaired++;
+    } catch (e) {
+      slog('repair update failed for id=' + p.row.id + ': ' + e.message);
+    }
+  }
+  for (const p of decided.review) {
+    slog('repair: needs review (' + p.reason + '): ' + p.row.id + ' → ' + p.bestMatch.file.path);
+    const list = p.candidates && p.candidates.length ? p.candidates : [p.bestMatch];
+    reviewItems.push({
+      id: p.row.id, title: p.row.title, oldPath: p.row.file_path, oldName: p.oldName, reason: p.reason,
+      candidates: list.map((c) => ({ path: c.file.path, name: c.file.name, size: c.file.size, mtime: c.file.mtime,
+        score: Math.round(c.score * 100) / 100, stage: c.stage })),
+    });
   }
 
   slog('repair-history: done. ok=' + ok + ' broken=' + broken +
@@ -7456,9 +8647,17 @@ app.get('/stems', async (req, res) => {
   }
   const scriptTmp = path.join(os.tmpdir(), 'freqphull_stems.py');
   const regTmp = path.join(os.tmpdir(), '_phull_internal.py');
+  // Round 82: stems.py does `import analyze` for per-stem BPM/key, but only
+  // stems.py and the registry were copied here, so that import always
+  // failed and every separation silently shipped without per-stem
+  // readouts. analyze.py goes alongside under the name it is imported by.
+  const analyzeSrc = getResourcePath('analyze.py');
+  const analyzeTmp = path.join(os.tmpdir(), 'analyze.py');
   try {
     fs.copyFileSync(scriptSrc, scriptTmp);
     fs.copyFileSync(regSrc, regTmp);
+    if (analyzeSrc) fs.copyFileSync(analyzeSrc, analyzeTmp);
+    else slog('stems: analyze.py not found - per-stem BPM/key will be skipped');
   } catch (e) {
     slog('Failed to copy engine files: ' + e.message);
     return res.status(500).json({ error: 'Could not copy engine files: ' + e.message });
@@ -8182,6 +9381,23 @@ app.post('/clean-temp-files', (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// Last in the chain. A route that throws is answered by Express's built-in
+// handler with res.end(), which the reporting hook near the top never sees,
+// so it is caught here instead. 4xx (e.g. a malformed JSON body) is the
+// caller's mistake, not a bug, and isn't reported.
+app.use((err, req, res, next) => {
+  const status = err && err.status && err.status < 500 ? err.status : 500;
+  if (status >= 500) {
+    try {
+      reportRouteError(req, res, 'unhandled', (err && err.message) || String(err),
+        { stack: err && err.stack ? String(err.stack).slice(0, 2000) : undefined });
+    } catch {}
+  }
+  if (res.headersSent) return next(err);
+  res.locals.sentryReported = true;
+  res.status(status).json({ error: (err && err.message) || 'Internal error' });
 });
 
 // ── Start: bind port first, THEN init DB ──────────────────────────────────────

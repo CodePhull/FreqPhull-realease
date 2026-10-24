@@ -32,6 +32,47 @@ source tree on this page is only useful if you want to build it yourself.
 A companion Chrome extension downloads and analyzes tracks from
 youtube.com directly, talking to the same local backend.
 
+## What's new in 0.7.42
+
+**Security fixes**
+- While Freq.Phull was running, a website open in your browser could talk to the app's local server and read files from your PC. That's now blocked: only the app itself and the Freq.Phull extension can use it. Update as soon as you can.
+- A YouTube video with a specially crafted title could run code inside the app. Titles are now always shown as plain text.
+
+**YouTube downloads**
+- Fewer "HTTP 403" failures: the app now sets up the helper YouTube needs (Deno) by itself, once, in the background. Settings shows whether it's ready.
+- yt-dlp updates now stick after the app updates, and every download of it is checked before use.
+
+**Fixes**
+- The AI engine repair could fail on every launch on some PCs. It now repairs the right packages together.
+- Installing an update while Freq.Phull is open (or in the tray) no longer fails; the installer closes it first.
+- Stem separation now shows BPM and key for each stem (that part had never worked).
+- "Send to Stem Separator" and "Send to Transcribe" in the right-click menu now actually work, and a transcript is saved onto the right track.
+- Ctrl+1 to Ctrl+9 now switch tabs.
+- When a track's file had moved or been deleted, the app could silently point it at a different song at startup. It now only relinks a file when it's sure, and asks you about the rest.
+- Opening a track in the Analyzer again is instant: it used to be fully re-analysed every time (about 10 seconds).
+- An older Freq.Phull no longer swaps your browser extension back to an older version.
+- Stockpile now recognises artist names with accents (Drakéo, Zoé…) when sorting tracks into folders.
+- With shuffle on, the previous-track button now goes back to the track you just heard, instead of jumping to another one. Next is still random.
+- Memory no longer climbs when the app plays for hours (it could pass 2 GB overnight). Every track you played stayed in memory while the Analyzer tab was hidden.
+- The app no longer fills your disk with temporary WAV copies (one per track played; we found 19 GB on one PC). Old ones are cleaned up automatically.
+
+**New**
+- Your library is saved in your Stockpile folder too. After a reinstall or on a new PC, Freq.Phull finds it and offers to restore your tracks, folders, BPM/key, notes and favorites. A Stockpile folder from an older version can be rebuilt from its folders. Also in Settings → Restore library.
+- Right-click a track → **Buy this beat**: opens the producer's store link from the YouTube description (BeatStars, Airbit, their own site…), so you can buy the beat and credit the beatmaker.
+- Right-click a track → **About the beatmaker**: the producer's Instagram, TikTok, store and other links from the description (also handles written without a link, like "Instagram: @name"), plus a "copy credit" button.
+- Convert → **MP4 video**: turn tracks into videos with a background picture of your choice, in YouTube, square or vertical (TikTok, Reels, Shorts) size.
+- Right-click a track in History or Stockpile → Send to Convert. In History's select mode, Convert sends several at once.
+- Settings → Report a problem: describe what went wrong and send it, with the app log if you want.
+- History opens and scrolls much faster on big libraries.
+- The app is now fully in French when French is chosen (the Convert, Transcribe and Tools tabs, pop-up messages, tooltips and key names were partly English), with accents and wording corrected.
+
+**Error reports**
+- Errors in the app, the downloader, the engines and the Chrome extension are now reported, so problems get fixed faster.
+- Reports no longer include your computer's name. IP addresses, YouTube links, e-mail addresses and your Windows user name are filtered out before anything is sent.
+
+**Extension 4.6.0**
+- Reports its errors through the app, and shows video titles safely.
+
 ## What's new in 0.7.41
 
 **New: Convert tab**
@@ -114,11 +155,22 @@ the update check against GitHub.
 
 ### Crash reporting
 
-Production builds send anonymized crash reports to Sentry so we can
-track and fix bugs. The reports contain error stack traces and the
-app version. File paths, usernames, and YouTube URLs are scrubbed
-before transmission. Audio, library content, and personal data
-never leave the machine.
+Production builds send error reports to Sentry so bugs can be found and
+fixed. That covers crashes and any error the app or the Chrome extension
+shows you (a failed download, conversion or analysis).
+
+A report contains the error message, where in the code it happened, the
+app version, Windows version, CPU/RAM, and a random install ID that isn't
+tied to you. Before anything is sent, the app removes:
+
+- your computer's name and your Windows user name;
+- IP addresses (and tells Sentry not to record one);
+- YouTube links and video IDs, other web addresses, and e-mail addresses;
+- cookies and request headers.
+
+Audio, your library and your files never leave the machine. The
+extension sends its errors only to the Freq.Phull app on your own PC,
+which filters them the same way.
 
 Requires a build with the `FREQPHULL_SENTRY_DSN` environment
 variable set. For dev/test builds, set `FREQPHULL_NO_CRASH_REPORT=1`
