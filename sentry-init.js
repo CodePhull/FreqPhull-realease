@@ -50,7 +50,21 @@ const SENTRY_DSN_ENV = _resolveDsn();
 //   /home/<name>/...        ->  /home/<user>/...
 //   /Users/<name>/...       ->  /Users/<user>/...
 //   file:///C:/Users/<name> ->  file:///C:/Users/<user>
+//   https://www.youtube.com/watch?v=...  ->  https://www.youtube.com/<url>
+//   [youtube] VHtsNOp4BhI: ...          ->  [youtube] <id>: ...  (yt-dlp output)
+// The README promises YouTube URLs never leave the machine; yt-dlp names
+// the video ID in nearly every error line, so it is treated like a URL.
 const SCRUB_PATTERNS = [
+  // (A function so a second pass over already-scrubbed text is a no-op.)
+  [/(https?:\/\/[^\s/"'<>?#]+)[^\s"'<>]*/gi, (m, host, off, str) =>
+    str.startsWith('/<url>', off + host.length) ? m : host + '/<url>'],
+  [/(\[youtube[^\]]*\]\s+)[A-Za-z0-9_-]{11}\b/gi, '$1<id>'],
+  // E-mail addresses and IP addresses (other than this machine's own
+  // loopback, which the app's backend uses and tells us nothing).
+  [/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '<email>'],
+  // (Lookarounds instead of \b: tools/xref.py reads "\b(" as a call to b().)
+  [/(?<![\d.])(?!127\.0\.0\.1(?!\d))(?:\d{1,3}\.){3}\d{1,3}(?!\d)/g, '<ip>'],
+  [/(?<![0-9a-f:])(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}(?![0-9a-f:])/gi, '<ip>'],
   [/([A-Za-z]:\\Users\\)[^\\]+/g, '$1<user>'],
   [/(\/Users\/)[^/]+/g, '$1<user>'],
   [/(\/home\/)[^/]+/g, '$1<user>'],
@@ -79,6 +93,27 @@ function scrubObject(obj, depth = 0) {
 // beforeSend hook. Returns null to drop, the event to send.
 function beforeSend(event /*, hint */) {
   if (!event) return null;
+  // Switched off in Settings: nothing at all is sent (crashes included).
+  if (isOptedOut()) return null;
+  // Nothing that identifies the person or their machine leaves it:
+  //  - server_name is the PC's name (os.hostname()), often the owner's name;
+  //  - user carries only the random install id, and ip_address is pinned
+  //    to null so Sentry does not fill one in from the connection;
+  //  - request keeps only its (scrubbed) URL, never headers or cookies.
+  delete event.server_name;
+  event.user = event.user && event.user.id ? { id: String(event.user.id), ip_address: null } : { ip_address: null };
+  // Round 82: events from 0.7.41 still showed user.geo (a city), which
+  // Sentry derives from the connection's IP. infer_ip "never" is the
+  // flag Sentry's ingestion reads to skip that; older ingestion ignores
+  // it, which is why the project setting "Prevent Storing of IP
+  // Addresses" should be on as well.
+  event.sdk = Object.assign({}, event.sdk, { settings: Object.assign({}, event.sdk && event.sdk.settings, { infer_ip: 'never' }) });
+  delete event.user.geo;
+  if (event.request) event.request = event.request.url ? { url: scrubString(event.request.url) } : undefined;
+  if (event.contexts && event.contexts.device) delete event.contexts.device.name;
+  if (event.extra) event.extra = scrubObject(event.extra);
+  if (event.contexts) event.contexts = scrubObject(event.contexts);
+  if (event.tags) event.tags = scrubObject(event.tags);
   if (event.message) event.message = scrubString(event.message);
   if (event.exception && event.exception.values) {
     for (const v of event.exception.values) {
@@ -107,8 +142,10 @@ function commonOptions(release) {
     release,
     environment: process.env.NODE_ENV === 'development' ? 'dev' : 'prod',
     sampleRate: 1.0,
-    // Don't transmit IPs.
+    // Don't transmit IPs, cookies or user details (see beforeSend).
     sendDefaultPii: false,
+    // Replaces os.hostname(), which is usually the owner's name.
+    serverName: 'freqphull',
     // Drop noisy errors that aren't actionable.
     ignoreErrors: [
       'ResizeObserver loop limit exceeded',
@@ -242,10 +279,31 @@ function getInstallId(dataDir) {
 // event carries the state at the moment it happened rather than a
 // guess reconstructed later.
 let _stateProvider = null;
+
+// ── User opt-out (Round 81) ──────────────────────────────────────────
+// Settings → Privacy → "Send error reports". Off = a marker file in the
+// app's data folder. Both processes point at the same file and check it
+// for every event, so switching it takes effect at once, without a
+// restart, in the window, the main process and the server alike.
+let _optOutFile = null;
+function setOptOutFile(p) { _optOutFile = p || null; }
+function isOptedOut() {
+  try { return !!_optOutFile && require('fs').existsSync(_optOutFile); } catch { return false; }
+}
+function setOptedOut(off) {
+  if (!_optOutFile) return false;
+  const fs = require('fs');
+  try {
+    if (off) fs.writeFileSync(_optOutFile, 'Error reports are switched off in Settings.\n');
+    else if (fs.existsSync(_optOutFile)) fs.unlinkSync(_optOutFile);
+    return true;
+  } catch { return false; }
+}
 function setStateProvider(fn) { _stateProvider = typeof fn === 'function' ? fn : null; }
 
 function reportSoftError(processKind, category, error, context) {
   if (!SENTRY_DSN_ENV) return;
+  if (isOptedOut()) return;
   const Sentry = _requireSentry(processKind);
   if (!Sentry || !Sentry.captureException) return;
 
@@ -331,6 +389,7 @@ function reportSoftError(processKind, category, error, context) {
 }
 
 module.exports = { init, scrubString, scrubObject, reportSoftError,
+  setOptOutFile, isOptedOut, setOptedOut,
   addTrail,
   getInstallId,
   setStateProvider,

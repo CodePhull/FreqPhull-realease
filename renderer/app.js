@@ -17145,7 +17145,7 @@ const RB_AT_SCALES = ['chromatic', 'major', 'minor', 'harmonicMinor', 'melodicMi
 // report can be matched to the exact build unambiguously, no more
 // "it's from the new build" back-and-forth with no way to verify it.
 // Bump this string every time a build is delivered.
-const RB_BUILD_ID = 'r82';
+const RB_BUILD_ID = 'r83';
 try { rbLog('Topliner build: ' + RB_BUILD_ID); } catch (e) {}
 const NOTE_NAMES_RB = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 // Mirrors SCALE_INTERVALS in renderer/autotune-worklet.js exactly (that

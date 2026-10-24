@@ -32,7 +32,10 @@ source tree on this page is only useful if you want to build it yourself.
 A companion Chrome extension downloads and analyzes tracks from
 youtube.com directly, talking to the same local backend.
 
-## What's new in 0.7.42
+## What's new in 0.7.43
+
+0.7.42 was published on 24 Oct with a packaging mistake: its background server could not start, so nothing worked. 0.7.43 fixes that and includes everything below. If you are on 0.7.42, the update is offered when the app opens.
+
 
 **Security fixes**
 - While Freq.Phull was running, a website open in your browser could talk to the app's local server and read files from your PC. That's now blocked: only the app itself and the Freq.Phull extension can use it. Update as soon as you can.

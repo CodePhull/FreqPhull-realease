@@ -92,6 +92,30 @@ if (issues.length) {
   fail('\n  ' + issues.join('\n  '));
 }
 
+// ── Modules from the same version ──────────────────────────────────────────
+// Round 82: the live repo kept an old sentry-init.js (13 Aug) next to a new
+// server.js that calls sentry.setOptOutFile(). The build passed, and the
+// installed app's server crashed on every start ("sentry.setOptOutFile is not
+// a function", 5 restarts, then nothing worked). Every sentry.<fn>() the app
+// calls must exist in the sentry-init.js being packaged.
+{
+  const sentryApi = require('./sentry-init.js');
+  const missingFns = [];
+  for (const caller of ['server.js', 'main.js']) {
+    const text = fs.readFileSync(path.join(projRoot, caller), 'utf8');
+    for (const m of new Set([...text.matchAll(/\bsentry\.([A-Za-z_]\w*)\(/g)].map((x) => x[1]))) {
+      if (typeof sentryApi[m] !== 'function') missingFns.push(caller + ' calls sentry.' + m + '() - not in sentry-init.js');
+    }
+  }
+  if (missingFns.length) {
+    console.error('\n\x1b[31m  BUILD ABORTED — files from different versions\x1b[0m');
+    console.error('  ' + missingFns.join('\n  '));
+    console.error('\n\x1b[33mFix: copy sentry-init.js from the same version as server.js/main.js (it was probably kept from an older copy), then rebuild.\x1b[0m\n');
+    process.exit(1);
+  }
+  ok('sentry-init.js matches server.js and main.js');
+}
+
 // ── Generate integrity manifest ─────────────────────────────────────────────
 // SHA-256 every protected file and write manifest.sha256.json. The runtime
 // reads this on startup; mismatches make the engines refuse to load.
